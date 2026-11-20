@@ -672,7 +672,7 @@ impl BotBrain {
             // Aerials compete with ground and single-jump contacts only after
             // the same team-role gate has elected this car to challenge.
             // The CLib reachability check enforces the real boost/speed budget.
-            if !urgent_save {
+            if !urgent_save && self.jump_shot.is_none() && self.ground_flip.is_none() {
                 if let Some(candidate) = find_aerial_candidate(
                     me,
                     prediction,
