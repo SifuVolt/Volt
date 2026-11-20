@@ -17,6 +17,7 @@ pub struct ShotCandidate {
     pub approach: Vector,
     pub shot_direction: Vector,
     pub shot_type: ShotType,
+    pub can_jump: bool,
     pub fast: bool,
     pub score: f32,
     pub parser: ParsedShot,
@@ -209,7 +210,7 @@ pub fn find_best_shot(
         if value<best.map_or(f32::INFINITY,|b|b.score) {
             best=Some(ShotCandidate{time:t,ball:slice.location,ball_velocity:slice.velocity,
                 approach:parsed.approach_target,shot_direction:parsed.shot_vector,
-                shot_type:kind,fast:parsed.fast,score:value,parser:parsed});
+                shot_type:kind,can_jump:!in_own_net,fast:parsed.fast,score:value,parser:parsed});
         }
     }
     // Compare Grid's independent 60 Hz double-jump reachability candidate.
@@ -239,7 +240,7 @@ pub fn find_best_shot(
                     best=Some(ShotCandidate{
                         time:grid.time,ball:grid.ball,ball_velocity:slice.velocity,
                         approach:grid.contact,shot_direction:direction,
-                        shot_type:ShotType::DoubleJump,fast:false,score:value,parser,
+                        shot_type:ShotType::DoubleJump,can_jump:true,fast:false,score:value,parser,
                     });
                 }
             }
