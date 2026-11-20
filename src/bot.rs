@@ -124,6 +124,11 @@ impl BotBrain {
         game_time: f32,
     ) -> Plan {
         let side = team_side(me.team);
+        let opponents: Vec<CarState> = cars
+            .iter()
+            .copied()
+            .filter(|car| car.team != me.team && !car.demolished)
+            .collect();
         let kickoff_position = ball.location.flat_distance(Vector::ZERO) < 100.0;
         let kickoff_ball_slow = ball.velocity.magnitude() < 100.0;
         let kickoff_active = kickoff_position && kickoff_ball_slow;
@@ -245,7 +250,7 @@ impl BotBrain {
 
         if is_challenger {
             let aim = shot_aim_point(ball.location, side);
-            let intercept = choose_ground_intercept(me, ball, prediction, aim);
+            let intercept = choose_ground_intercept(me, ball, prediction, aim, &opponents);
             let jump = if urgent_save { None } else { choose_jump_intercept(me, prediction, aim) };
             let use_jump = jump.filter(|candidate| {
                 intercept.is_none_or(|ground| candidate.time < ground.time)
@@ -806,6 +811,92 @@ fn predicted_goal_aim(ball: Vector, velocity: Vector, goal: Vector) -> Vector {
     }
 }
 
+/// Shift the aim away from an opponent occupying the goal mouth. This is
+/// deliberately a modest adjustment: it prefers open space without aiming
+/// outside the playable goal aperture or abandoning a viable central shot.
+fn defender_adjusted_aim(
+    ball: Vector,
+    velocity: Vector,
+    goal: Vector,
+    opponents: &[CarState],
+) -> Vector {
+    let mut aim = predicted_goal_aim(ball, velocity, goal);
+    let keeper = opponents
+        .iter()
+        .filter(|foe| {
+            foe.location.flat_distance(goal) < 2100.0
+                && (foe.location.y - goal.y).abs() < 1900.0
+                && foe.location.x.abs() < 1750.0
+        })
+        .min_by(|a, b| {
+            a.location.flat_distance(goal)
+                .total_cmp(&b.location.flat_distance(goal))
+        });
+
+    if let Some(keeper) = keeper {
+        let blocked_side = if (keeper.location.x - aim.x).abs() < 120.0 {
+            if keeper.location.x >= 0.0 { 1.0 } else { -1.0 }
+        } else {
+            (keeper.location.x - aim.x).signum()
+        };
+        aim.x = (aim.x - blocked_side * 430.0).clamp(-720.0, 720.0);
+    }
+    aim
+}
+
+/// Approximate an opponent's arrival time using heading correction, current
+/// forward speed, throttle acceleration and only the boost they can actually
+/// spend. It is a pressure estimate, not a replacement for full physics.
+fn opponent_arrival_time(foe: CarState, target: Vector) -> f32 {
+    let local = foe.local_location(target).flatten();
+    let distance = local.magnitude();
+    if distance < 1.0 {
+        return 0.0;
+    }
+    let angle = local.y.atan2(local.x).abs();
+    let speed = foe.velocity.flatten().magnitude();
+    let turn_rate = if speed > 1400.0 { 2.0 } else { 3.5 };
+    let turn_time = (angle / turn_rate).min(1.4);
+    let forward_speed = foe.local_velocity().x.max(0.0);
+    let distance_after_turn = (distance - forward_speed * turn_time * 0.45).max(0.0);
+    let acceleration = if foe.boost > 0.0 { 1150.0 } else { 650.0 };
+    let travel_time = if acceleration > 0.0 {
+        ((forward_speed * forward_speed + 2.0 * acceleration * distance_after_turn)
+            .sqrt()
+            - forward_speed)
+            / acceleration
+    } else {
+        distance_after_turn / forward_speed.max(1.0)
+    };
+    let boost_credit = (foe.boost / 33.333333).min(travel_time.max(0.0)) * 0.06;
+    (turn_time + travel_time - boost_credit).max(0.0)
+}
+
+/// Penalise a shot lane occupied by a defender between the ball and the goal.
+/// The projection excludes defenders behind the ball or already past the
+/// target plane, and smoothly fades with lateral distance from the lane.
+fn shot_lane_pressure(ball: Vector, aim: Vector, opponents: &[CarState]) -> f32 {
+    let lane = (aim - ball).flatten();
+    let lane_length_sq = lane.dot(lane);
+    if lane_length_sq < 1.0 {
+        return 0.0;
+    }
+    opponents
+        .iter()
+        .map(|foe| {
+            let relative = (foe.location - ball).flatten();
+            let along = relative.dot(lane) / lane_length_sq;
+            if !(0.08..0.92).contains(&along) {
+                return 0.0;
+            }
+            let closest = ball + lane * along;
+            let lateral_distance = foe.location.flat_distance(closest);
+            ((650.0 - lateral_distance).max(0.0) / 650.0)
+                * (0.12 + 0.10 * (1.0 - along).clamp(0.0, 1.0))
+        })
+        .fold(0.0, f32::max)
+}
+
 /// Select a ground contact using the predicted arrival position of the car,
 /// not just its current location. Side contacts are considered when they give
 /// a materially better approach while retaining a useful outgoing angle.
@@ -1089,6 +1180,7 @@ fn choose_ground_intercept(
     _ball: BallState,
     prediction: &BallTrajectory,
     goal: Vector,
+    opponents: &[CarState],
 ) -> Option<GroundIntercept> {
     if prediction.slices.is_empty() {
         return None;
@@ -1098,7 +1190,12 @@ fn choose_ground_intercept(
     for slice in prediction.slices.iter().filter(|slice| {
         slice.time >= 0.04 && slice.time <= 3.0 && slice.location.z <= 190.0
     }) {
-        let aim = predicted_goal_aim(slice.location, slice.velocity, goal);
+        let aim = defender_adjusted_aim(
+            slice.location,
+            slice.velocity,
+            goal,
+            opponents,
+        );
         let (approach, _normal, contact_quality, contact_point, contact_face) =
             select_ground_contact(car, slice.location, slice.velocity, aim, slice.time);
         let shot_direction = (aim - slice.location).flatten().normalize();
@@ -1121,13 +1218,25 @@ fn choose_ground_intercept(
 
         let ball_progress = slice.velocity.flatten().dot(shot_direction);
         let urgency = (slice.time - eta).max(0.0);
+        let opponent_race = opponents
+            .iter()
+            .map(|foe| opponent_arrival_time(*foe, slice.location))
+            .fold(f32::INFINITY, f32::min);
+        let race_pressure = if opponent_race < slice.time {
+            ((slice.time - opponent_race) / slice.time.max(0.10)).clamp(0.0, 1.0) * 0.22
+        } else {
+            0.0
+        };
+        let lane_pressure = shot_lane_pressure(slice.location, aim, opponents);
         let score = slice.time * 0.22
             + facing_angle * 0.12
             + distance / 40000.0
             + (1.0 - contact_quality) * 0.24
             - (ball_progress / 3000.0).clamp(-0.08, 0.08)
             + urgency * 0.08
-            + (local.y.abs() / 5000.0).min(0.08);
+            + (local.y.abs() / 5000.0).min(0.08)
+            + race_pressure
+            + lane_pressure;
 
         let intercept = GroundIntercept {
             time: slice.time,
@@ -1363,6 +1472,38 @@ mod tests {
         let late = shot_approach_target(me, ball, final_target, shot_direction, 0.30);
         assert!(early.x.abs() > late.x.abs());
         assert_eq!(late, final_target);
+    }
+
+    #[test]
+    fn goal_aim_moves_away_from_a_goalkeeper() {
+        let ball = Vector::new(0.0, 0.0, 150.0);
+        let goal = Vector::new(0.0, 5120.0, 0.0);
+        let keeper = car(1, 1, Vector::new(0.0, 4900.0, 0.0));
+        let aim = defender_adjusted_aim(ball, Vector::new(0.0, 1800.0, 0.0), goal, &[keeper]);
+        assert!(aim.x.abs() > 300.0);
+        assert!(aim.x.abs() <= 720.0);
+    }
+
+    #[test]
+    fn shot_lane_pressure_only_counts_defenders_between_ball_and_goal() {
+        let ball = Vector::new(0.0, 0.0, 100.0);
+        let aim = Vector::new(0.0, 5120.0, 300.0);
+        let blocker = car(1, 1, Vector::new(0.0, 2400.0, 0.0));
+        let behind = car(2, 1, Vector::new(0.0, -300.0, 0.0));
+        assert!(shot_lane_pressure(ball, aim, &[blocker]) > 0.1);
+        assert_eq!(shot_lane_pressure(ball, aim, &[behind]), 0.0);
+    }
+
+    #[test]
+    fn opponent_arrival_time_rewards_a_facing_defender() {
+        let facing = car(1, 1, Vector::new(0.0, 1000.0, 0.0));
+        let turned_away = car(2, 1, Vector::new(0.0, 1000.0, 0.0));
+        let target = Vector::new(0.0, 2000.0, 0.0);
+        let mut facing = facing;
+        facing.orientation = Matrix3::new(0.0, std::f32::consts::PI / 2.0, 0.0);
+        let mut turned_away = turned_away;
+        turned_away.orientation = Matrix3::new(0.0, -std::f32::consts::PI / 2.0, 0.0);
+        assert!(opponent_arrival_time(facing, target) < opponent_arrival_time(turned_away, target));
     }
 
     #[test]
