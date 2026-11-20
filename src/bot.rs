@@ -12,7 +12,7 @@ use crate::{
     physics::drive::{curvature, dodge_impulse, throttle_acceleration},
     prediction::{BallSlice, BallTrajectory},
     planning::{find_wall_drive, wall_approach_geometry, WallDriveMode, WallDrivePlan},
-    shot_physics::{get_jump_time, ShotType},
+    shot_physics::{get_jump_time, jump_shot_is_viable, ShotType},
     shot_parser::ShotTargets,
     shot_planner::{find_best_shot, grid_jump_time, ShotCandidate},
     state::{BallState, BoostPadState, CarState, MatchState},
@@ -1038,9 +1038,19 @@ impl BotBrain {
                 && local_offset_target.x > 0.0;
             let close_enough = velocity.abs() < 100.0
                 && distance_remaining < car.hitbox.length / 2.0;
+            let jump_viable = jump.shot_type != ShotType::Jump || jump_shot_is_viable(
+                t,
+                self.match_state.gravity.z,
+                car.velocity.z,
+                car.hitbox.height,
+                car.airborne,
+                jump.approach.z - car.location.z,
+                true,
+            );
             let side_ready = side_mode && distance_remaining < 180.0
-                && t <= jump_time * 1.08;
-            let normal_ready = (close_enough || aligned) && t <= jump_time * 1.08;
+                && t <= jump_time * 1.08 && jump_viable;
+            let normal_ready = (close_enough || aligned)
+                && t <= jump_time * 1.08 && jump_viable;
 
             if !car.airborne && (side_ready || normal_ready) {
                 let shot_direction = side.map_or(jump.shot_direction, |s| s.shot_direction);
