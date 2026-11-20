@@ -387,7 +387,7 @@ pub fn find_aerial_candidate(
         };
         let local_target = car.local_location(target_location);
         let alignment_penalty = car.forward().angle(local_target) * 0.035;
-        let boost_penalty = (validation.boost_estimate as f32 / car.boost.max(1.0)) * 0.10;
+        let boost_penalty = (validation.validation.boost_estimate as f32 / car.boost.max(1.0)) * 0.10;
         let score = slice.time + race_penalty + alignment_penalty + boost_penalty
             + if validation.fast { 0.025 } else { 0.0 };
         let candidate = AerialCandidate {
@@ -399,7 +399,7 @@ pub fn find_aerial_candidate(
             // ported rather than guessing from the acceleration ratio.
             double_jump: false,
             fast: validation.fast,
-            estimated_boost: validation.boost_estimate as f32,
+            estimated_boost: validation.validation.boost_estimate as f32,
             score,
         };
         if best.is_none_or(|current| candidate.score < current.score) {
