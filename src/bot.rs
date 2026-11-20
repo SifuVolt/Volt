@@ -2231,12 +2231,14 @@ fn select_side_shot(car:CarState,candidate:ShotCandidate,targets:ShotTargets)->O
 }
 
 fn candidate_to_intercept(car:CarState,candidate:ShotCandidate,targets:ShotTargets)->GroundIntercept {
-    let (contact_point,mut approach,contact_face,contact_quality)=select_ball_contact(car,candidate.ball,targets);
+    let (mut contact_point,mut approach,mut contact_face,contact_quality)=select_ball_contact(car,candidate.ball,targets);
     let side_shot=select_side_shot(car,candidate,targets);
     let shot_direction=side_shot.map_or(candidate.shot_direction,|s|s.shot_direction);
     if let Some(side)=side_shot {
         let lateral=Vector::new(-side.shot_direction.y,side.shot_direction.x,0.0).normalize();
         approach=candidate.ball-lateral*side.lateral_distance*side.side_sign;
+        contact_point=candidate.ball-lateral*BALL_RADIUS*side.side_sign;
+        contact_face=if side.side_sign<0.0 {"left"} else {"right"};
     }
     GroundIntercept {
         time:candidate.time, ball:candidate.ball, ball_velocity:candidate.ball_velocity,
