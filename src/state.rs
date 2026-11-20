@@ -234,6 +234,170 @@ impl BoostPadState {
     }
 }
 
+/// Boost/game mutators decoded exactly as VirxERLU.initialize() does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BoostAmountMode {
+    Default,
+    Unlimited,
+    SlowRecharge,
+    FastRecharge,
+    NoBoost,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct AgentSettings {
+    pub boost_accel: f32,
+    pub boost_amount: BoostAmountMode,
+    /// RLBot GameMode's stable enum discriminant; Python stores the matching
+    /// index in its game_mode tuple.
+    pub game_mode: u8,
+}
+
+impl AgentSettings {
+    pub fn from_match_configuration(config: &rlbot::flat::MatchConfiguration) -> Self {
+        let base_boost_accel = 991.0 + (2.0 / 3.0);
+        let mutators = config.mutators.as_deref();
+
+        let boost_strength = mutators
+            .map(|settings| settings.boost_strength as u8)
+            .unwrap_or(0);
+        let boost_accel = match boost_strength {
+            1 => base_boost_accel * 1.5,
+            2 => base_boost_accel * 2.0,
+            3 => base_boost_accel * 5.0,
+            4 => base_boost_accel * 10.0,
+            _ => base_boost_accel,
+        };
+
+        let boost_amount = match mutators
+            .map(|settings| settings.boost_amount as u8)
+            .unwrap_or(0)
+        {
+            1 => BoostAmountMode::Unlimited,
+            2 => BoostAmountMode::SlowRecharge,
+            3 => BoostAmountMode::FastRecharge,
+            4 => BoostAmountMode::NoBoost,
+            _ => BoostAmountMode::Default,
+        };
+
+        Self {
+            boost_accel,
+            boost_amount,
+            game_mode: config.game_mode as u8,
+        }
+    }
+
+    pub fn unlimited_boost(self) -> bool {
+        self.boost_amount == BoostAmountMode::Unlimited
+    }
+}
+
+impl Default for AgentSettings {
+    fn default() -> Self {
+        Self {
+            boost_accel: 991.0 + (2.0 / 3.0),
+            boost_amount: BoostAmountMode::Default,
+            game_mode: 0,
+        }
+    }
+}
+
+/// Virtual goal geometry matching the Python goal_object constructor.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct GoalState {
+    pub location: Vector,
+    pub left_post: Vector,
+    pub right_post: Vector,
+}
+
+impl GoalState {
+    pub fn new(team: usize, half_width: f32, post_z: f32) -> Self {
+        let direction = if team == 1 { 1.0 } else { -1.0 };
+        let goal_y = direction * 5120.0;
+        Self {
+            location: Vector::new(0.0, goal_y, post_z),
+            left_post: Vector::new(direction * half_width, goal_y, post_z),
+            right_post: Vector::new(-direction * half_width, goal_y, post_z),
+        }
+    }
+}
+
+/// Teammate message payload retained between packets, mirroring Bot's
+/// get_teammate_comm()/send_teamplay_comm() state.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TeamplayMessage {
+    pub status: String,
+    pub score: f32,
+    pub contact_time: f32,
+    pub received_at: f32,
+    pub cover_released: bool,
+}
+
+/// Persistent fields initialized by Volt's Bot.init() and VirxERLU.initialize().
+/// These are data/state only; decision logic remains in the Python-source port.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BotPersistentState {
+    pub last_flip_time: f32,
+    pub time: f32,
+    pub kickoff_flag: bool,
+    pub kickoff_done: bool,
+    pub kickoff_routine_started: bool,
+    pub kickoff_role: Option<String>,
+    pub kickoff_boost_pending: bool,
+    pub kickoff_ball_start: Option<Vector>,
+    pub kickoff_contest_until: f32,
+    pub last_prejump_check: f32,
+    pub prejump_cooldown_until: f32,
+    pub cover_role_owner: Option<usize>,
+    pub cover_role_released: bool,
+    pub teammate_comms: std::collections::HashMap<usize, TeamplayMessage>,
+    pub teamplay_score: f32,
+    pub teamplay_contact_time: f32,
+    pub teamplay_status: String,
+    pub transition_bump_cooldown_until: f32,
+    pub last_emergency_clear_time: f32,
+    pub emergency_save_zone_active: bool,
+    pub emergency_save_active: bool,
+    pub emergency_save_cooldown: f32,
+    pub shooting: bool,
+    pub best_shot_value: f32,
+    pub odd_tick: i32,
+    pub future_ball_location_slice: usize,
+}
+
+impl BotPersistentState {
+    pub fn new() -> Self {
+        Self {
+            last_flip_time: -999.0,
+            time: 0.0,
+            kickoff_flag: false,
+            kickoff_done: true,
+            kickoff_routine_started: false,
+            kickoff_role: None,
+            kickoff_boost_pending: false,
+            kickoff_ball_start: None,
+            kickoff_contest_until: -999.0,
+            last_prejump_check: -999.0,
+            prejump_cooldown_until: -999.0,
+            cover_role_owner: None,
+            cover_role_released: false,
+            teammate_comms: std::collections::HashMap::new(),
+            teamplay_score: 0.0,
+            teamplay_contact_time: 10.0,
+            teamplay_status: "NO_SHOT".to_owned(),
+            transition_bump_cooldown_until: -999.0,
+            last_emergency_clear_time: -999.0,
+            emergency_save_zone_active: false,
+            emergency_save_active: false,
+            emergency_save_cooldown: 0.0,
+            shooting: false,
+            best_shot_value: 92.75,
+            odd_tick: -1,
+            future_ball_location_slice: 180,
+        }
+    }
+}
+
 /// Immutable per-tick snapshot produced from the RLBot packet. Strategy code
 /// consumes this instead of repeatedly decoding FlatBuffer fields.
 #[derive(Debug, Clone, PartialEq)]
