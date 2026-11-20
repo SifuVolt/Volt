@@ -5,6 +5,7 @@
 //! timed shot execution all feed the live RLBot controller.
 
 use crate::{
+    aerial::{find_aerial_candidate, AerialCandidate, AerialShot},
     control::{default_drive, default_pd, DriveInput},
     defense::GridDefense,
     math::{utils::cap_in_field, Vector},
@@ -45,6 +46,7 @@ enum Decision {
     KickoffBackBoost,
     EmergencyChallenge,
     GroundChallenge,
+    AerialChallenge,
     Goalkeeper,
     Transition,
 }
@@ -130,6 +132,8 @@ pub struct BotBrain {
     speed_flip: Option<SpeedFlipState>,
     navigation_speedflip_used: bool,
     kickoff_dodge: Option<KickoffDodgeState>,
+    aerial_candidate: Option<AerialCandidate>,
+    aerial_shot: Option<AerialShot>,
 }
 
 impl BotBrain {
@@ -153,6 +157,8 @@ impl BotBrain {
             speed_flip: None,
             navigation_speedflip_used: false,
             kickoff_dodge: None,
+            aerial_candidate: None,
+            aerial_shot: None,
         }
     }
 
@@ -200,6 +206,19 @@ impl BotBrain {
 
         if self.defense_flip.is_some() {
             return self.run_grid_defense(me, cars, ball, game_time, plan.decision);
+        }
+
+        // A launched aerial is a committed, uninterruptible mechanic. Keep
+        // executing its own prediction/boost controller until contact or a
+        // physically impossible recovery, just like the source routine stack.
+        if let Some(mut aerial) = self.aerial_shot {
+            let controls = aerial.run(me, game_time, match_state.gravity, self.boost_accel);
+            if aerial.finished {
+                self.aerial_shot = None;
+            } else {
+                self.aerial_shot = Some(aerial);
+            }
+            return controls;
         }
 
         // Keep a committed jump shot, but refresh its moving contact while the
@@ -437,6 +456,7 @@ impl BotBrain {
         game_time: f32,
         match_state: MatchState,
     ) -> Plan {
+        self.aerial_candidate = None;
         let side = team_side(me.team);
         let opponents: Vec<CarState> = cars
             .iter()
@@ -648,6 +668,34 @@ impl BotBrain {
                 intercept.is_none_or(|ground| candidate.time < ground.time)
             });
             let selected = use_jump.or(intercept);
+
+            // Aerials compete with ground and single-jump contacts only after
+            // the same team-role gate has elected this car to challenge.
+            // The CLib reachability check enforces the real boost/speed budget.
+            if !urgent_save {
+                if let Some(candidate) = find_aerial_candidate(
+                    me,
+                    prediction,
+                    aim,
+                    &opponents,
+                    match_state.gravity,
+                    self.boost_accel,
+                ).filter(|candidate| {
+                    selected.is_none_or(|ground_or_jump| {
+                        candidate.score + 0.05 < ground_or_jump.time
+                    })
+                }) {
+                    self.aerial_candidate = Some(candidate);
+                    return Plan {
+                        decision: Decision::AerialChallenge,
+                        target: candidate.target_location,
+                        target_speed: MAX_SPEED,
+                        shot: None,
+                        jump: None,
+                    };
+                }
+            }
+
             let target = selected
                 .map(|shot| shot.approach)
                 .unwrap_or_else(|| select_contact_approach(me, ball.location, aim));
@@ -686,6 +734,22 @@ impl BotBrain {
     fn drive_to(&mut self, car: CarState, plan: Plan, game_time: f32) -> ControllerState {
         if let Some(state) = self.jump_shot {
             return self.run_jump_shot(car, state, game_time);
+        }
+
+        if plan.decision == Decision::AerialChallenge {
+            if let Some(candidate) = self.aerial_candidate {
+                let mut aerial = AerialShot::new(car, candidate, game_time);
+                let controls = aerial.run(
+                    car,
+                    game_time,
+                    self.match_state.gravity,
+                    self.boost_accel,
+                );
+                if !aerial.finished {
+                    self.aerial_shot = Some(aerial);
+                }
+                return controls;
+            }
         }
 
         if let Some(jump) = plan.jump {
