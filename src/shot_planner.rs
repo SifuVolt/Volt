@@ -117,8 +117,8 @@ fn score(me:CarState,friends:&[CarState],ball:Vector,vel:Vector,kind:ShotType,t:
     s
 }
 
-fn reserve(me:CarState,ball:Vector,t:f32,kind:ShotType,g:f32)->f32 {
-    if kind==ShotType::Ground {return 0.0;}
+fn reserve(me:CarState,ball:Vector,t:f32,kind:ShotType,g:f32,unlimited:bool)->f32 {
+    if unlimited || kind==ShotType::Ground {return 0.0;}
     let height=(ball.z-R-me.location.z).max(0.0);
     let flat=me.location.flat_distance(ball);
     if kind==ShotType::Jump || kind==ShotType::DoubleJump {
@@ -141,17 +141,17 @@ fn reserve(me:CarState,ball:Vector,t:f32,kind:ShotType,g:f32)->f32 {
     cap((d-250.0)/1000.0,0.0,1.0)*cap(height/700.0,0.0,1.0)*(me.boost*0.18).max(2.0).min(15.0)
 }
 
-fn parse_budget(me:CarState,slice:BallSlice,t:f32,targets:ShotTargets,g:Vector,boost_accel:f32,flags:(bool,bool,bool))->ParsedShot {
+fn parse_budget(me:CarState,slice:BallSlice,t:f32,targets:ShotTargets,g:Vector,boost_accel:f32,flags:(bool,bool,bool),unlimited:bool)->ParsedShot {
     let mut car=me;
     let mut shot=parse_slice_for_shot_with_target(&car,slice.location,slice.velocity,t,R,boost_accel,g,targets,flags.0,flags.1,flags.2,false,true,false);
-    if !shot.found {return shot;}
+    if !shot.found || unlimited {return shot;}
     let mut seen=[false;4];
     for _ in 0..3 {
         let Some(kind)=shot.shot_type else{return shot;};
         let i=match kind {ShotType::Ground=>0,ShotType::Jump=>1,ShotType::DoubleJump=>2,ShotType::Aerial=>3};
         if seen[i] {return ParsedShot::default();}
         seen[i]=true;
-        let r=reserve(me,slice.location,t,kind,g.z);
+        let r=reserve(me,slice.location,t,kind,g.z,unlimited);
         if r<=0.25 {return shot;}
         let budget=me.boost-r;
         if budget< -0.01 {return ParsedShot::default();}
@@ -167,7 +167,7 @@ fn parse_budget(me:CarState,slice:BallSlice,t:f32,targets:ShotTargets,g:Vector,b
 pub fn find_best_shot(
     me:CarState,cars:&[CarState],ball_now:Vector,prediction:&BallTrajectory,
     targets:ShotTargets,gravity:Vector,boost_accel:f32,game_time:f32,
-    kickoff_contest_until:f32,urgent_save:bool,elected_challenger:bool,horizon:f32,
+    kickoff_contest_until:f32,urgent_save:bool,elected_challenger:bool,unlimited_boost:bool,horizon:f32,
 )->Option<ShotCandidate> {
     if me.airborne || prediction.slices.is_empty() || horizon.min(6.0)<=0.10 {return None;}
     let friends:Vec<CarState>=cars.iter().copied().filter(|c|c.team==me.team&&!c.demolished&&c.index!=me.index).collect();
@@ -188,7 +188,7 @@ pub fn find_best_shot(
         let rebound=backwall_rebound(me,slice.location,slice.velocity);
         let mut flags=(true,!in_own_net,true);
         if rebound {flags.1=false;}
-        if me.boost<=0.0 {
+        if !unlimited_boost && me.boost<=0.0 {
             if slice.location.z>105.0 {flags.0=false;flags.1=false;}
             else {flags.2=false;}
         }
@@ -219,9 +219,9 @@ pub fn find_best_shot(
             (a.time-grid.time).abs().total_cmp(&(b.time-grid.time).abs())
         );
         if let Some(slice)=nearest {
-            let boost_reserve=reserve(me,grid.ball,remaining,ShotType::DoubleJump,gravity.z);
-            let boost_ok=me.boost-boost_reserve>=0.0;
-            let no_boost_ground_block=!(me.boost<=0.0 && grid.ball.z<=105.0);
+            let boost_reserve=reserve(me,grid.ball,remaining,ShotType::DoubleJump,gravity.z,unlimited_boost);
+            let boost_ok=unlimited_boost || me.boost-boost_reserve>=0.0;
+            let no_boost_ground_block=unlimited_boost || !(me.boost<=0.0 && grid.ball.z<=105.0);
             if remaining>0.0 && boost_ok && no_boost_ground_block
                 && useful(me,&foes,&friends,grid.ball,remaining,ShotType::DoubleJump,
                     game_time<kickoff_contest_until,elected_challenger)
@@ -316,7 +316,7 @@ mod tests {
     #[test]fn candidate_scan_only_returns_finite_source_scored_candidates(){
         let car=test_car();let tg=ShotTargets{left:Vector::new(-700.0,5120.0,350.0),right:Vector::new(700.0,5120.0,350.0)};
         let pred=BallTrajectory{slices:(0..360).map(|i|BallSlice{time:i as f32/120.0,location:Vector::new(0.0,0.0,100.0),velocity:Vector::ZERO}).collect()};
-        let c=find_best_shot(car,&[],Vector::ZERO,&pred,tg,Vector::new(0.0,0.0,-650.0),991.6667,0.0,-999.0,false,true,3.0);
+        let c=find_best_shot(car,&[],Vector::ZERO,&pred,tg,Vector::new(0.0,0.0,-650.0),991.6667,0.0,-999.0,false,true,false,3.0);
         assert!(c.is_none()||c.is_some_and(|x|x.score.is_finite()));
     }
 }
