@@ -799,7 +799,7 @@ impl BotBrain {
         let candidate = find_best_shot(
             me, cars, ball.location, prediction, shot_targets,
             match_state.gravity, self.boost_accel, game_time,
-            self.kickoff_contest_until, urgent_save, true, self.shot_search_horizon(game_time),
+            self.kickoff_contest_until, urgent_save, true, self.unlimited_boost, self.shot_search_horizon(game_time),
         );
         let selected = candidate.map(|candidate| candidate_to_intercept(me, candidate, shot_targets));
         let use_jump = selected.filter(|shot| shot.shot_type != ShotType::Ground);
