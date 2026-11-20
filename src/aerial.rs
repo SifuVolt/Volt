@@ -12,7 +12,7 @@ use crate::{
     shot_physics::aerial_shot_is_viable,
     state::CarState,
 };
-use rlbot::flat::ControllerState;
+use rlbot::flat::{AirState, ControllerState};
 
 const MAX_SPEED: f32 = 2300.0;
 const AIR_THROTTLE_ACCEL: f32 = 66.667;
@@ -20,10 +20,12 @@ const JUMP_VEL: f32 = 291.667;
 const JUMP_ACCEL: f32 = 1458.333;
 const JUMP_DURATION: f32 = 0.2;
 const STICKY_ACCEL: f32 = 325.0;
+const BOOST_CONSUMPTION: f32 = 33.3;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct AerialCandidate {
     pub slice: BallSlice,
+    pub shot_target: Vector,
     pub target_location: Vector,
     pub shot_direction: Vector,
     pub double_jump: bool,
@@ -35,12 +37,19 @@ pub struct AerialCandidate {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct AerialShot {
     pub started_at: f32,
+    pub last_update: f32,
     pub intercept_time: f32,
     pub ball: Vector,
+    pub slice_velocity: Vector,
+    pub slice_time: f32,
+    pub shot_target: Vector,
     pub target_location: Vector,
     pub shot_direction: Vector,
+    pub up: Vector,
     pub start_boost: f32,
     pub double_jump: bool,
+    pub jump_immediately: bool,
+    pub aerialing: bool,
     pub elapsed: f32,
     pub jump_release_frames: u8,
     pub second_jump_frames: u8,
@@ -49,28 +58,96 @@ pub struct AerialShot {
     pub dodge_elapsed: f32,
     pub dodge_step: u8,
     pub dodge_input: Vector,
+    pub dodge_jump: bool,
     pub finished: bool,
 }
 
 impl AerialShot {
-    pub fn new(car: CarState, candidate: AerialCandidate, game_time: f32) -> Self {
-        Self {
+    pub fn new(
+        car: CarState,
+        candidate: AerialCandidate,
+        game_time: f32,
+        gravity: Vector,
+        boost_accel: f32,
+    ) -> Self {
+        let up = car.up();
+        let flat_velocity = car.velocity - up * car.velocity.dot(up);
+        let to_target = candidate.target_location - car.location;
+        let flat_target = to_target - up * to_target.dot(up);
+        let jump_immediately = flat_velocity.angle(flat_target) < 0.6
+            || flat_velocity.magnitude() < 500.0
+            || car.air_state != AirState::OnGround;
+
+        let mut aerial = Self {
             started_at: game_time,
+            last_update: game_time,
             intercept_time: game_time + candidate.slice.time,
             ball: candidate.slice.location,
+            slice_velocity: candidate.slice.velocity,
+            slice_time: candidate.slice.time,
+            shot_target: candidate.shot_target,
             target_location: candidate.target_location,
             shot_direction: candidate.shot_direction,
+            up,
             start_boost: car.boost,
-            double_jump: candidate.double_jump,
+            double_jump: false,
+            jump_immediately,
+            aerialing: false,
             elapsed: 0.0,
             jump_release_frames: 0,
             second_jump_frames: 0,
-            jumped: car.has_jumped || car.airborne,
+            jumped: false,
             dodging: false,
             dodge_elapsed: 0.0,
             dodge_step: 0,
             dodge_input: Vector::ZERO,
+            dodge_jump: true,
             finished: false,
+        };
+        let single = aerial.boost_estimate(car, false, 0.0, candidate.slice.time, gravity, boost_accel);
+        let double = aerial.boost_estimate(car, true, 0.0, candidate.slice.time, gravity, boost_accel);
+        let can_hit = single >= 0.0 || double >= 0.0;
+        aerial.double_jump = double >= 0.0 && (double < single || single < 0.0);
+        aerial.finished = !can_hit;
+        aerial
+    }
+
+    fn boost_estimate(
+        &self,
+        car: CarState,
+        double_jump: bool,
+        elapsed: f32,
+        time_remaining: f32,
+        gravity: Vector,
+        boost_accel: f32,
+    ) -> f32 {
+        let time = time_remaining.max(0.001);
+        let (final_position, final_velocity) = if car.air_state == AirState::OnGround {
+            jump_prediction(car, time, elapsed, double_jump, gravity)
+        } else {
+            (
+                car.location + car.velocity * time + gravity * (0.5 * time * time),
+                car.velocity + gravity * time,
+            )
+        };
+        let delta = self.target_location - final_position;
+        let direction = delta.normalize();
+        let angle = delta.angle(car.forward()).max(0.0001);
+        let turn_time = 0.6 * (2.0 * (angle / 9.0).sqrt());
+        let tau1 = turn_time * (1.0 - 0.4 / angle).clamp(0.0, 1.0);
+        let available_time = (time - tau1).max(0.001);
+        let required_accel = 2.0 * delta.magnitude() / (available_time * available_time);
+        let ratio = required_accel / (boost_accel + AIR_THROTTLE_ACCEL);
+        let tau2 = time - available_time * (1.0 - ratio.clamp(0.0, 1.0)).sqrt();
+        let velocity_estimate = final_velocity
+            + direction * ((boost_accel + AIR_THROTTLE_ACCEL) * (tau2 - tau1));
+        let boost_estimate = (tau2 - tau1) * BOOST_CONSUMPTION;
+        let enough_boost = boost_estimate < car.boost * 0.9;
+        let enough_time = ratio.abs() < 0.9;
+        if velocity_estimate.magnitude() < MAX_SPEED * 0.9 && enough_boost && enough_time {
+            boost_estimate
+        } else {
+            -1.0
         }
     }
 
@@ -80,34 +157,51 @@ impl AerialShot {
         game_time: f32,
         gravity: Vector,
         boost_accel: f32,
+        steer: f32,
     ) -> ControllerState {
+        let delta_time = (game_time - self.last_update).max(1.0 / 120.0);
+        self.last_update = game_time;
         let mut controls = ControllerState::default();
         let time_remaining = self.intercept_time - game_time;
         if self.finished {
             return controls;
         }
         if self.dodging {
-            return self.run_dodge(car, controls);
-        }
-        if time_remaining <= -0.04 || (car.airborne && car.has_dodged) {
-            self.finished = true;
-            return controls;
-        }
-        if self.start_boost < car.boost || car.boost <= 0.0 {
-            self.finished = true;
-            return controls;
+            return self.run_dodge(car, controls, delta_time);
         }
 
-        self.elapsed = (game_time - self.started_at).max(0.0);
+        if !self.aerialing {
+            if self.start_boost < car.boost || car.boost <= 0.0 || time_remaining <= 0.0 {
+                self.finished = true;
+                return controls;
+            }
+            if self.jump_immediately || steer.abs() < 0.2 {
+                let single = self.boost_estimate(
+                    car, false, self.elapsed, time_remaining, gravity, boost_accel,
+                );
+                let double = self.boost_estimate(
+                    car, true, self.elapsed, time_remaining, gravity, boost_accel,
+                );
+                if single >= 0.0 || double >= 0.0 {
+                    self.double_jump = double >= 0.0 && (double < single || single < 0.0);
+                    self.aerialing = true;
+                } else {
+                    self.finished = true;
+                    return controls;
+                }
+            } else {
+                return controls;
+            }
+        }
+
+        self.elapsed += delta_time;
         let mut currently_double_jumping = false;
-
-        if !self.jumped && !car.has_dodged {
+        if !self.jumped {
             if self.elapsed <= JUMP_DURATION {
                 controls.jump = true;
             } else if self.double_jump && self.jump_release_frames < 3 {
                 controls.jump = false;
                 self.jump_release_frames += 1;
-                return controls;
             } else if self.double_jump && self.second_jump_frames < 6 {
                 controls.jump = true;
                 self.second_jump_frames += 1;
@@ -118,45 +212,31 @@ impl AerialShot {
         }
 
         let time = time_remaining.max(0.001);
-        let double_jump_pending = self.double_jump && !car.has_double_jumped && !car.has_dodged;
-        let (final_position, _final_velocity) = if self.jumped
-            || (car.airborne && self.elapsed > JUMP_DURATION && !double_jump_pending)
-        {
-            (
-                car.location + car.velocity * time + gravity * (0.5 * time * time),
-                car.velocity + gravity * time,
-            )
+        let final_position = if self.jumped {
+            car.location + car.velocity * time + gravity * (0.5 * time * time)
         } else {
-            jump_prediction(
-                car,
-                time,
-                self.elapsed,
-                self.double_jump && !car.has_double_jumped && !car.has_dodged,
-                gravity,
-            )
+            jump_prediction(car, time, self.elapsed, self.double_jump, gravity).0
         };
-
         let offset = self.target_location - final_position;
         let offset_length = offset.magnitude();
-        let forward = car.forward();
-        let local_target = if self.jumped {
-            car.local(self.ball - car.location)
+        let point_toward = if self.jumped {
+            self.ball - car.location
         } else {
-            car.local(offset)
+            offset
         };
-        let (_, pd) = default_pd(&car, local_target, false, None);
+        let (_, pd) = default_pd(&car, car.local(point_toward), false, None);
         controls.pitch = pd.pitch;
         controls.yaw = pd.yaw;
         controls.roll = pd.roll;
 
+        let forward = car.forward();
         let forward_projection = offset.dot(forward) / time;
-        let turn_angle = offset.angle(forward);
         controls.boost = forward_projection
-            >= (boost_accel + AIR_THROTTLE_ACCEL) * (1.0 / 120.0_f32).max(13.0 / 120.0)
-            && turn_angle < 0.4
+            >= (boost_accel + AIR_THROTTLE_ACCEL) * delta_time.max(13.0 / 120.0)
+            && offset.angle(forward) < 0.4
             && car.boost > 0.0;
         controls.throttle = (forward_projection
-            / (AIR_THROTTLE_ACCEL * (1.0 / 120.0_f32).max(1.0 / 120.0)))
+            / (AIR_THROTTLE_ACCEL * delta_time.max(1.0 / 120.0)))
             .clamp(-1.0, 1.0);
 
         if currently_double_jumping {
@@ -172,21 +252,26 @@ impl AerialShot {
             && time > 0.5
             && required_accel * 0.8 > AIR_THROTTLE_ACCEL
             && (car.boost <= 0.0 || required_accel * 0.8 > boost_accel + AIR_THROTTLE_ACCEL);
-        if time_remaining <= 0.0 || cannot_reach {
+        if time_remaining <= 0.0 || cannot_reach
+            || (car.air_state == AirState::OnGround && self.jumped)
+        {
             self.finished = true;
-        } else if time_remaining < 0.12 && offset_length < 115.0 {
+        } else if (
+            (!self.double_jump && self.elapsed < 1.45)
+                || (!car.has_jumped && self.jumped)
+        ) && time_remaining < 0.1 && offset_length < 100.0 {
             self.dodging = true;
             self.dodge_elapsed = 0.0;
             self.dodge_step = 0;
             self.dodge_input = dodge_direction(car, self.shot_direction);
-            return self.run_dodge(car, ControllerState::default());
+            self.dodge_jump = car.air_state == AirState::OnGround;
+            return self.run_dodge(car, ControllerState::default(), delta_time);
         } else if offset_length < 50.0 && !currently_double_jumping {
             let (_, aligned) = default_pd(&car, car.local(self.shot_direction), false, None);
             controls.pitch = aligned.pitch;
             controls.yaw = aligned.yaw;
             controls.roll = aligned.roll;
         }
-
         controls
     }
 
@@ -194,17 +279,32 @@ impl AerialShot {
         &mut self,
         car: CarState,
         mut controls: ControllerState,
+        delta_time: f32,
     ) -> ControllerState {
-        self.dodge_elapsed += 1.0 / 120.0;
-        let dodge_jump = !car.airborne;
-        if dodge_jump && self.dodge_elapsed < 0.1 {
+        self.dodge_elapsed += delta_time.max(1.0 / 120.0);
+        let grounded = car.air_state == AirState::OnGround;
+        if grounded && self.dodge_elapsed > (if self.dodge_jump { 0.1 } else { 0.0 }) + 0.1 {
+            self.finished = true;
+        } else if self.dodge_elapsed < 0.1 && self.dodge_jump {
             controls.jump = true;
-        } else if dodge_jump && self.dodge_step < 3 {
+        } else if self.dodge_step < 3 && self.dodge_jump {
             controls.jump = false;
             self.dodge_step += 1;
-        } else if self.dodge_elapsed < if dodge_jump { 0.7 } else { 0.6 } {
+        } else if self.dodge_elapsed < (if self.dodge_jump { 0.1 } else { 0.0 }) + 0.6 {
             controls.yaw = self.dodge_input.x;
             controls.pitch = self.dodge_input.y;
+            controls.jump = true;
+        } else {
+            self.finished = true;
+        }
+        if car.has_dodged {
+            self.finished = true;
+        }
+        controls
+    }
+}
+
+ = self.dodge_input.y;
             controls.jump = true;
         } else {
             self.finished = true;
@@ -226,7 +326,7 @@ fn jump_prediction(
     let up = car.up();
     let jump_remaining = (JUMP_DURATION - elapsed).clamp(0.0, JUMP_DURATION);
     let stick_remaining = (0.05 - elapsed).clamp(0.0, 0.05);
-    let grounded = !car.has_jumped && !car.airborne;
+    let grounded = car.air_state == AirState::OnGround;
     let mut position = car.location
         + car.velocity * time
         + gravity * (0.5 * time * time)
@@ -238,7 +338,7 @@ fn jump_prediction(
         + if grounded { up * JUMP_VEL } else { Vector::ZERO }
         + up * JUMP_ACCEL * jump_remaining
         - up * STICKY_ACCEL * stick_remaining;
-    if double_jump {
+    if double_jump && !car.has_double_jumped && !car.has_dodged {
         position = position + up * JUMP_VEL * (time - jump_remaining);
         velocity = velocity + up * JUMP_VEL;
     }
