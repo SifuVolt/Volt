@@ -228,10 +228,17 @@ impl BotBrain {
             return controller;
         }
 
-        // Python grid_defense pushes recovery after the flip lockout when
-        // falling. The landing-plane-aware recovery controller is ported as
-        // a separate mechanics stage; do not substitute an invented landing
-        // surface calculation here.
+        // Python grid_defense pushes recovery after the flip lockout while
+        // descending. Its landing plane is calculated with the original
+        // VirxERLU-CLib equations in defense.rs.
+        if me.airborne
+            && game_time - self.last_flip_time > 78.0 / 120.0
+            && me.velocity.z < -10.0
+        {
+            if let Some(target) = output.recovery_target {
+                return GridDefense::recovery_controller(me, target, self.match_state.gravity.z);
+            }
+        }
         output.controller
     }
 
