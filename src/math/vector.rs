@@ -140,6 +140,37 @@ impl Vector {
         self
     }
 
+    /// Component-wise midpoint, matching VirxERLU's Vector.midpoint().
+    pub fn midpoint(self, other: Self) -> Self {
+        (self + other) * 0.5
+    }
+
+    /// Compatibility names for the original Python Vector API.
+    pub fn dist(self, other: Self) -> f32 {
+        self.distance(other)
+    }
+
+    pub fn flat_dist(self, other: Self) -> f32 {
+        self.flat_distance(other)
+    }
+
+    pub fn angle2d(self, other: Self) -> f32 {
+        self.angle_2d(other)
+    }
+
+    pub fn clamp(self, start: Self, end: Self) -> Self {
+        self.clamp_between(start, end)
+    }
+
+    pub fn round_to(self, decimals: i32) -> Self {
+        let factor = 10.0_f32.powi(decimals);
+        Self::new(
+            (self.x * factor).round() / factor,
+            (self.y * factor).round() / factor,
+            (self.z * factor).round() / factor,
+        )
+    }
+
     pub fn to_array(self) -> [f32; 3] {
         [self.x, self.y, self.z]
     }
@@ -177,11 +208,29 @@ impl Mul<Vector> for f32 {
     }
 }
 
+impl Mul<Vector> for Vector {
+    type Output = Self;
+
+    /// Element-wise multiplication, matching Python Vector * Vector.
+    fn mul(self, rhs: Vector) -> Self {
+        Self::new(self.x * rhs.x, self.y * rhs.y, self.z * rhs.z)
+    }
+}
+
 impl Div<f32> for Vector {
     type Output = Self;
 
     fn div(self, rhs: f32) -> Self {
         Self::new(self.x / rhs, self.y / rhs, self.z / rhs)
+    }
+}
+
+impl Div<Vector> for Vector {
+    type Output = Self;
+
+    /// Element-wise division, matching Python Vector / Vector.
+    fn div(self, rhs: Vector) -> Self {
+        Self::new(self.x / rhs.x, self.y / rhs.y, self.z / rhs.z)
     }
 }
 
@@ -212,6 +261,18 @@ mod tests {
     #[test]
     fn zero_vector_normalizes_safely() {
         assert_eq!(Vector::ZERO.normalize(), Vector::ZERO);
+    }
+
+    #[test]
+    fn python_vector_helpers_and_componentwise_ops_are_preserved() {
+        let a = Vector::new(2.0, 4.0, 6.0);
+        let b = Vector::new(4.0, 8.0, 10.0);
+        assert_eq!(a.midpoint(b), Vector::new(3.0, 6.0, 8.0));
+        assert_eq!(a * b, Vector::new(8.0, 32.0, 60.0));
+        assert_eq!(b / a, Vector::new(2.0, 2.0, 10.0 / 6.0));
+        assert_eq!(a.dist(b), a.distance(b));
+        assert_eq!(a.flat_dist(b), a.flat_distance(b));
+        assert_eq!(Vector::new(1.234, 2.345, 3.456).round_to(2), Vector::new(1.23, 2.35, 3.46));
     }
 
     #[test]
