@@ -242,24 +242,27 @@ pub fn find_best_shot(
     best
 }
 
-fn solve_quad(a:f32,b:f32,c:f32,y:f32,branch:i32)->Option<f32> {
+fn solve_quad(a:f64,b:f64,c:f64,y:f64,branch:i32)->Option<f32> {
     let root=(y-c)/a+b*b/(4.0*a*a);
-    if root<0.0 {None}else{Some(-b/(2.0*a)+root.sqrt()*if branch>=0 {1.0}else{-1.0})}
+    if root < -1.0e-12 {None}else{
+        Some((-b/(2.0*a)+root.max(0.0).sqrt()*if branch>=0 {1.0}else{-1.0}) as f32)
+    }
 }
-fn max_jump_height(double:bool)->f32 {
+fn max_jump_height(double:bool)->f64 {
     let extra=292.0*if double {1.0}else{0.0};
-    let x=-(564.9931640625+extra)/(-650.111328125);
+    let x=-(564.9931640625+extra)/(-325.0556640625*2.0);
     -325.0556640625*x*x+(564.9931640625+extra)*x-11.6591796875-292.0*25.0/120.0*if double {1.0}else{0.0}
 }
 fn grid_jump_time(height:f32,double:bool)->Option<f32> {
-    let single=solve_quad(-325.0556640625,564.9931640625,-11.6591796875,height.min(max_jump_height(false)),-1)?;
+    let h=height as f64;
+    let single=solve_quad(-325.0556640625,564.9931640625,-11.6591796875,h.min(max_jump_height(false)),-1)?;
     if single>=24.0/120.0 {
         if single>=25.0/120.0 && double {
-            return solve_quad(-325.0556640625,856.9931640625,-11.6591796875-292.0*25.0/120.0,height.min(max_jump_height(true)),-1);
+            return solve_quad(-325.0556640625,856.9931640625,-11.6591796875-292.0*25.0/120.0,h.min(max_jump_height(true)),-1);
         }
         return Some(single);
     }
-    solve_quad(392.2802734375,272.7626953125,17.671875,height,1)
+    solve_quad(392.2802734375,272.7626953125,17.671875,h,1)
 }
 fn grid_profile(car:CarState)->(Vec<f32>,Vec<f32>) {
     let mut ds=vec![0.0];let mut vs=vec![car.velocity.flatten().magnitude().max(0.0)];
