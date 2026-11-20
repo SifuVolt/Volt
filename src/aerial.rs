@@ -103,7 +103,6 @@ impl AerialShot {
         }
 
         self.elapsed = (game_time - self.started_at).max(0.0);
-        let grounded_at_launch = !car.airborne && !car.has_jumped;
         let mut currently_double_jumping = false;
 
         if !self.jumped && !car.airborne && !car.has_dodged {
@@ -123,7 +122,7 @@ impl AerialShot {
         }
 
         let time = time_remaining.max(0.001);
-        let (final_position, final_velocity) = if self.jumped || car.has_jumped {
+        let (final_position, final_velocity) = if self.jumped || (car.airborne && self.elapsed > JUMP_DURATION) {
             (
                 car.location + car.velocity * time + gravity * (0.5 * time * time),
                 car.velocity + gravity * time,
