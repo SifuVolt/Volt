@@ -318,6 +318,17 @@ fn contact_geometry(
     (target_location, shot_direction)
 }
 
+/// Expose Party Cannon's predicted outgoing shot and 155-unit hitbox
+/// target for the grounded jump-shot routine as well as aerial planning.
+pub fn party_cannon_contact_geometry(
+    car: CarState,
+    slice: BallSlice,
+    goal: Vector,
+    gravity: Vector,
+) -> (Vector, Vector) {
+    contact_geometry(car, slice, goal, gravity)
+}
+
 fn nearest_surface(location: Vector) -> (Vector, Vector) {
     let candidates = [
         (location.z.abs(), Vector::new(location.x, location.y, 0.0), Vector::new(0.0, 0.0, 1.0)),
