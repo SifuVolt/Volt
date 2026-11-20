@@ -3353,6 +3353,43 @@ mod tests {
     }
 
 
+
+    #[test]
+    fn side_shot_requires_a_projected_goal_line_miss_and_enough_setup_time() {
+        let mut me = car(
+            Vector::new(0.0, 2500.0, 17.0),
+            Vector::new(0.0, 1200.0, 0.0),
+            25.0,
+        );
+        me.orientation = Matrix3::new(0.0, 0.0, 0.0);
+        let candidate = ShotCandidate {
+            time: 2.0,
+            ball: Vector::new(1000.0, 3500.0, 100.0),
+            ball_velocity: Vector::new(200.0, 800.0, 0.0),
+            approach: Vector::ZERO,
+            shot_direction: Vector::new(0.0, 1.0, 0.0),
+            shot_type: ShotType::Ground,
+            fast: false,
+            score: 0.0,
+            parser: Default::default(),
+        };
+        let targets = ShotTargets {
+            left: Vector::new(-892.0, 5120.0, 300.0),
+            right: Vector::new(892.0, 5120.0, 300.0),
+        };
+
+        let side = select_side_shot(me, candidate, targets).unwrap();
+        assert_eq!(side.side_sign, 1.0);
+        assert!((side.lateral_distance - me.location.flat_distance(candidate.ball) * 0.5).abs() < 0.01);
+
+        let centred = ShotCandidate {
+            ball: Vector::new(0.0, 3500.0, 100.0),
+            ball_velocity: Vector::new(0.0, 800.0, 0.0),
+            ..candidate
+        };
+        assert!(select_side_shot(me, centred, targets).is_none());
+    }
+
     #[test]
     fn grid_double_jump_holds_first_press_releases_then_sends_second_press() {
         let mut me = car(Vector::ZERO, Vector::ZERO, 25.0);
