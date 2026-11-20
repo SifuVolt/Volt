@@ -1042,9 +1042,12 @@ fn estimate_ground_eta(car: CarState, target: Vector) -> f32 {
     let raw_turn_time = (angle / turn_rate).min(1.6);
     // Fast cars need room to scrub speed before a sharp turn. This mirrors
     // defaultThrottle's curvature speed cap instead of assuming instant steering.
-    let braking_time = if angle > 0.65 && speed > 1000.0 {
-        ((speed - 1000.0) / 3500.0).clamp(0.0, 0.35)
-            * (angle / std::f32::consts::PI).clamp(0.0, 1.0)
+    let braking_angle_blend = ((angle - 0.55) / 0.80).clamp(0.0, 1.0);
+    let braking_time = if speed > 1000.0 {
+        // A fast car cannot instantly take a tight line. Account for the
+        // time needed to scrub toward a controllable cornering speed; scale
+        // the cost down for shallow corrections where braking is unnecessary.
+        ((speed - 1000.0) / 3500.0).clamp(0.0, 0.45) * braking_angle_blend
     } else {
         0.0
     };
@@ -1343,7 +1346,9 @@ mod tests {
             0.2,
         );
 
-        assert!(normal.y < -0.5);
+        // The selected front-face normal points from the car's contact
+        // surface toward the ball, which is in +Y from this car.
+        assert!(normal.y > 0.5);
         assert!(quality > 0.7);
     }
 
