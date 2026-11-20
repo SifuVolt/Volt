@@ -5,15 +5,17 @@
 //! as it does in Python.
 
 use crate::{
+    control::default_pd,
     math::Vector,
     state::{BallState, BoostPadState, CarState},
 };
 use rlbot::flat::ControllerState;
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug)]
 pub struct DefenseOutput {
     pub controller: ControllerState,
     pub start_flip: bool,
+    pub recovery_target: Option<Vector>,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -162,6 +164,7 @@ impl GridDefense {
             return DefenseOutput {
                 controller: self.prepare_for_attack(car, ball, goal, lane_side),
                 start_flip: false,
+                recovery_target: None,
             };
         }
 
@@ -285,12 +288,123 @@ impl GridDefense {
                         && (car.location.y + car.forward().y * flip_distance).abs() < 5000.0));
             if should_flip {
                 self.previous_front = Some(car.forward());
-                return DefenseOutput { controller, start_flip: true };
+                return DefenseOutput { controller, start_flip: true, recovery_target: Some(target) };
             }
         }
 
         self.previous_front = Some(car.forward());
-        DefenseOutput { controller, start_flip: false }
+        DefenseOutput { controller, start_flip: false, recovery_target: Some(target) }
+    }
+
+    /// Port of VirxERLU-CLib::find_landing_plane, used by Volt's recovery routine.
+    fn landing_plane(location: Vector, velocity: Vector, gravity: f32) -> usize {
+        const SIDE_WALL: f64 = 4080.0;
+        const GOAL_LINE: f64 = 5120.0;
+        const BACK_WALL: f64 = 5110.0;
+        const CEILING: f64 = 2030.0;
+        const FLOORING: f64 = 20.0;
+        const MAX_SPEED: f64 = 2300.0;
+
+        fn sign(v: f64) -> f64 { if v > 0.0 { 1.0 } else if v < 0.0 { -1.0 } else { 0.0 } }
+        fn min_non_negative(x: f64, y: f64) -> f64 {
+            if (x < y && x >= 0.0) || (y < 0.0 && x >= 0.0) { x } else { y }
+        }
+        fn vertex_time(a: f64, h: f64, k: f64, y: f64) -> f64 {
+            let root = ((y - k) / a).sqrt();
+            min_non_negative(root + h, -root + h)
+        }
+        fn landing_time(fall: f64, terminal_time: f64, terminal_distance: f64,
+            terminal_velocity: f64, k: f64, h: f64, gravity: f64) -> f64 {
+            if fall * sign(-gravity) <= terminal_distance * sign(-gravity) {
+                vertex_time(gravity, h, k, fall)
+            } else {
+                terminal_time + (fall - terminal_distance) / terminal_velocity
+            }
+        }
+        fn smallest_index(times: &[f64; 6]) -> usize {
+            let mut index = 0;
+            for i in 1..6 {
+                if (times[i] > 0.0 && times[i] < times[index])
+                    || (times[index] < 0.0 && times[i] > times[index]) {
+                    index = i;
+                }
+            }
+            index
+        }
+
+        let l = [location.x as f64, location.y as f64, location.z as f64];
+        let v = [velocity.x as f64, velocity.y as f64, velocity.z as f64];
+        let g = gravity as f64;
+        if l[1].abs() >= GOAL_LINE || (v[0] == 0.0 && v[1] == 0.0 && g == 0.0) { return 5; }
+
+        let mut times = [-1.0_f64; 6];
+        if v[0] != 0.0 {
+            times[0] = (SIDE_WALL - l[0]) / v[0];
+            times[1] = (-SIDE_WALL - l[0]) / v[0];
+        }
+        if v[1] != 0.0 {
+            times[2] = (BACK_WALL - l[1]) / v[1];
+            times[3] = (-BACK_WALL - l[1]) / v[1];
+        }
+        if g != 0.0 {
+            let h = v[2] / -g;
+            let k = v[2] * v[2] / -g;
+            let mut climb = -l[2];
+            if g < 0.0 {
+                climb += CEILING;
+                if k >= climb { times[4] = vertex_time(g, h, k, climb); }
+            } else {
+                climb += FLOORING;
+                if k <= climb { times[5] = vertex_time(g, h, k, climb); }
+            }
+            let terminal_velocity = (MAX_SPEED - (v[0] * v[0] + v[1] * v[1]).sqrt()) * sign(g);
+            let terminal_time = (terminal_velocity - v[2]) / g;
+            let terminal_distance = v[2] * terminal_time - g * terminal_time * terminal_time / 2.0;
+            let fall_distance = -l[2];
+            if g < 0.0 {
+                times[5] = landing_time(fall_distance + FLOORING, terminal_time,
+                    terminal_distance, terminal_velocity, k, h, g);
+            } else {
+                times[4] = landing_time(fall_distance + CEILING, terminal_time,
+                    terminal_distance, terminal_velocity, k, h, g);
+            }
+        }
+        smallest_index(&times)
+    }
+
+    /// Volt's landing-plane recovery routine (boost_to_surface=false).
+    pub fn recovery_controller(car: CarState, target: Vector, gravity: f32) -> ControllerState {
+        let direction = (target - car.location).normalize();
+        let plane = Self::landing_plane(car.location, car.velocity, gravity).min(5);
+        let target_vectors = [
+            Vector::new(0.0, direction.y, -1.0),
+            Vector::new(0.0, direction.y, -1.0),
+            Vector::new(direction.x, 0.0, -1.0),
+            Vector::new(direction.x, 0.0, -1.0),
+            Vector::new(direction.x, direction.y, 0.0),
+            Vector::new(direction.x, direction.y, 0.0),
+        ];
+        let up_vectors = [
+            Vector::new(-1.0, 0.0, 0.0),
+            Vector::new(1.0, 0.0, 0.0),
+            Vector::new(0.0, -1.0, 0.0),
+            Vector::new(0.0, 1.0, 0.0),
+            Vector::new(0.0, 0.0, -1.0),
+            Vector::new(0.0, 0.0, 1.0),
+        ];
+        let (_, controls) = default_pd(
+            &car,
+            car.local(target_vectors[plane]),
+            false,
+            Some(car.local(up_vectors[plane])),
+        );
+        let mut controller = ControllerState::default();
+        controller.throttle = 1.0;
+        controller.boost = false;
+        controller.pitch = controls.pitch;
+        controller.yaw = controls.yaw;
+        controller.roll = controls.roll;
+        controller
     }
 }
 
