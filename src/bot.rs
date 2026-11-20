@@ -1509,7 +1509,7 @@ impl BotBrain {
             state.approach = offset_target;
         }
         let local_ball = car.local_location(state.ball).flatten();
-        let distance_to_contact = car.location.distance(state.approach);
+        let distance_to_contact = car.location.flat_distance(state.approach);
         let mut controller = ControllerState::default();
 
         if time_remaining < -0.40
@@ -3410,7 +3410,7 @@ mod tests {
                     side_lateral_distance: 0.0,
         };
 
-        let controller = brain.run_jump_shot(me, state, 1.20);
+        let controller = brain.run_jump_shot(me, state, 1.50);
         assert!(!controller.jump);
         assert!(brain.jump_shot.is_none());
     }
