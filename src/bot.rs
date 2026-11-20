@@ -6,7 +6,7 @@
 
 use crate::{
     control::{default_drive, default_pd, DriveInput},
-    math::Vector,
+    math::{utils::cap_in_field, Vector},
     physics::drive::{curvature, dodge_impulse, throttle_acceleration},
     prediction::BallTrajectory,
     shot_physics::get_jump_time,
@@ -824,7 +824,7 @@ fn select_contact_approach(car: CarState, ball: Vector, target: Vector) -> Vecto
     // Python uses max(120, agent.best_shot_value). Volt's standard
     // best_shot_value is represented here by the same 300-unit approach
     // standoff used by its shot planning configuration.
-    (ball + normal * 300.0).flatten()
+    cap_in_field(&car, (ball + normal * 300.0).flatten())
 }
 
 /// Select a reachable single-jump contact using Volt's C-library jump-time
