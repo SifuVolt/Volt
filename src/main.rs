@@ -4,6 +4,7 @@ pub mod planning;
 pub mod shot_physics;
 pub mod bot;
 mod control;
+mod defense;
 mod math;
 mod state;
 
