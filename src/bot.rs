@@ -10,7 +10,7 @@ use crate::{
     physics::drive::{curvature, dodge_impulse, throttle_acceleration},
     prediction::BallTrajectory,
     shot_physics::get_jump_time,
-    state::{BallState, CarState},
+    state::{BallState, BoostPadState, CarState, MatchState},
 };
 use rlbot::flat::ControllerState;
 
@@ -91,6 +91,8 @@ struct JumpShotState {
 #[derive(Debug, Default)]
 pub struct BotBrain {
     kickoff_complete: bool,
+    pub match_state: MatchState,
+    pub boost_pads: Vec<BoostPadState>,
     last_kickoff_time: f32,
     ground_flip: Option<FlipState>,
     jump_shot: Option<JumpShotState>,
@@ -100,6 +102,8 @@ impl BotBrain {
     pub fn new() -> Self {
         Self {
             kickoff_complete: false,
+            match_state: MatchState::default(),
+            boost_pads: Vec::new(),
             last_kickoff_time: -999.0,
             ground_flip: None,
             jump_shot: None,
@@ -115,8 +119,13 @@ impl BotBrain {
         ball: BallState,
         prediction: &BallTrajectory,
         game_time: f32,
+        match_state: MatchState,
+        boost_pads: &[BoostPadState],
     ) -> ControllerState {
-        let plan = self.choose_plan(me, cars, ball, prediction, game_time);
+        self.match_state = match_state;
+        self.boost_pads.clear();
+        self.boost_pads.extend_from_slice(boost_pads);
+        let plan = self.choose_plan(me, cars, ball, prediction, game_time, match_state);
 
         // Keep a committed jump shot, but refresh its moving contact while the
         // same predicted opportunity remains nearby. This prevents stale
@@ -147,6 +156,7 @@ impl BotBrain {
         ball: BallState,
         prediction: &BallTrajectory,
         game_time: f32,
+        match_state: MatchState,
     ) -> Plan {
         let side = team_side(me.team);
         let opponents: Vec<CarState> = cars
@@ -154,9 +164,9 @@ impl BotBrain {
             .copied()
             .filter(|car| car.team != me.team && !car.demolished)
             .collect();
-        let kickoff_position = ball.location.flat_distance(Vector::ZERO) < 100.0;
-        let kickoff_ball_slow = ball.velocity.magnitude() < 100.0;
-        let kickoff_active = kickoff_position && kickoff_ball_slow;
+        // Use RLBot's match phase, not ball-position heuristics: kickoff
+        // remains authoritative during kickoff countdown/settling frames.
+        let kickoff_active = match_state.round_active && match_state.kickoff;
 
         if kickoff_active && game_time - self.last_kickoff_time > 3.0 {
             self.kickoff_complete = false;
@@ -1824,7 +1834,14 @@ mod tests {
         let me = car(0, 0, Vector::new(-3000.0, -3000.0, 0.0));
         let mate = car(1, 0, Vector::new(2000.0, -2500.0, 0.0));
         let ball = BallState::default();
-        let plan = brain.choose_plan(me, &[me, mate], ball, &BallTrajectory { slices: Vec::new() }, 1.0);
+        let plan = brain.choose_plan(
+            me,
+            &[me, mate],
+            ball,
+            &BallTrajectory { slices: Vec::new() },
+            1.0,
+            MatchState { round_active: true, kickoff: true, ..MatchState::default() },
+        );
         assert_eq!(plan.decision, Decision::KickoffCheat);
         assert_eq!(plan.target, Vector::new(0.0, 1650.0, 0.0));
     }
