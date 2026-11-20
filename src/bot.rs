@@ -795,6 +795,7 @@ impl BotBrain {
             && local_target.x > 0.0
         {
             state.dodge_started_at = Some(game_time);
+            self.last_flip_time = game_time;
             state.dodge_direction = local_ball.normalize();
             controller.jump = true;
             controller.pitch = -state.dodge_direction.x;
@@ -818,6 +819,9 @@ impl BotBrain {
         } else if elapsed < 0.10 {
             controller.jump = false;
         } else if elapsed < if flip.cancel { 0.4 } else { 0.9 } {
+            if self.last_flip_time < flip.started_at {
+                self.last_flip_time = game_time;
+            }
             controller.jump = true;
             controller.pitch = -flip.direction.x;
             controller.yaw = flip.direction.y;
