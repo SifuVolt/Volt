@@ -4,4 +4,3 @@ pub mod throttle;
 
 pub use drive::{default_drive, DriveInput, DriveOutput};
 pub use pd::default_pd;
-pub use throttle::default_throttle;
