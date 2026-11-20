@@ -138,6 +138,13 @@ impl BotAgent for VoltRustAgent {
             self.team as usize,
             &self.boost_pads,
         ) else {
+            // Always submit a controller for this player on every active
+            // packet. A temporarily incomplete packet must not leave the
+            // previous frame's throttle/boost/jump input latched.
+            packet_queue.push(PlayerInput {
+                player_index: self.index,
+                controller_state: ControllerState::default(),
+            });
             return;
         };
         self.match_state = frame.match_state;
