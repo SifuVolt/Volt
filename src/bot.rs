@@ -92,6 +92,7 @@ struct JumpShotState {
 pub struct BotBrain {
     kickoff_complete: bool,
     pub match_state: MatchState,
+    pub boost_accel: f32,
     pub boost_pads: Vec<BoostPadState>,
     last_kickoff_time: f32,
     ground_flip: Option<FlipState>,
@@ -103,11 +104,18 @@ impl BotBrain {
         Self {
             kickoff_complete: false,
             match_state: MatchState::default(),
+            boost_accel: self.boost_accel,
             boost_pads: Vec::new(),
             last_kickoff_time: -999.0,
             ground_flip: None,
             jump_shot: None,
         }
+    }
+
+    pub fn new_with_boost_accel(boost_accel: f32) -> Self {
+        let mut brain = Self::new();
+        brain.boost_accel = boost_accel;
+        brain
     }
 
     /// Produce the active controller for this tick. The car list must contain
@@ -572,9 +580,9 @@ impl BotBrain {
         if delta_direction.magnitude() > 0.001 && forward.dot(delta_direction) > 0.5 {
             let required_velocity = delta.dot(forward) / time_remaining.max(0.05);
             let mut delta_velocity = required_velocity;
-            if car.boost > 0.0 && delta_velocity >= BOOST_ACCEL * MIN_AIR_BOOST_TIME {
+            if car.boost > 0.0 && delta_velocity >= self.boost_accel * MIN_AIR_BOOST_TIME {
                 controller.boost = true;
-                delta_velocity -= BOOST_ACCEL * MIN_AIR_BOOST_TIME;
+                delta_velocity -= self.boost_accel * MIN_AIR_BOOST_TIME;
             }
             let forward_speed = car.local_velocity().x;
             let acceleration = throttle_acceleration(forward_speed);
