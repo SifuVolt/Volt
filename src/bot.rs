@@ -6,6 +6,7 @@
 
 use crate::{
     control::{default_drive, default_pd, DriveInput},
+    defense::GridDefense,
     math::{utils::cap_in_field, Vector},
     physics::drive::{curvature, dodge_impulse, throttle_acceleration},
     prediction::BallTrajectory,
@@ -100,6 +101,9 @@ pub struct BotBrain {
     kickoff_contest_until: f32,
     ground_flip: Option<FlipState>,
     jump_shot: Option<JumpShotState>,
+    defense: GridDefense,
+    defense_flip: Option<FlipState>,
+    last_flip_time: f32,
 }
 
 impl BotBrain {
@@ -115,6 +119,9 @@ impl BotBrain {
             kickoff_contest_until: -999.0,
             ground_flip: None,
             jump_shot: None,
+            defense: GridDefense::default(),
+            defense_flip: None,
+            last_flip_time: -999.0,
         }
     }
 
@@ -160,7 +167,72 @@ impl BotBrain {
             }
         }
 
+        if self.jump_shot.is_none()
+            && matches!(plan.decision, Decision::Goalkeeper | Decision::Transition)
+        {
+            return self.run_grid_defense(me, cars, ball, game_time, plan.decision);
+        }
+
         self.drive_to(me, plan, game_time)
+    }
+
+    fn run_grid_defense(
+        &mut self,
+        me: CarState,
+        cars: &[CarState],
+        ball: BallState,
+        game_time: f32,
+        decision: Decision,
+    ) -> ControllerState {
+        if let Some(flip) = self.defense_flip {
+            let elapsed = game_time - flip.started_at;
+            let mut controller = ControllerState::default();
+            if elapsed < 0.075 {
+                controller.jump = true;
+                return controller;
+            }
+            if elapsed < 0.10 {
+                controller.jump = false;
+                return controller;
+            }
+            if elapsed < 0.9 {
+                if self.last_flip_time < flip.started_at {
+                    self.last_flip_time = game_time;
+                }
+                controller.jump = true;
+                controller.pitch = -flip.direction.x;
+                controller.yaw = flip.direction.y;
+                return controller;
+            }
+            self.defense_flip = None;
+        }
+
+        let output = self.defense.run(
+            me,
+            cars,
+            ball,
+            &self.boost_pads,
+            Vector::new(0.0, -team_side(me.team) * 5120.0, 300.0),
+            decision == Decision::Goalkeeper,
+            false,
+        );
+        if output.start_flip {
+            let flip = FlipState {
+                started_at: game_time,
+                direction: Vector::new(1.0, 0.0, 0.0),
+                cancel: false,
+            };
+            self.defense_flip = Some(flip);
+            let mut controller = ControllerState::default();
+            controller.jump = true;
+            return controller;
+        }
+
+        // Python grid_defense pushes recovery after the flip lockout when
+        // falling. The landing-plane-aware recovery controller is ported as
+        // a separate mechanics stage; do not substitute an invented landing
+        // surface calculation here.
+        output.controller
     }
 
     fn choose_plan(
