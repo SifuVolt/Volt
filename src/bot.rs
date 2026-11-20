@@ -784,7 +784,7 @@ fn controlled_drive(
             // Let defaultThrottle engage its radius/velocity-based powerslide
             // only when a tight forward turn is physically appropriate.
             handbrake: !reverse && angle > 1.05,
-            boost_accel: BOOST_ACCEL,
+            boost_accel,
         },
     )
 }
