@@ -20,7 +20,68 @@ pub struct BallTrajectory {
     pub slices: Vec<BallSlice>,
 }
 
+/// One absolute-time sample copied from RLBot's ball prediction.
+/// This small value type also makes timestamp conversion independently testable.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct AbsoluteBallSlice {
+    pub game_seconds: f32,
+    pub location: Vector,
+    pub velocity: Vector,
+}
+
 impl BallTrajectory {
+    /// Convert absolute-time RLBot prediction samples into packet-relative time.
+    ///
+    /// Past samples are discarded. The remaining samples retain RLBot's
+    /// collision-aware trajectory and original 120 Hz sampling; no physics
+    /// are re-simulated here.
+    pub fn from_absolute_slices(
+        samples: impl IntoIterator<Item = AbsoluteBallSlice>,
+        current_game_seconds: f32,
+    ) -> Self {
+        if !current_game_seconds.is_finite() {
+            return Self { slices: Vec::new() };
+        }
+
+        let slices = samples
+            .into_iter()
+            .filter_map(|sample| {
+                let time = sample.game_seconds - current_game_seconds;
+                (time.is_finite() && time >= 0.0).then_some(BallSlice {
+                    time,
+                    location: sample.location,
+                    velocity: sample.velocity,
+                })
+            })
+            .collect();
+
+        Self { slices }
+    }
+
+    /// Copy RLBot's authoritative prediction into Volt's packet-relative
+    /// trajectory representation.
+    pub fn from_rlbot_prediction(
+        prediction: &rlbot::flat::BallPrediction,
+        current_game_seconds: f32,
+    ) -> Self {
+        Self::from_absolute_slices(
+            prediction.slices.iter().map(|slice| AbsoluteBallSlice {
+                game_seconds: slice.game_seconds,
+                location: Vector::new(
+                    slice.physics.location.x,
+                    slice.physics.location.y,
+                    slice.physics.location.z,
+                ),
+                velocity: Vector::new(
+                    slice.physics.velocity.x,
+                    slice.physics.velocity.y,
+                    slice.physics.velocity.z,
+                ),
+            }),
+            current_game_seconds,
+        )
+    }
+
     /// Generate samples from t=0 through horizon, including the endpoint.
     /// A positive finite sample rate is required (normally 60 Hz).
     pub fn free_flight(
@@ -58,7 +119,7 @@ impl BallTrajectory {
 
         let first = *self.slices.first()?;
         let last = *self.slices.last()?;
-        if time > last.time {
+        if time < first.time || time > last.time {
             return None;
         }
 
@@ -89,6 +150,60 @@ impl BallTrajectory {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn absolute_prediction_samples_become_packet_relative() {
+        let trajectory = BallTrajectory::from_absolute_slices(
+            [
+                AbsoluteBallSlice {
+                    game_seconds: 9.9,
+                    location: Vector::new(-1.0, 0.0, 0.0),
+                    velocity: Vector::ZERO,
+                },
+                AbsoluteBallSlice {
+                    game_seconds: 10.0,
+                    location: Vector::new(10.0, 20.0, 30.0),
+                    velocity: Vector::new(100.0, 200.0, 300.0),
+                },
+                AbsoluteBallSlice {
+                    game_seconds: 10.25,
+                    location: Vector::new(35.0, 50.0, 70.0),
+                    velocity: Vector::new(100.0, 120.0, 160.0),
+                },
+            ],
+            10.0,
+        );
+
+        assert_eq!(trajectory.slices.len(), 2);
+        assert!((trajectory.slices[0].time).abs() < 0.0001);
+        assert!((trajectory.slices[1].time - 0.25).abs() < 0.0001);
+        assert_eq!(trajectory.slices[0].location, Vector::new(10.0, 20.0, 30.0));
+        assert_eq!(trajectory.slices[1].velocity, Vector::new(100.0, 120.0, 160.0));
+    }
+
+    #[test]
+    fn absolute_prediction_rejects_invalid_clock_and_pre_first_sample_queries() {
+        let invalid = BallTrajectory::from_absolute_slices(
+            [AbsoluteBallSlice {
+                game_seconds: 1.0,
+                location: Vector::ZERO,
+                velocity: Vector::ZERO,
+            }],
+            f32::NAN,
+        );
+        assert!(invalid.slices.is_empty());
+
+        let future_start = BallTrajectory::from_absolute_slices(
+            [AbsoluteBallSlice {
+                game_seconds: 2.0,
+                location: Vector::new(5.0, 0.0, 0.0),
+                velocity: Vector::ZERO,
+            }],
+            1.5,
+        );
+        assert!(future_start.at_time(0.0).is_none());
+        assert!(future_start.at_time(0.5).is_some());
+    }
 
     #[test]
     fn free_flight_matches_ballistic_equations() {
