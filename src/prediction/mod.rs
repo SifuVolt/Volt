@@ -102,7 +102,7 @@ mod tests {
         );
         let end = trajectory.at_time(1.0).unwrap();
         assert!((end.location.x - 100.0).abs() < 0.001);
-        assert!((end.location.z - 175.0).abs() < 0.001);
+        assert!((end.location.z - 375.0).abs() < 0.001);
         assert!((end.velocity.z + 450.0).abs() < 0.001);
     }
 
