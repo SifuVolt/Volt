@@ -105,10 +105,11 @@ pub fn car_wall_surface(car: &CarState, team: u32) -> Option<WallSurface> {
         });
     }
 
+    let y_wall_side = if car.location.y >= 0.0 { 1 } else { -1 };
     if car.location.y.abs() > 4740.0
         && car.up().y.abs() > 0.34
         && car.up().y * car.location.y < 0.0
-        && team_side(team) != if car.location.y >= 0.0 { 1 } else { -1 }
+        && team_side(team) != y_wall_side
     {
         return Some(WallSurface {
             x_axis: false,
@@ -316,11 +317,11 @@ fn find_wall_drive_inner(
         }
         let surface = surface.unwrap();
 
-        let wall_velocity = if surface.x_axis {
+        let wall_velocity = (if surface.x_axis {
             ball_slice.velocity.x
         } else {
             ball_slice.velocity.y
-        } * surface.side as f32;
+        }) * surface.side as f32;
 
         let wall_jump_time = noob_wall_jump_time(
             (4096.0 - ball_pos.x.abs()).min(5120.0 - ball_pos.y.abs()),
