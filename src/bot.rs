@@ -5,12 +5,12 @@
 //! timed shot execution all feed the live RLBot controller.
 
 use crate::{
-    aerial::{find_aerial_candidate, wall_shot_adjust_jump, AerialCandidate, AerialShot},
+    aerial::{find_aerial_candidate, party_cannon_contact_geometry, wall_shot_adjust_jump, AerialCandidate, AerialShot},
     control::{default_drive, default_pd, DriveInput},
     defense::GridDefense,
     math::{utils::cap_in_field, Vector},
     physics::drive::{curvature, dodge_impulse, throttle_acceleration},
-    prediction::BallTrajectory,
+    prediction::{BallSlice, BallTrajectory},
     planning::{find_wall_drive, wall_approach_geometry, WallDriveMode, WallDrivePlan},
     shot_physics::{get_jump_time, ShotType},
     shot_parser::ShotTargets,
@@ -96,8 +96,10 @@ struct JumpShotState {
     started_at: f32,
     intercept_time: f32,
     ball: Vector,
+    ball_velocity: Vector,
     approach: Vector,
     shot_direction: Vector,
+    contact_face: &'static str,
     quick: bool,
     dodge_started_at: Option<f32>,
     dodge_direction: Vector,
@@ -146,6 +148,7 @@ pub struct BotBrain {
     pub match_state: MatchState,
     pub boost_accel: f32,
     pub unlimited_boost: bool,
+    shot_targets: ShotTargets,
     pub boost_pads: Vec<BoostPadState>,
     last_kickoff_time: f32,
     kickoff_was_active: bool,
@@ -175,6 +178,7 @@ impl BotBrain {
             match_state: MatchState::default(),
             boost_accel: BOOST_ACCEL,
             unlimited_boost: false,
+            shot_targets: ShotTargets::default(),
             boost_pads: Vec::new(),
             last_kickoff_time: -999.0,
             kickoff_was_active: false,
@@ -222,6 +226,7 @@ impl BotBrain {
         shot_targets: ShotTargets,
     ) -> ControllerState {
         self.match_state = match_state;
+        self.shot_targets = shot_targets;
         if let Some(mut dash) = self.wave_dash {
             let result = dash.tick(me, game_time);
             if result.finished {
@@ -2272,6 +2277,36 @@ fn candidate_to_intercept(car:CarState,candidate:ShotCandidate,targets:ShotTarge
 
 /// Volt's relative goal aim: use a higher central target while the ball
 /// remains in our half, then return to the normal ground-shot height.
+fn relative_goal_aim_point(car:CarState,ball:Vector,targets:ShotTargets)->Vector {
+    let mut center=if (targets.left-targets.right).magnitude()>1.0 {
+        (targets.left+targets.right)*0.5
+    } else {
+        foe_goal(team_side(car.team))
+    };
+    center.z=300.0;
+    if ball.y*team_side(car.team)<=0.0 {
+        center.z=470.0;
+        return center;
+    }
+    if !car.airborne {center.z+=10.0;} else {center.z-=90.0;}
+    center
+}
+
+fn contact_approach_from_label(ball:Vector,shot:Vector,label:&str,distance:f32)->Option<Vector> {
+    let shot=shot.flatten().normalize();
+    if shot.magnitude()<0.001 {return None;}
+    let lateral=Vector::new(-shot.y,shot.x,0.0).normalize();
+    let normal=match label {
+        "centre"=>-shot,
+        "left"=>(-shot+lateral*0.55).normalize(),
+        "right"=>(-shot-lateral*0.55).normalize(),
+        "high"=>(-shot+Vector::new(0.0,0.0,0.30)).normalize(),
+        "low"=>(-shot-Vector::new(0.0,0.0,0.30)).normalize(),
+        _=>return None,
+    };
+    Some(ball+normal*distance.max(120.0))
+}
+
 fn shot_aim_point(ball: Vector, side: f32, airborne: bool) -> Vector {
     let goal = foe_goal(side);
     let height = if ball.y * side <= 0.0 { 470.0 } else if airborne { 210.0 } else { 310.0 };
