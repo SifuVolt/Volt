@@ -2,6 +2,7 @@ pub mod physics;
 pub mod prediction;
 pub mod planning;
 pub mod shot_physics;
+pub mod mechanics;
 pub mod bot;
 mod control;
 mod defense;
