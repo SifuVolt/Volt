@@ -271,11 +271,28 @@ impl BotBrain {
         }
 
         if let Some(mut aerial) = self.aerial_shot {
-            let controls = aerial.run(me, game_time, match_state.gravity, self.boost_accel);
+            let drive = default_drive(
+                &me,
+                DriveInput {
+                    target_speed: MAX_SPEED,
+                    local_target: me.local_location(aerial.target_location),
+                    upside_down: false,
+                    up: None,
+                    handbrake: false,
+                    boost_accel: self.boost_accel,
+                },
+            );
+            let controls = aerial.run(
+                me, game_time, match_state.gravity, self.boost_accel,
+                drive.target_angles.yaw,
+            );
             if aerial.finished {
                 self.aerial_shot = None;
-            } else {
-                self.aerial_shot = Some(aerial);
+                return controller_from_drive(drive, me);
+            }
+            self.aerial_shot = Some(aerial);
+            if !aerial.aerialing {
+                return controller_from_drive(drive, me);
             }
             return controls;
         }
@@ -901,6 +918,7 @@ impl BotBrain {
                         time: time_remaining,
                         ..plan.ball_slice
                     },
+                    shot_target: relative_goal_aim_point(car, geometry.ball, self.shot_targets),
                     target_location: geometry.approach,
                     shot_direction: geometry.shot_direction,
                     double_jump: true,
@@ -908,13 +926,17 @@ impl BotBrain {
                     estimated_boost: car.boost,
                     score: time_remaining,
                 };
-                let mut aerial = AerialShot::new(car, candidate, game_time);
-                let controls = aerial.run(car, game_time, self.match_state.gravity, self.boost_accel);
+                let mut aerial = AerialShot::new(
+                    car, candidate, game_time, self.match_state.gravity, self.boost_accel,
+                );
+                let controls = aerial.run(
+                    car, game_time, self.match_state.gravity, self.boost_accel, controller.steer,
+                );
                 if !aerial.finished {
                     self.aerial_shot = Some(aerial);
                 }
                 self.wall_drive_candidate = None;
-                return controls;
+                return if aerial.aerialing { controls } else { controller };
             }
             if plan.mode == WallDriveMode::DoubleJump {
                 let shot = GroundIntercept {
@@ -990,16 +1012,32 @@ impl BotBrain {
 
         if plan.decision == Decision::AerialChallenge {
             if let Some(candidate) = self.aerial_candidate {
-                let mut aerial = AerialShot::new(car, candidate, game_time);
-                let controls = aerial.run(
-                    car,
-                    game_time,
-                    self.match_state.gravity,
-                    self.boost_accel,
+                let drive = default_drive(
+                    &car,
+                    DriveInput {
+                        target_speed: MAX_SPEED,
+                        local_target: car.local_location(candidate.target_location),
+                        upside_down: false,
+                        up: None,
+                        handbrake: false,
+                        boost_accel: self.boost_accel,
+                    },
                 );
-                if !aerial.finished {
-                    self.aerial_shot = Some(aerial);
+                let mut aerial = AerialShot::new(
+                    car, candidate, game_time, self.match_state.gravity, self.boost_accel,
+                );
+                let controls = aerial.run(
+                    car, game_time, self.match_state.gravity, self.boost_accel,
+                    drive.target_angles.yaw,
+                );
+                if aerial.finished {
+                    return controller_from_drive(drive, car);
                 }
+                if !aerial.aerialing {
+                    self.aerial_shot = Some(aerial);
+                    return controller_from_drive(drive, car);
+                }
+                self.aerial_shot = Some(aerial);
                 return controls;
             }
         }
