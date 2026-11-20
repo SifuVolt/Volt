@@ -106,7 +106,7 @@ impl AerialShot {
         let grounded_at_launch = !car.airborne && !car.has_jumped;
         let mut currently_double_jumping = false;
 
-        if grounded_at_launch && !self.jumped {
+        if !self.jumped && !car.airborne && !car.has_dodged {
             if self.elapsed <= JUMP_DURATION {
                 controls.jump = true;
             } else if self.double_jump && !self.jump_released {
@@ -120,8 +120,12 @@ impl AerialShot {
             } else {
                 self.jumped = true;
             }
-        } else {
-            self.jumped = true;
+        } else if car.airborne || car.has_jumped {
+            // Preserve the double-jump release window after the first jump:
+            // packet has_jumped becomes true before the second jump is due.
+            if !self.double_jump || self.second_jump_frames >= 6 {
+                self.jumped = true;
+            }
         }
 
         let time = time_remaining.max(0.001);
@@ -291,8 +295,13 @@ fn contact_geometry(
     gravity: Vector,
 ) -> (Vector, Vector) {
     let time = slice.time.max(0.001);
-    let car_final_velocity = ((slice.location - car.location) / time)
-        .cap(-MAX_SPEED, MAX_SPEED);
+    let raw_car_velocity = (slice.location - car.location) / time;
+    let raw_speed = raw_car_velocity.magnitude();
+    let car_final_velocity = if raw_speed > MAX_SPEED {
+        raw_car_velocity * (MAX_SPEED / raw_speed)
+    } else {
+        raw_car_velocity
+    };
     let ball_after_velocity = (car_final_velocity * 6.0 + slice.velocity) / 7.0;
     let direction_to_goal = (goal - slice.location).flatten().normalize();
     let velocity_difference = (car_final_velocity - slice.velocity).magnitude();
@@ -392,7 +401,10 @@ pub fn find_aerial_candidate(
             slice,
             target_location,
             shot_direction,
-            double_jump: validation.boost_estimate > 0.0 && validation.required_acceleration_ratio > 0.45,
+            // The CLib aerial validator does not expose a second-jump flag.
+            // Keep this false until the full Party Cannon boost estimator is
+            // ported rather than guessing from the acceleration ratio.
+            double_jump: false,
             fast: validation.fast,
             estimated_boost: validation.boost_estimate as f32,
             score,
