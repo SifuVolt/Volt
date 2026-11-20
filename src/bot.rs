@@ -51,6 +51,8 @@ struct GroundIntercept {
     approach: Vector,
     shot_direction: Vector,
     contact_quality: f32,
+    contact_point: Vector,
+    contact_face: &'static str,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -378,6 +380,7 @@ impl BotBrain {
             }
             let local_ball = car.local_location(shot.ball);
             let local_future_velocity = car.local(car.velocity + Vector::new(0.0, 0.0, -650.0) * t).flatten();
+            let local_shot_direction = car.local(shot.shot_direction).flatten().normalize();
             let angle = local_offset.y.atan2(local_offset.x).abs();
 
             let output = default_drive(
@@ -413,7 +416,11 @@ impl BotBrain {
             {
                 self.ground_flip = Some(FlipState {
                     started_at: game_time,
-                    direction: local_ball.flatten().normalize(),
+                    direction: ground_dodge_direction(
+                        local_ball.flatten(),
+                        local_shot_direction,
+                        shot.contact_quality,
+                    ),
                     cancel: angle > 2.0,
                 });
                 return self.run_ground_flip(game_time, self.ground_flip.unwrap());
@@ -761,6 +768,8 @@ fn choose_jump_intercept(
                 approach,
                 shot_direction: (goal - slice.location).flatten().normalize(),
                 contact_quality: 1.0,
+                contact_point: slice.location - shot_direction * BALL_RADIUS,
+                contact_face: "centre",
             }));
         }
     }
@@ -793,51 +802,147 @@ fn predicted_goal_aim(ball: Vector, velocity: Vector, goal: Vector) -> Vector {
 /// Select a ground contact using the predicted arrival position of the car,
 /// not just its current location. Side contacts are considered when they give
 /// a materially better approach while retaining a useful outgoing angle.
+fn rotate_axis(vector: Vector, axis: Vector, angle: f32) -> Vector {
+    let axis = axis.normalize();
+    if axis.magnitude() < 0.001 || angle.abs() < 0.001 {
+        return vector;
+    }
+    let (sine, cosine) = angle.sin_cos();
+    vector * cosine
+        + axis.cross(vector) * sine
+        + axis * (axis.dot(vector) * (1.0 - cosine))
+}
+
+/// Select a ground contact on the actual front face of the car's hitbox.
+/// This ports Volt's seven-point Party Cannon contact search, including
+/// short-horizon orientation extrapolation and the hitbox-centre offset.
 fn select_ground_contact(
     car: CarState,
     ball: Vector,
     ball_velocity: Vector,
     aim: Vector,
     time: f32,
-) -> (Vector, Vector, f32) {
-    let shot_direction = (aim - ball).flatten().normalize();
-    if shot_direction.magnitude() < 0.001 {
-        return (ball.flatten(), Vector::ZERO, 0.0);
+) -> (Vector, Vector, f32, Vector, &'static str) {
+    let shot_forward = (aim - ball).flatten().normalize();
+    if shot_forward.magnitude() < 0.001 {
+        return (ball.flatten(), Vector::ZERO, 0.0, ball, "centre");
     }
 
-    let lateral = Vector::new(-shot_direction.y, shot_direction.x, 0.0);
-    let projected_car = car.location + car.velocity.flatten() * time.min(0.35);
-    let car_from_ball = (projected_car - ball).flatten().normalize();
-    // Score the approach using closing velocity, not car velocity alone: a
-    // moving ball changes which face of the car can meet it cleanly.
-    let velocity_direction = (car.velocity - ball_velocity).flatten().normalize();
-    let candidates = [
-        -shot_direction,
-        (-shot_direction + lateral * 0.55).normalize(),
-        (-shot_direction - lateral * 0.55).normalize(),
+    let horizon = time.clamp(0.0, 0.18);
+    let angular_world = car.forward() * car.angular_velocity.x
+        + car.right() * car.angular_velocity.y
+        + car.up() * car.angular_velocity.z;
+    let angular_speed = angular_world.magnitude();
+    let mut impact_forward = car.forward();
+    let mut impact_up = car.up();
+    if angular_speed > 0.05 {
+        let angle = (angular_speed * horizon).min(0.65);
+        impact_forward = rotate_axis(impact_forward, angular_world, angle).normalize();
+        impact_up = rotate_axis(impact_up, angular_world, angle).normalize();
+    }
+
+    // RLBot local +Y is car-right (up cross forward).
+    let impact_right = impact_up.cross(impact_forward).normalize();
+    impact_up = impact_forward.cross(impact_right).normalize();
+    if impact_forward.magnitude() < 0.001 || impact_right.magnitude() < 0.001 {
+        return (
+            ball - shot_forward * 300.0,
+            -shot_forward,
+            0.0,
+            ball - shot_forward * BALL_RADIUS,
+            "centre",
+        );
+    }
+
+    let half_length = car.hitbox.length.max(80.0) * 0.5;
+    let half_width = car.hitbox.width.max(60.0) * 0.5;
+    let half_height = car.hitbox.height.max(24.0) * 0.5;
+    let hitbox_offset = impact_forward * car.hitbox.offset.x
+        + impact_right * car.hitbox.offset.y
+        + impact_up * car.hitbox.offset.z;
+    let faces: [(&str, f32, f32); 7] = [
+        ("centre", 0.0, 0.0),
+        ("top_left", -half_width * 0.82, half_height * 0.82),
+        ("top_right", half_width * 0.82, half_height * 0.82),
+        ("left", -half_width * 0.88, 0.0),
+        ("right", half_width * 0.88, 0.0),
+        ("top", 0.0, half_height * 0.88),
+        ("bottom", 0.0, -half_height * 0.70),
     ];
 
-    let mut best = (ball - shot_direction * 300.0, -shot_direction, f32::NEG_INFINITY);
-    for normal in candidates {
-        let approach_alignment = car_from_ball.dot(normal);
-        let shot_alignment = (-normal).dot(shot_direction);
-        let velocity_alignment = if velocity_direction.magnitude() > 0.001 {
-            -velocity_direction.dot(normal)
-        } else {
-            approach_alignment
-        };
-        // The outgoing shot angle remains important, but a reachable flank
-        // can beat a centre-line approach that would require a large cut.
-        let score = approach_alignment * 0.52
-            + shot_alignment * 0.38
-            + velocity_alignment * 0.10;
+    let predicted_car = car.location + car.velocity * horizon;
+    let mut best: Option<(f32, Vector, Vector, Vector, &'static str)> = None;
+    for (label, lateral, vertical) in faces {
+        let front_offset = impact_forward * half_length
+            + impact_right * lateral
+            + impact_up * vertical
+            + hitbox_offset;
+        let predicted_contact = predicted_car + front_offset;
+        let incoming_normal = (ball - predicted_contact).normalize();
+        if incoming_normal.magnitude() < 0.001 {
+            continue;
+        }
 
-        if score > best.2 {
-            best = (ball + normal * 300.0, normal, score);
+        let shot_alignment = incoming_normal.dot(shot_forward);
+        let front_alignment = incoming_normal.dot(impact_forward);
+        let required_car_centre =
+            ball - shot_forward * BALL_RADIUS - front_offset;
+        let reach_cost = required_car_centre.flat_distance(predicted_car);
+        let score = shot_alignment
+            + front_alignment.clamp(-1.0, 1.0) * 0.12
+            - reach_cost * 0.00020;
+
+        if best.is_none_or(|(best_score, ..)| score > best_score) {
+            let contact_point = ball - shot_forward * BALL_RADIUS;
+            best = Some((
+                score,
+                required_car_centre,
+                incoming_normal,
+                contact_point,
+                label,
+            ));
         }
     }
 
-    (best.0.flatten(), best.1, best.2)
+    let Some((score, approach, normal, contact_point, label)) = best else {
+        return (
+            ball - shot_forward * 300.0,
+            -shot_forward,
+            0.0,
+            ball - shot_forward * BALL_RADIUS,
+            "centre",
+        );
+    };
+
+    // Keep quality bounded and useful as a weight in planner scoring.
+    let quality = ((score + 0.25) / 1.25).clamp(0.0, 1.0);
+    (approach.flatten(), normal, quality, contact_point, label)
+}
+
+/// Choose the dodge vector from the ball offset and intended shot direction.
+/// A lateral dodge is reserved for a genuine side contact or a strongly
+/// angled shot; ordinary contacts stay forward to avoid unnecessary side flips.
+fn ground_dodge_direction(
+    local_ball: Vector,
+    local_shot_direction: Vector,
+    contact_quality: f32,
+) -> Vector {
+    let ball = local_ball.flatten();
+    let shot = local_shot_direction.flatten().normalize();
+    if ball.x <= 0.0 {
+        return Vector::new(1.0, 0.0, 0.0);
+    }
+
+    let lateral_ratio = ball.y / ball.x.max(1.0);
+    let direction = if lateral_ratio.abs() > 0.34 && ball.y.abs() > 35.0 {
+        Vector::new(1.0, lateral_ratio.clamp(-0.72, 0.72), 0.0)
+    } else if shot.x > 0.25 && shot.y.abs() > 0.42 && contact_quality > 0.35 {
+        Vector::new(shot.x.max(0.35), shot.y.clamp(-0.75, 0.75), 0.0)
+    } else {
+        Vector::new(1.0, 0.0, 0.0)
+    };
+
+    direction.normalize()
 }
 
 /// Port of Python _shot_approach_target: when the car is poorly aligned
@@ -950,7 +1055,7 @@ fn choose_ground_intercept(
         slice.time >= 0.04 && slice.time <= 3.0 && slice.location.z <= 190.0
     }) {
         let aim = predicted_goal_aim(slice.location, slice.velocity, goal);
-        let (approach, _normal, contact_quality) =
+        let (approach, _normal, contact_quality, contact_point, contact_face) =
             select_ground_contact(car, slice.location, slice.velocity, aim, slice.time);
         let shot_direction = (aim - slice.location).flatten().normalize();
         let distance = approach.flat_distance(car.location);
@@ -987,6 +1092,8 @@ fn choose_ground_intercept(
             approach,
             shot_direction,
             contact_quality,
+            contact_point,
+            contact_face,
         };
 
         if best.is_none_or(|(best_score, _)| score < best_score) {
@@ -1075,12 +1182,14 @@ mod tests {
         me.velocity = Vector::new(-500.0, 900.0, 0.0);
         let ball = Vector::new(0.0, 0.0, 100.0);
         let aim = Vector::new(0.0, 5120.0, 300.0);
-        let (approach, normal, quality) =
+        let (approach, normal, quality, contact_point, face) =
             select_ground_contact(me, ball, Vector::ZERO, aim, 0.5);
 
         assert!(approach.x.is_finite() && approach.y.is_finite());
         assert!(normal.magnitude() > 0.9);
         assert!(quality.is_finite());
+        assert!(contact_point.distance(ball) <= BALL_RADIUS + 0.01);
+        assert!(!face.is_empty());
     }
 
     #[test]
@@ -1119,7 +1228,7 @@ mod tests {
     fn ground_contact_prefers_forward_velocity_toward_ball() {
         let mut me = car(0, 0, Vector::new(0.0, -700.0, 0.0));
         me.velocity = Vector::new(0.0, 900.0, 0.0);
-        let (_, normal, quality) = select_ground_contact(
+        let (_, normal, quality, _, _) = select_ground_contact(
             me,
             Vector::new(0.0, 0.0, 100.0),
             Vector::ZERO,
