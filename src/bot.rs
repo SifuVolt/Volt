@@ -3356,11 +3356,8 @@ mod tests {
 
     #[test]
     fn side_shot_requires_a_projected_goal_line_miss_and_enough_setup_time() {
-        let mut me = car(
-            Vector::new(0.0, 2500.0, 17.0),
-            Vector::new(0.0, 1200.0, 0.0),
-            25.0,
-        );
+        let mut me = car(0, 0, Vector::new(0.0, 2500.0, 17.0));
+        me.velocity = Vector::new(0.0, 1200.0, 0.0);
         me.orientation = Matrix3::new(0.0, 0.0, 0.0);
         let candidate = ShotCandidate {
             time: 2.0,
@@ -3392,7 +3389,7 @@ mod tests {
 
     #[test]
     fn grid_double_jump_holds_first_press_releases_then_sends_second_press() {
-        let mut me = car(Vector::ZERO, Vector::ZERO, 25.0);
+        let mut me = car(0, 0, Vector::ZERO);
         me.airborne = true;
         me.doublejumped = false;
         let mut brain = BotBrain::new();
