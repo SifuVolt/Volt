@@ -709,7 +709,10 @@ fn choose_jump_intercept(
             continue;
         }
 
-        let approach = select_contact_approach(car, slice.location, goal);
+        let mut approach = select_contact_approach(car, slice.location, goal);
+        // Ground steering uses the flattened projection, but the jump routine
+        // must retain the predicted contact height for its launch geometry.
+        approach.z = slice.location.z;
         let delta = (approach - car.location).flatten();
         let distance = delta.magnitude();
         let direction = delta.normalize();
@@ -885,6 +888,7 @@ mod tests {
 
         assert_eq!(shot.time, 1.50);
         assert!(shot.ball.z > 190.0);
+        assert_eq!(shot.approach.z, shot.ball.z);
     }
 
     #[test]
