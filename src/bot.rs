@@ -107,7 +107,7 @@ impl BotBrain {
         Self {
             kickoff_complete: false,
             match_state: MatchState::default(),
-            boost_accel: BOOST_ACCEL,
+            boost_accel,
             boost_pads: Vec::new(),
             last_kickoff_time: -999.0,
             kickoff_was_active: false,
@@ -176,7 +176,7 @@ impl BotBrain {
         let opponents: Vec<CarState> = cars
             .iter()
             .copied()
-            .filter(|car| car.team != me.team && !car.demolished)
+            .filter(|car| car.team != me.team)
             .collect();
         // Use RLBot's match phase, not ball-position heuristics: kickoff
         // remains authoritative during kickoff countdown/settling frames.
@@ -468,6 +468,7 @@ impl BotBrain {
                 &car,
                 jump.approach,
                 required_speed.max(900.0),
+                self.boost_accel,
             );
             return controller_from_drive(output, car);
         }
@@ -508,7 +509,7 @@ impl BotBrain {
             let local_shot_direction = car.local(shot.shot_direction).flatten().normalize();
             let angle = local_offset.y.atan2(local_offset.x).abs();
 
-            let output = controlled_drive(&car, drive_target, required_speed);
+            let output = controlled_drive(&car, drive_target, required_speed, self.boost_accel);
             let velocity = output.car_speed;
             let impulse = dodge_impulse(car.velocity.flatten(), MAX_SPEED);
             let contact_surface_aligned = local_contact_point.x > 0.0
@@ -567,7 +568,7 @@ impl BotBrain {
             target_speed = target_speed.min(1650.0);
         }
 
-        let output = controlled_drive(&car, target, target_speed);
+        let output = controlled_drive(&car, target, target_speed, self.boost_accel);
 
         let controller = controller_from_drive(output, car);
 
@@ -735,7 +736,12 @@ impl BotBrain {
 /// Turn-aware drive execution used by ordinary navigation and shot setup.
 /// At large heading errors it scrubs speed before continuing the turn, which
 /// prevents the bot from carrying full speed around a missed target in a loop.
-fn controlled_drive(car: &CarState, world_target: Vector, requested_speed: f32) -> crate::control::DriveOutput {
+fn controlled_drive(
+    car: &CarState,
+    world_target: Vector,
+    requested_speed: f32,
+    boost_accel: f32,
+) -> crate::control::DriveOutput {
     let local_target = car.local_location(world_target.flatten());
     let distance = local_target.flatten().magnitude();
     let angle = local_target.y.atan2(local_target.x).abs();
@@ -1052,7 +1058,7 @@ fn should_prioritize_ball(
     let friends: Vec<CarState> = cars
         .iter()
         .copied()
-        .filter(|car| car.team == me.team && car.index != me.index && !car.demolished)
+        .filter(|car| car.team == me.team && car.index != me.index)
         .collect();
     let foes: Vec<CarState> = cars
         .iter()
@@ -2227,7 +2233,7 @@ mod tests {
     #[test]
     fn turn_aware_drive_reduces_speed_for_a_target_behind_the_car() {
         let me = car(0, 0, Vector::ZERO);
-        let output = controlled_drive(&me, Vector::new(-1800.0, 0.0, 0.0), 2300.0);
+        let output = controlled_drive(&me, Vector::new(-1800.0, 0.0, 0.0), 2300.0, BOOST_ACCEL);
         assert!(output.target_speed < 0.0);
         assert_eq!(output.boost, Some(false));
     }
