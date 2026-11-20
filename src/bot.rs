@@ -95,6 +95,9 @@ pub struct BotBrain {
     pub boost_accel: f32,
     pub boost_pads: Vec<BoostPadState>,
     last_kickoff_time: f32,
+    kickoff_was_active: bool,
+    kickoff_ball_start: Option<Vector>,
+    kickoff_contest_until: f32,
     ground_flip: Option<FlipState>,
     jump_shot: Option<JumpShotState>,
 }
@@ -107,6 +110,9 @@ impl BotBrain {
             boost_accel: BOOST_ACCEL,
             boost_pads: Vec::new(),
             last_kickoff_time: -999.0,
+            kickoff_was_active: false,
+            kickoff_ball_start: None,
+            kickoff_contest_until: -999.0,
             ground_flip: None,
             jump_shot: None,
         }
@@ -176,13 +182,21 @@ impl BotBrain {
         // remains authoritative during kickoff countdown/settling frames.
         let kickoff_active = match_state.round_active && match_state.kickoff;
 
-        if kickoff_active && game_time - self.last_kickoff_time > 3.0 {
+        if kickoff_active && !self.kickoff_was_active {
             self.kickoff_complete = false;
+            self.kickoff_ball_start = Some(ball.location);
+            self.kickoff_contest_until = -999.0;
         } else if !kickoff_active {
-            if !self.kickoff_complete {
-                self.last_kickoff_time = game_time;
-            }
             self.kickoff_complete = true;
+        }
+        self.kickoff_was_active = kickoff_active;
+
+        if let Some(start) = self.kickoff_ball_start {
+            let resolved = ball.location.distance(start) > 300.0
+                || ball.velocity.magnitude() > 350.0;
+            if resolved && self.kickoff_contest_until < -900.0 {
+                self.kickoff_contest_until = game_time + 10.0;
+            }
         }
 
         if kickoff_active && !self.kickoff_complete {
@@ -221,23 +235,12 @@ impl BotBrain {
                 };
             }
 
-            let target = kickoff_boost_target(
-                me,
-                side,
-                &self.boost_pads,
-            )
-            .unwrap_or_else(|| {
-                let x_sign = if me.location.x == 0.0 {
-                    1.0
-                } else {
-                    me.location.x.signum()
-                };
-                Vector::new(x_sign * 3000.0, side * 4200.0, 0.0)
-            });
+            let target = kickoff_boost_target(me, side, &self.boost_pads)
+                .unwrap_or(me.location.flatten());
             return Plan {
                 decision: Decision::KickoffBackBoost,
                 target,
-                target_speed: MAX_SPEED,
+                target_speed: if target == me.location.flatten() { 0.0 } else { MAX_SPEED },
                 shot: None,
                 jump: None,
             };
@@ -250,15 +253,19 @@ impl BotBrain {
             .collect();
         let own_goal = Vector::new(0.0, side * 5120.0, 350.0);
         let opponent_goal = Vector::new(0.0, -side * 5120.0, 300.0);
-        let roles = assign_roles_volt(
-            &living_teammates,
-            ball,
-            side,
-            own_goal,
-            opponent_goal,
-            prediction,
-            game_time,
-        );
+        let roles = if living_teammates.len() >= 3 {
+            assign_roles_volt(
+                &living_teammates,
+                ball,
+                side,
+                own_goal,
+                opponent_goal,
+                prediction,
+                game_time,
+            )
+        } else {
+            None
+        };
 
         let ball_depth = ball.location.y * side;
         let urgent_save = (ball_depth > 4200.0 && ball.location.z < 350.0)
@@ -266,9 +273,33 @@ impl BotBrain {
                 && ball.location.z < 350.0
                 && ball.velocity.y * side > 250.0);
 
-        let is_challenger = roles
-            .map(|r| r.challenger == me.index)
-            .unwrap_or(true);
+        let is_challenger = if living_teammates.len() <= 1 {
+            true
+        } else if living_teammates.len() == 2 {
+            should_prioritize_ball(
+                me,
+                cars,
+                ball,
+                side,
+                game_time,
+                self.kickoff_contest_until,
+                urgent_save,
+                self.jump_shot.is_some() || self.ground_flip.is_some(),
+                None,
+            )
+        } else {
+            should_prioritize_ball(
+                me,
+                cars,
+                ball,
+                side,
+                game_time,
+                self.kickoff_contest_until,
+                urgent_save,
+                self.jump_shot.is_some() || self.ground_flip.is_some(),
+                roles,
+            )
+        };
         let is_goalie = roles.map(|r| r.goalie == me.index).unwrap_or(false);
 
         if urgent_save && is_challenger {
@@ -955,6 +986,166 @@ fn assign_roles_volt(
         goalie: goalie.index,
         transition,
     })
+}
+
+/// Direct port of Volt's should_prioritize_ball() mode-specific challenge
+/// gate. The active-shot exception and post-kickoff contest window are
+/// preserved so a committed mechanic is not abandoned by a later ETA check.
+fn should_prioritize_ball(
+    me: CarState,
+    cars: &[CarState],
+    ball: BallState,
+    side: f32,
+    game_time: f32,
+    kickoff_contest_until: f32,
+    defensive_emergency: bool,
+    active_shot: bool,
+    roles: Option<TeamRoles>,
+) -> bool {
+    if active_shot {
+        return true;
+    }
+
+    let distance = me.location.distance(ball.location);
+    let local_ball = me.local_location(ball.location);
+    let angle = local_ball.y.atan2(local_ball.x).abs();
+    let ball_depth = ball.location.y * side;
+    let ball_toward_our_goal = ball.velocity.y * side > 400.0;
+    let ball_in_enemy_half = ball_depth < -500.0;
+    let ball_near_enemy_goal = ball_depth < -3000.0;
+
+    let friends: Vec<CarState> = cars
+        .iter()
+        .copied()
+        .filter(|car| car.team == me.team && car.index != me.index && !car.demolished)
+        .collect();
+    let foes: Vec<CarState> = cars
+        .iter()
+        .copied()
+        .filter(|car| car.team != me.team && !car.demolished)
+        .collect();
+    let mode = friends.len() + 1;
+    if defensive_emergency {
+        return true;
+    }
+    if ball_depth > 4000.0 && distance < 3200.0 {
+        return true;
+    }
+    if ball_depth > 3400.0 && ball_toward_our_goal && distance < 2800.0 {
+        return true;
+    }
+
+    if mode == 1 {
+        if distance < 650.0 && local_ball.x > -250.0 {
+            return true;
+        }
+        if local_ball.x < -200.0 && distance > 1100.0 {
+            return false;
+        }
+        if distance < 1500.0 {
+            return angle < 1.65;
+        }
+        return angle < 1.15;
+    }
+
+    let mut teammate_has_ball = false;
+    if mode != 3 {
+        for friend in &friends {
+            let friend_distance = friend.location.distance(ball.location);
+            let friend_local = friend.local_location(ball.location);
+            let friend_angle = friend_local.y.atan2(friend_local.x).abs();
+            if friend_distance + 500.0 < distance
+                && friend_angle < 0.85
+                && friend_local.x > 0.0
+            {
+                teammate_has_ball = true;
+            }
+        }
+    }
+
+    let in_post_kickoff_window = game_time <= kickoff_contest_until;
+    if mode == 2 {
+        if teammate_has_ball {
+            return false;
+        }
+        if ball_depth > 640.0 && ball_toward_our_goal && distance < 2000.0 {
+            return true;
+        }
+        if distance < 550.0 && local_ball.x > -150.0 {
+            return true;
+        }
+        if local_ball.x < -250.0 && distance > 1000.0 {
+            return false;
+        }
+        if !foes.is_empty() && !in_post_kickoff_window {
+            let enemy_distance = foes
+                .iter()
+                .map(|foe| foe.location.distance(ball.location))
+                .fold(f32::INFINITY, f32::min);
+            if enemy_distance + 350.0 < distance {
+                return distance < 650.0 && angle < 0.7;
+            }
+        }
+        if distance < 1400.0 {
+            return angle < 1.5;
+        }
+        return angle < 1.2;
+    }
+
+    if mode == 3 {
+        let active_challenger = roles.map(|role| role.challenger);
+        if active_challenger != Some(me.index) {
+            return false;
+        }
+        if teammate_has_ball {
+            return false;
+        }
+        if ball_depth > 640.0 && ball_toward_our_goal && distance < 2300.0 {
+            return true;
+        }
+        if distance < 700.0 && local_ball.x > -250.0 {
+            return true;
+        }
+        if ball_in_enemy_half {
+            if ball_near_enemy_goal && distance < 2600.0 {
+                return angle < 2.0;
+            }
+            if distance < 1900.0 {
+                return angle < 1.75;
+            }
+            if !foes.is_empty() && !in_post_kickoff_window {
+                let enemy_distance = foes
+                    .iter()
+                    .map(|foe| foe.location.distance(ball.location))
+                    .fold(f32::INFINITY, f32::min);
+                if enemy_distance + 750.0 < distance {
+                    return false;
+                }
+            }
+            return angle < 1.45;
+        }
+        if distance < 1500.0 {
+            return angle < 1.5;
+        }
+        if !foes.is_empty() && !in_post_kickoff_window {
+            let enemy_distance = foes
+                .iter()
+                .map(|foe| foe.location.distance(ball.location))
+                .fold(f32::INFINITY, f32::min);
+            if enemy_distance + 450.0 < distance {
+                return distance < 650.0 && angle < 0.7;
+            }
+        }
+        if distance < 2400.0 && angle < 2.35 {
+            return true;
+        }
+        if distance < 3100.0 && angle < 1.65 && me.boost >= 16.0 {
+            return true;
+        }
+        return angle < 1.25;
+    }
+
+    false
 }
 
 fn next_bounce_time(position: Vector, velocity: Vector, height: f32) -> f32 {
