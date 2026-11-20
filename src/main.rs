@@ -1,5 +1,6 @@
 pub mod physics;
 pub mod prediction;
+pub mod planning;
 mod control;
 mod math;
 mod state;
