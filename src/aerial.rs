@@ -640,7 +640,6 @@ mod tests {
             &[],
             Vector::new(0.0, 0.0, -650.0),
             991.6667,
-            0.0,
         );
         assert!(result.is_some());
         assert!(result.unwrap().estimated_boost >= 0.0);
