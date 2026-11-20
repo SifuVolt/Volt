@@ -637,31 +637,45 @@ fn controlled_drive(car: &CarState, world_target: Vector, requested_speed: f32) 
     let local_target = car.local_location(world_target.flatten());
     let distance = local_target.flatten().magnitude();
     let angle = local_target.y.atan2(local_target.x).abs();
-    let mut target_speed = requested_speed;
+    let forward_speed = car.local_velocity().x;
+    // If the target is well behind and the car has already scrubbed speed,
+    // reverse toward it instead of steering forward in a tight orbit. Mirror
+    // the local target so PD faces the nose away from the reverse travel line.
+    let reverse = angle > 2.35
+        && local_target.x < 0.0
+        && distance > 450.0
+        && forward_speed.abs() < 800.0;
 
-    if distance < 260.0 {
-        target_speed = target_speed.min(450.0);
-    }
-    if angle > 2.45 {
-        target_speed = target_speed.min(350.0);
-    } else if angle > 1.85 {
-        target_speed = target_speed.min(600.0);
-    } else if angle > 1.25 {
-        target_speed = target_speed.min(1000.0);
-    } else if angle > 0.80 {
-        target_speed = target_speed.min(1500.0);
-    }
+    let mut target_speed = requested_speed;
+    let drive_target = if reverse {
+        target_speed = -requested_speed.abs().clamp(350.0, 650.0);
+        -local_target
+    } else {
+        if distance < 260.0 {
+            target_speed = target_speed.min(450.0);
+        }
+        if angle > 2.45 {
+            target_speed = target_speed.min(350.0);
+        } else if angle > 1.85 {
+            target_speed = target_speed.min(600.0);
+        } else if angle > 1.25 {
+            target_speed = target_speed.min(1000.0);
+        } else if angle > 0.80 {
+            target_speed = target_speed.min(1500.0);
+        }
+        local_target
+    };
 
     default_drive(
         car,
         DriveInput {
             target_speed,
-            local_target,
+            local_target: drive_target,
             upside_down: false,
             up: None,
             // Let defaultThrottle engage its radius/velocity-based powerslide
-            // only when a tight turn is actually physically appropriate.
-            handbrake: angle > 1.05,
+            // only when a tight forward turn is physically appropriate.
+            handbrake: !reverse && angle > 1.05,
             boost_accel: BOOST_ACCEL,
         },
     )
@@ -1660,7 +1674,7 @@ mod tests {
     fn turn_aware_drive_reduces_speed_for_a_target_behind_the_car() {
         let me = car(0, 0, Vector::ZERO);
         let output = controlled_drive(&me, Vector::new(-1800.0, 0.0, 0.0), 2300.0);
-        assert!(output.target_speed <= 350.0);
+        assert!(output.target_speed < 0.0);
         assert_eq!(output.boost, Some(false));
     }
 
