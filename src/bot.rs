@@ -7,10 +7,11 @@
 //! authoritative RLBot prediction to select a reachable ground approach.
 
 use crate::{
-    control::{default_drive, DriveInput},
-    physics::drive::dodge_impulse,
+    control::{default_drive, default_pd, DriveInput},
     math::Vector,
+    physics::drive::dodge_impulse,
     prediction::BallTrajectory,
+    shot_physics::get_jump_time,
     state::{BallState, CarState},
 };
 use rlbot::flat::ControllerState;
@@ -57,6 +58,7 @@ struct Plan {
     target: Vector,
     target_speed: f32,
     shot: Option<GroundIntercept>,
+    jump: Option<GroundIntercept>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -66,11 +68,24 @@ struct FlipState {
     cancel: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct JumpShotState {
+    started_at: f32,
+    intercept_time: f32,
+    ball: Vector,
+    approach: Vector,
+    shot_direction: Vector,
+    quick: bool,
+    dodge_started_at: Option<f32>,
+    dodge_direction: Vector,
+}
+
 #[derive(Debug, Default)]
 pub struct BotBrain {
     kickoff_complete: bool,
     last_kickoff_time: f32,
     ground_flip: Option<FlipState>,
+    jump_shot: Option<JumpShotState>,
 }
 
 impl BotBrain {
@@ -79,6 +94,8 @@ impl BotBrain {
             kickoff_complete: false,
             last_kickoff_time: -999.0,
             ground_flip: None,
+            jump_shot: None,
+                    jump: None,
         }
     }
 
@@ -219,10 +236,16 @@ impl BotBrain {
         }
 
         if is_challenger {
-            let intercept = choose_ground_intercept(me, ball, prediction, shot_aim_point(ball.location, side));
-            let target = intercept
+            let aim = shot_aim_point(ball.location, side);
+            let intercept = choose_ground_intercept(me, ball, prediction, aim);
+            let jump = if urgent_save { None } else { choose_jump_intercept(me, prediction, aim) };
+            let use_jump = jump.filter(|candidate| {
+                intercept.is_none_or(|ground| candidate.time < ground.time)
+            });
+            let selected = use_jump.or(intercept);
+            let target = selected
                 .map(|shot| shot.approach)
-                .unwrap_or_else(|| select_contact_approach(me, ball.location, shot_aim_point(ball.location, side)));
+                .unwrap_or_else(|| select_contact_approach(me, ball.location, aim));
             return Plan {
                 decision: if urgent_save {
                     Decision::EmergencyChallenge
@@ -231,23 +254,85 @@ impl BotBrain {
                 },
                 target,
                 target_speed: MAX_SPEED,
-                shot: if urgent_save { None } else { intercept },
+                shot: if use_jump.is_none() && !urgent_save { intercept } else { None },
+                jump: use_jump,
             };
         }
 
         // In 1v1 there is no separate goalie: the sole player challenges.
-        let intercept = choose_ground_intercept(me, ball, prediction, shot_aim_point(ball.location, side));
+        let aim = shot_aim_point(ball.location, side);
+        let intercept = choose_ground_intercept(me, ball, prediction, aim);
+        let jump = choose_jump_intercept(me, prediction, aim);
+        let use_jump = jump.filter(|candidate| {
+            intercept.is_none_or(|ground| candidate.time < ground.time)
+        });
+        let selected = use_jump.or(intercept);
         Plan {
             decision: Decision::GroundChallenge,
-            target: intercept
+            target: selected
                 .map(|shot| shot.approach)
-                .unwrap_or_else(|| select_contact_approach(me, ball.location, shot_aim_point(ball.location, side))),
+                .unwrap_or_else(|| select_contact_approach(me, ball.location, aim)),
             target_speed: MAX_SPEED,
-            shot: intercept,
+            shot: if use_jump.is_none() { intercept } else { None },
+            jump: use_jump,
         }
     }
 
     fn drive_to(&mut self, car: CarState, plan: Plan, game_time: f32) -> ControllerState {
+        if let Some(state) = self.jump_shot {
+            return self.run_jump_shot(car, state, game_time);
+        }
+
+        if let Some(jump) = plan.jump {
+            let t = jump.time;
+            let jump_time = get_jump_time(
+                jump.ball.z - car.location.z,
+                car.velocity.z,
+                -650.0,
+            ).time as f32;
+            let local_ball = car.local_location(jump.ball);
+            let local_approach = car.local_location(jump.approach);
+            let distance = jump.approach.flat_distance(car.location);
+            let speed = car.velocity.flatten().magnitude().max(850.0);
+            let eta = distance / (speed + if car.boost > 0.0 { 300.0 } else { 0.0 })
+                + (1.0 - car.forward().flatten().normalize().dot(local_approach.flatten().normalize()).clamp(-1.0, 1.0)) * 0.20;
+
+            if !car.airborne
+                && t <= jump_time * 1.08
+                && local_ball.x > 0.0
+                && eta <= t + 0.10
+            {
+                let shot_direction = (shot_aim_point(jump.ball, team_side(car.team)) - jump.ball)
+                    .flatten()
+                    .normalize();
+                let state = JumpShotState {
+                    started_at: game_time,
+                    intercept_time: game_time + t,
+                    ball: jump.ball,
+                    approach: jump.approach,
+                    shot_direction,
+                    quick: t <= 0.45,
+                    dodge_started_at: None,
+                    dodge_direction: Vector::new(1.0, 0.0, 0.0),
+                };
+                self.jump_shot = Some(state);
+                return self.run_jump_shot(car, state, game_time);
+            }
+
+            let output = default_drive(
+                &car,
+                DriveInput {
+                    target_speed: MAX_SPEED,
+                    local_target: local_approach.flatten(),
+                    upside_down: false,
+                    up: None,
+                    handbrake: false,
+                    boost_accel: BOOST_ACCEL,
+                },
+            );
+            return controller_from_drive(output, car);
+        }
+
         if let Some(shot) = plan.shot {
             if let Some(flip) = self.ground_flip {
                 return self.run_ground_flip(game_time, flip);
@@ -339,6 +424,83 @@ impl BotBrain {
         // The selected decision is intentionally retained in Plan for
         // deterministic testing and future routine-specific execution.
         let _ = plan.decision;
+        controller
+    }
+
+    fn run_jump_shot(
+        &mut self,
+        car: CarState,
+        mut state: JumpShotState,
+        game_time: f32,
+    ) -> ControllerState {
+        let elapsed = game_time - state.started_at;
+        let time_remaining = state.intercept_time - game_time;
+        let local_ball = car.local_location(state.ball).flatten();
+        let distance_to_contact = car.location.distance(state.ball);
+        let mut controller = ControllerState::default();
+
+        if time_remaining < -0.25 || (elapsed > 0.30 && !car.airborne && state.dodge_started_at.is_none()) {
+            self.jump_shot = None;
+            return controller;
+        }
+
+        let local_shot_direction = car.local(state.shot_direction).flatten();
+        let (_, pd) = default_pd(&car, local_shot_direction, false, None);
+        controller.pitch = pd.pitch;
+        controller.yaw = pd.yaw;
+        controller.roll = pd.roll;
+
+        let hold_s = !state.quick && state.ball.z > car.location.z + 65.0;
+        if hold_s {
+            controller.pitch = 1.0;
+            if pd.yaw.abs() > 0.08 {
+                controller.roll = -0.20 * pd.yaw.signum();
+            } else {
+                controller.roll = 0.0;
+            }
+        }
+
+        // Keep the first jump held briefly, then release it before the dodge.
+        if elapsed <= 0.075 {
+            controller.jump = true;
+        }
+
+        if let Some(dodge_time) = state.dodge_started_at {
+            let dodge_elapsed = game_time - dodge_time;
+            controller.jump = dodge_elapsed <= 0.045;
+            controller.pitch = -state.dodge_direction.x;
+            controller.yaw = state.dodge_direction.y;
+            if dodge_elapsed > 0.12 {
+                self.jump_shot = None;
+            } else {
+                self.jump_shot = Some(state);
+            }
+            return controller;
+        }
+
+        let close_enough = distance_to_contact < (92.75 + car.hitbox.length) * 1.02;
+        if elapsed >= 0.075
+            && car.airborne
+            && local_ball.x > 0.0
+            && close_enough
+            && time_remaining <= 0.18
+            && !car.has_double_jumped
+            && !car.has_dodged
+        {
+            state.dodge_started_at = Some(game_time);
+            state.dodge_direction = local_ball.normalize();
+            controller.jump = true;
+            controller.pitch = -state.dodge_direction.x;
+            controller.yaw = state.dodge_direction.y;
+            self.jump_shot = Some(state);
+            return controller;
+        }
+
+        if time_remaining < -0.10 {
+            self.jump_shot = None;
+        } else {
+            self.jump_shot = Some(state);
+        }
         controller
     }
 
@@ -505,6 +667,65 @@ fn select_contact_approach(car: CarState, ball: Vector, target: Vector) -> Vecto
     // best_shot_value is represented here by the same 300-unit approach
     // standoff used by its shot planning configuration.
     (ball + normal * 300.0).flatten()
+}
+
+/// Select a reachable single-jump contact using Volt's C-library jump-time
+/// model. The contact height is limited to the single-jump window; higher
+/// contacts are left for the later double-jump/aerial port.
+fn choose_jump_intercept(
+    car: CarState,
+    prediction: &BallTrajectory,
+    goal: Vector,
+) -> Option<GroundIntercept> {
+    if car.airborne || prediction.slices.is_empty() {
+        return None;
+    }
+
+    let mut best: Option<(f32, GroundIntercept)> = None;
+    for slice in prediction.slices.iter().filter(|slice| {
+        slice.time >= 0.18
+            && slice.time <= 3.0
+            && slice.location.z > 190.0
+            && slice.location.z <= 430.0
+    }) {
+        let height = slice.location.z - car.location.z;
+        if height <= 0.0 || height > 270.0 {
+            continue;
+        }
+
+        let jump_time = get_jump_time(height, car.velocity.z, -650.0).time as f32;
+        if jump_time <= 0.0 || jump_time + 0.12 > slice.time {
+            continue;
+        }
+
+        let approach = select_contact_approach(car, slice.location, goal);
+        let delta = (approach - car.location).flatten();
+        let distance = delta.magnitude();
+        let direction = delta.normalize();
+        let forward = car.forward().flatten().normalize();
+        let facing_angle = if direction.magnitude() > 0.001 && forward.magnitude() > 0.001 {
+            direction.dot(forward).clamp(-1.0, 1.0).acos()
+        } else {
+            0.0
+        };
+        let speed = car.velocity.flatten().magnitude();
+        let effective_speed = (speed + 650.0).clamp(850.0, 2100.0);
+        let eta = distance / effective_speed + (1.0 - facing_angle.cos()) * 0.28;
+        if eta > slice.time {
+            continue;
+        }
+
+        let score = slice.time + facing_angle * 0.08 + distance / 30000.0;
+        if best.is_none_or(|(best_score, _)| score < best_score) {
+            best = Some((score, GroundIntercept {
+                time: slice.time,
+                ball: slice.location,
+                approach,
+            }));
+        }
+    }
+
+    best.map(|(_, intercept)| intercept)
 }
 
 /// Select the earliest prediction sample that the current ground-drive model
