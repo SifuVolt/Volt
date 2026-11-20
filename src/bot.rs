@@ -484,6 +484,18 @@ impl BotBrain {
         output.controller
     }
 
+    fn shot_search_horizon(&self, game_time: f32) -> f32 {
+        let intercept = self.jump_shot.map(|s| s.intercept_time)
+            .or_else(|| self.double_jump_shot.map(|s| s.intercept_time))
+            .or_else(|| self.aerial_shot.map(|s| s.intercept_time));
+        if let Some(intercept) = intercept {
+            let remaining = intercept - game_time;
+            if (0.0..0.5).contains(&remaining) { return 0.0; }
+            if remaining > 0.0 { return 6.0_f32.min(remaining - 0.05); }
+        }
+        6.0
+    }
+
     fn choose_plan(
         &mut self,
         me: CarState,
@@ -708,7 +720,7 @@ impl BotBrain {
             let candidate = find_best_shot(
                 me, cars, ball.location, prediction, shot_targets,
                 match_state.gravity, self.boost_accel, game_time,
-                self.kickoff_contest_until, urgent_save, true, 6.0,
+                self.kickoff_contest_until, urgent_save, true, self.shot_search_horizon(game_time),
             );
             let selected = candidate.map(|candidate| candidate_to_intercept(me, candidate, shot_targets));
             let use_jump = selected.filter(|shot| shot.shot_type != ShotType::Ground);
@@ -781,7 +793,7 @@ impl BotBrain {
         let candidate = find_best_shot(
             me, cars, ball.location, prediction, shot_targets,
             match_state.gravity, self.boost_accel, game_time,
-            self.kickoff_contest_until, urgent_save, true, 6.0,
+            self.kickoff_contest_until, urgent_save, true, self.shot_search_horizon(game_time),
         );
         let selected = candidate.map(|candidate| candidate_to_intercept(me, candidate, shot_targets));
         let use_jump = selected.filter(|shot| shot.shot_type != ShotType::Ground);
