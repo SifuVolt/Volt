@@ -284,7 +284,7 @@ impl BotBrain {
             );
             let controls = aerial.run(
                 me, game_time, match_state.gravity, self.boost_accel,
-                drive.target_angles.yaw,
+                drive.controls.steer,
             );
             if aerial.finished {
                 self.aerial_shot = None;
