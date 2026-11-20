@@ -486,6 +486,99 @@ pub fn find_wall_drive(
     find_wall_drive_inner(car, slices, team, foe_goal, max_time)
 }
 
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct WallApproachGeometry {
+    pub ball: Vector,
+    pub shot_direction: Vector,
+    pub approach: Vector,
+    pub jump_time: f32,
+    pub target_position: Vector,
+    pub car_position: Vector,
+    pub distance: f32,
+    pub local_target: Vector,
+    pub speed_required: f32,
+    pub local_angle: f32,
+    pub on_wall: bool,
+    pub surface_up: Option<Vector>,
+}
+
+/// Rebuild Noob Black's wall_approach geometry from the current car state.
+pub fn wall_approach_geometry(
+    car: &CarState,
+    ball_slice: BallSlice,
+    team: u32,
+    foe_goal: Vector,
+    mode: WallDriveMode,
+    intercept_time: f32,
+) -> Option<WallApproachGeometry> {
+    let ball = ball_slice.location;
+    let surface = wall_surface_for_ball(ball, 1800.0, Some(team))?;
+    let wall_velocity = (if surface.x_axis { ball_slice.velocity.x } else { ball_slice.velocity.y })
+        * surface.side as f32;
+    let wall_jump_time = noob_wall_jump_time(
+        (4096.0 - ball.x.abs()).min(5120.0 - ball.y.abs()), 0,
+    ).0;
+    let stable_wall_ball = wall_jump_time <= 1.45
+        && wall_velocity.abs() < 150.0
+        && (400.0..=1900.0).contains(&ball.z);
+    let rolling_up_wall_ball = ball.z + ball_slice.velocity.z.powi(2) / 1300.0 <= 129.0
+        && wall_velocity >= 720.0;
+    if !(stable_wall_ball || rolling_up_wall_ball) {
+        return None;
+    }
+
+    let deviation = (ball.y - foe_goal.y).abs();
+    let target_height = deviation
+        * ((deviation / 5120.0).min(1.0) * std::f32::consts::FRAC_PI_4).tan();
+    let shot_target = Vector::new(foe_goal.x, foe_goal.y, target_height);
+    let shot_direction = (shot_target - ball).normalize();
+    if shot_direction == Vector::ZERO {
+        return None;
+    }
+
+    let contact_offset = match mode {
+        WallDriveMode::SingleJump => 134.85,
+        WallDriveMode::DoubleJump | WallDriveMode::Aerial => 92.75,
+    };
+    let approach = ball - shot_direction * contact_offset;
+    let jump_index = if mode == WallDriveMode::DoubleJump { 1 } else { 0 };
+    let jump_time = noob_wall_jump_time(
+        (4096.0 - approach.x.abs()).min(5120.0 - approach.y.abs()), jump_index,
+    ).0;
+    let mut target_og = approach;
+    target_og.z += 325.0 * jump_time * jump_time;
+
+    let (target_position, car_position) = if car.location.z <= 50.0 {
+        (ball_from_ground(target_og), car.location.flatten())
+    } else if 4096.0 - car.location.x.abs() < 5120.0 - car.location.y.abs() {
+        (ball_x_to_y(car.location, target_og), car_on_x_wall(car.location))
+    } else {
+        (ball_y_to_x(car.location, target_og), car_on_y_wall(car.location))
+    };
+    let distance = target_position.distance(car_position);
+    let local_target = car.local_location(target_position);
+    let speed_required = (distance / (intercept_time - jump_time).max(0.12)).clamp(500.0, 2200.0);
+    let local_angle = local_target.y.atan2(local_target.x).abs();
+    let on_wall = car_wall_surface(car, team).is_some_and(|wall| {
+        wall.x_axis == surface.x_axis && wall.side == surface.side
+    });
+    let surface_up = if on_wall {
+        Some(if surface.x_axis {
+            Vector::new(-surface.side as f32, 0.0, 0.0)
+        } else {
+            Vector::new(0.0, -surface.side as f32, 0.0)
+        })
+    } else {
+        None
+    };
+
+    Some(WallApproachGeometry {
+        ball, shot_direction, approach, jump_time, target_position, car_position,
+        distance, local_target, speed_required, local_angle, on_wall, surface_up,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
