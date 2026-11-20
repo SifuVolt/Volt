@@ -9,7 +9,7 @@ mod state;
 
 use crate::bot::BotBrain;
 use crate::prediction::{AbsoluteBallSlice, BallTrajectory};
-use crate::state::{BallState, CarState};
+use crate::state::{AgentFrame, BoostPadState, MatchState};
 
 use std::sync::Arc;
 
@@ -30,16 +30,19 @@ use rlbot::{
 
 struct VoltRustAgent {
     index: u32,
+    team: u32,
+    boost_pads: Vec<BoostPadState>,
+    match_state: MatchState,
     ball_prediction: Vec<AbsoluteBallSlice>,
     brain: BotBrain,
 }
 
 impl BotAgent for VoltRustAgent {
     fn new(
-        _team: u32,
+        team: u32,
         controllable_info: ControllableInfo,
         _match_config: Arc<MatchConfiguration>,
-        _field_info: Arc<FieldInfo>,
+        field_info: Arc<FieldInfo>,
         _packet_queue: &mut PacketQueue,
     ) -> Self {
         println!(
@@ -49,6 +52,11 @@ impl BotAgent for VoltRustAgent {
 
         Self {
             index: controllable_info.index,
+            team,
+            boost_pads: field_info.boost_pads.iter().enumerate().map(|(index, pad)| {
+                BoostPadState::from_field_info(index, pad)
+            }).collect(),
+            match_state: MatchState::default(),
             ball_prediction: Vec::new(),
             brain: BotBrain::new(),
         }
@@ -89,19 +97,35 @@ impl BotAgent for VoltRustAgent {
             game_time,
         );
 
-        let Some(ball) = BallState::from_packet(game_packet) else {
+        // Decode the packet once into the same stable per-tick objects used
+        // throughout VirxERLU: self, teammates/opponents, ball, match and pads.
+        let Some(frame) = AgentFrame::from_packet(
+            game_packet,
+            self.index as usize,
+            self.team as usize,
+            &self.boost_pads,
+        ) else {
             return;
         };
-        let Some(me) = CarState::from_packet(game_packet, self.index as usize) else {
+        self.match_state = frame.match_state;
+        self.boost_pads = frame.boost_pads;
+
+        // VirxERLU does not run gameplay routines outside Active/Kickoff.
+        if !frame.match_state.round_active {
+            packet_queue.push(PlayerInput {
+                player_index: self.index,
+                controller_state: ControllerState::default(),
+            });
             return;
-        };
+        }
 
-        let cars: Vec<CarState> = (0..game_packet.players.len())
-            .filter_map(|index| CarState::from_packet(game_packet, index))
-            .collect();
-
-        let controller: ControllerState =
-            self.brain.tick(me, &cars, ball, &prediction, game_time);
+        let controller: ControllerState = self.brain.tick(
+            frame.me,
+            &frame.cars,
+            frame.ball,
+            &prediction,
+            game_time,
+        );
 
         packet_queue.push(PlayerInput {
             player_index: self.index,
