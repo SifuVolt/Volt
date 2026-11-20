@@ -463,9 +463,9 @@ fn find_wall_drive_inner(
 
 /// Find the earliest Noob Black wall contact within the requested horizon.
 ///
-/// slices must be uniformly sampled at 60 Hz, matching RLBot's ball
-/// prediction slices and the Python finder (which advances two 120 Hz ticks
-/// for each candidate). The function is pure and does not mutate the car.
+/// slices must be uniformly sampled at 120 Hz, matching the Python
+/// prediction indexing. The finder evaluates candidates at 60 Hz by reading
+/// every second slice. The function is pure and does not mutate the car.
 pub fn find_wall_drive(
     car: &CarState,
     slices: &[BallSlice],
