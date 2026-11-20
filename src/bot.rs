@@ -773,7 +773,8 @@ fn choose_jump_intercept(
                 approach,
                 shot_direction: (goal - slice.location).flatten().normalize(),
                 contact_quality: 1.0,
-                contact_point: slice.location - shot_direction * BALL_RADIUS,
+                contact_point: slice.location
+                    - (goal - slice.location).flatten().normalize() * BALL_RADIUS,
                 contact_face: "centre",
             }));
         }
