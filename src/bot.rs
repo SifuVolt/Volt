@@ -541,8 +541,8 @@ impl BotBrain {
         // the car actively corrects its flight instead of merely pointing.
         let tau = (JUMP_MAX_DURATION - elapsed).max(0.0);
         let gravity = Vector::new(0.0, 0.0, JUMP_GRAVITY);
-        let predicted_velocity = car.velocity + gravity * time_remaining.max(0.0);
-        let predicted_car = car.location
+        let mut predicted_velocity = car.velocity + gravity * time_remaining.max(0.0);
+        let mut predicted_car = car.location
             + car.velocity * time_remaining.max(0.0)
             + gravity * (0.5 * time_remaining.max(0.0).powi(2));
 
