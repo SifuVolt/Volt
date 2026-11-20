@@ -11,6 +11,7 @@ use crate::{
     math::{utils::cap_in_field, Vector},
     physics::drive::{curvature, dodge_impulse, throttle_acceleration},
     prediction::BallTrajectory,
+    planning::{find_wall_drive, wall_approach_geometry, WallDriveMode, WallDrivePlan},
     shot_physics::get_jump_time,
     state::{BallState, BoostPadState, CarState, MatchState},
 };
@@ -22,7 +23,6 @@ const BOOST_ACCEL: f32 = 991.6667;
 const JUMP_SPEED: f32 = 291.6667;
 const JUMP_ACCEL: f32 = 1458.3333;
 const JUMP_MAX_DURATION: f32 = 0.20;
-const JUMP_GRAVITY: f32 = -650.0;
 const MIN_AIR_BOOST_TIME: f32 = 0.05;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -47,6 +47,7 @@ enum Decision {
     EmergencyChallenge,
     GroundChallenge,
     AerialChallenge,
+    WallDrive,
     Goalkeeper,
     Transition,
 }
@@ -134,6 +135,7 @@ pub struct BotBrain {
     kickoff_dodge: Option<KickoffDodgeState>,
     aerial_candidate: Option<AerialCandidate>,
     aerial_shot: Option<AerialShot>,
+    wall_drive_candidate: Option<WallDrivePlan>,
 }
 
 impl BotBrain {
@@ -159,6 +161,7 @@ impl BotBrain {
             kickoff_dodge: None,
             aerial_candidate: None,
             aerial_shot: None,
+            wall_drive_candidate: None,
         }
     }
 
@@ -457,6 +460,7 @@ impl BotBrain {
         match_state: MatchState,
     ) -> Plan {
         self.aerial_candidate = None;
+        self.wall_drive_candidate = None;
         let side = team_side(me.team);
         let opponents: Vec<CarState> = cars
             .iter()
@@ -669,6 +673,25 @@ impl BotBrain {
             });
             let selected = use_jump.or(intercept);
 
+            // Noob Black's unfolded wall-shot scan competes with ordinary
+            // ground/jump contacts, but never displaces an urgent save.
+            if !urgent_save && self.jump_shot.is_none() && self.ground_flip.is_none() {
+                if let Some(wall) = find_wall_drive(
+                    &me, &prediction.slices, me.team, opponent_goal, 5.0,
+                ).filter(|candidate| {
+                    selected.is_none_or(|shot| candidate.intercept_time < shot.time + 0.18)
+                }) {
+                    self.wall_drive_candidate = Some(wall);
+                    return Plan {
+                        decision: Decision::WallDrive,
+                        target: wall.ball_slice.location,
+                        target_speed: MAX_SPEED,
+                        shot: None,
+                        jump: None,
+                    };
+                }
+            }
+
             // Aerials compete with ground and single-jump contacts only after
             // the same team-role gate has elected this car to challenge.
             // The CLib reachability check enforces the real boost/speed budget.
@@ -720,6 +743,22 @@ impl BotBrain {
             intercept.is_none_or(|ground| candidate.time < ground.time)
         });
         let selected = use_jump.or(intercept);
+        if self.jump_shot.is_none() && self.ground_flip.is_none() {
+            if let Some(wall) = find_wall_drive(
+                &me, &prediction.slices, me.team, opponent_goal, 5.0,
+            ).filter(|candidate| {
+                selected.is_none_or(|shot| candidate.intercept_time < shot.time + 0.18)
+            }) {
+                self.wall_drive_candidate = Some(wall);
+                return Plan {
+                    decision: Decision::WallDrive,
+                    target: wall.ball_slice.location,
+                    target_speed: MAX_SPEED,
+                    shot: None,
+                    jump: None,
+                };
+            }
+        }
         Plan {
             decision: Decision::GroundChallenge,
             target: selected
@@ -731,9 +770,117 @@ impl BotBrain {
         }
     }
 
+
+    fn run_wall_approach(
+        &mut self,
+        car: CarState,
+        plan: WallDrivePlan,
+        game_time: f32,
+    ) -> ControllerState {
+        let side = team_side(car.team);
+        let foe_goal = Vector::new(0.0, -side * 5120.0, 300.0);
+        let Some(geometry) = wall_approach_geometry(
+            &car, plan.ball_slice, car.team, foe_goal, plan.mode, plan.intercept_time,
+        ) else {
+            return controller_from_drive(
+                controlled_drive(&car, plan.ball_slice.location, MAX_SPEED, self.boost_accel),
+                car,
+            );
+        };
+
+        let mut output = default_drive(
+            &car,
+            DriveInput {
+                target_speed: geometry.speed_required,
+                local_target: geometry.local_target,
+                upside_down: false,
+                up: geometry.surface_up.map(|up| car.local(up)),
+                handbrake: false,
+                boost_accel: self.boost_accel,
+            },
+        );
+        let yaw_error = if geometry.on_wall {
+            output.target_angles.yaw.abs()
+        } else {
+            geometry.local_angle
+        };
+        let needs_boost = car.boost > 0.0
+            && geometry.distance > 300.0
+            && geometry.speed_required > car.velocity.magnitude() + 100.0
+            && yaw_error < 0.85
+            && output.handbrake != Some(true);
+        output.boost = Some(needs_boost);
+        let mut controller = controller_from_drive(output, car);
+        let time_remaining = plan.intercept_time;
+
+        if geometry.on_wall && geometry.distance < 320.0 && time_remaining < 1.65 {
+            if matches!(plan.mode, WallDriveMode::Aerial | WallDriveMode::DoubleJump) {
+                let candidate = AerialCandidate {
+                    slice: crate::prediction::BallSlice {
+                        time: time_remaining,
+                        ..plan.ball_slice
+                    },
+                    target_location: geometry.approach,
+                    shot_direction: geometry.shot_direction,
+                    double_jump: true,
+                    fast: true,
+                    estimated_boost: car.boost,
+                    score: time_remaining,
+                };
+                let mut aerial = AerialShot::new(car, candidate, game_time);
+                let controls = aerial.run(car, game_time, self.match_state.gravity, self.boost_accel);
+                if !aerial.finished {
+                    self.aerial_shot = Some(aerial);
+                }
+                self.wall_drive_candidate = None;
+                return controls;
+            }
+
+            let state = JumpShotState {
+                started_at: game_time,
+                intercept_time: game_time + time_remaining,
+                ball: geometry.ball,
+                approach: geometry.approach,
+                shot_direction: geometry.shot_direction,
+                quick: time_remaining <= 0.45,
+                dodge_started_at: None,
+                dodge_direction: Vector::new(1.0, 0.0, 0.0),
+            };
+            self.jump_shot = Some(state);
+            self.wall_drive_candidate = None;
+            return self.run_jump_shot(car, state, game_time);
+        }
+
+        if !car.airborne
+            && time_remaining <= geometry.jump_time
+            && geometry.local_angle <= std::f32::consts::FRAC_PI_2
+        {
+            controller.jump = true;
+        }
+
+        if car.airborne {
+            let (_, pd) = default_pd(
+                &car,
+                car.local(geometry.ball - car.location),
+                false,
+                Some(car.local(Vector::new(0.0, 0.0, 1.0))),
+            );
+            controller.pitch = pd.pitch;
+            controller.yaw = pd.yaw;
+            controller.roll = pd.roll;
+        }
+        controller
+    }
+
     fn drive_to(&mut self, car: CarState, plan: Plan, game_time: f32) -> ControllerState {
         if let Some(state) = self.jump_shot {
             return self.run_jump_shot(car, state, game_time);
+        }
+
+        if plan.decision == Decision::WallDrive {
+            if let Some(wall) = self.wall_drive_candidate {
+                return self.run_wall_approach(car, wall, game_time);
+            }
         }
 
         if plan.decision == Decision::AerialChallenge {
@@ -757,7 +904,7 @@ impl BotBrain {
             let jump_time = get_jump_time(
                 jump.ball.z - car.location.z,
                 car.velocity.z,
-                -650.0,
+                self.match_state.gravity.z,
             ).time as f32;
             let local_ball = car.local_location(jump.ball);
             let local_approach = car.local_location(jump.approach);
@@ -1033,7 +1180,7 @@ impl BotBrain {
         // important part missing from the previous "jump, wait, dodge" logic:
         // the car actively corrects its flight instead of merely pointing.
         let tau = (JUMP_MAX_DURATION - elapsed).max(0.0);
-        let gravity = Vector::new(0.0, 0.0, JUMP_GRAVITY);
+        let gravity = self.match_state.gravity;
         let mut predicted_velocity = car.velocity + gravity * time_remaining.max(0.0);
         let mut predicted_car = car.location
             + car.velocity * time_remaining.max(0.0)
