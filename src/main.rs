@@ -31,7 +31,6 @@ use rlbot::{
 struct VoltRustAgent {
     index: u32,
     team: u32,
-    boost_pads: Vec<BoostPadState>,
     match_state: MatchState,
     ball_prediction: Vec<AbsoluteBallSlice>,
     boost_pads: Vec<BoostPadState>,
@@ -54,12 +53,11 @@ impl BotAgent for VoltRustAgent {
         Self {
             index: controllable_info.index,
             team,
+            match_state: MatchState::default(),
+            ball_prediction: Vec::new(),
             boost_pads: field_info.boost_pads.iter().enumerate().map(|(index, pad)| {
                 BoostPadState::from_field_info(index, pad)
             }).collect(),
-            match_state: MatchState::default(),
-            ball_prediction: Vec::new(),
-            boost_pads: BoostPadState::from_field_info(&field_info),
             brain: BotBrain::new(),
         }
     }
@@ -94,7 +92,6 @@ impl BotAgent for VoltRustAgent {
         packet_queue: &mut PacketQueue,
     ) {
         let game_time = game_packet.match_info.seconds_elapsed;
-        BoostPadState::update_all(&mut self.boost_pads, game_packet);
         let prediction = BallTrajectory::from_absolute_slices(
             self.ball_prediction.iter().copied(),
             game_time,
@@ -128,6 +125,8 @@ impl BotAgent for VoltRustAgent {
             frame.ball,
             &prediction,
             game_time,
+            frame.match_state,
+            &frame.boost_pads,
         );
 
         packet_queue.push(PlayerInput {
