@@ -692,6 +692,52 @@ mod tests {
         assert!(plan.ball_slice.location.x > 3900.0);
     }
 
+
+    #[test]
+    fn wall_approach_geometry_uses_unfolded_ground_route_and_contact_offset() {
+        let car = car(Vector::ZERO, Vector::ZERO, 25.0);
+        let slice = BallSlice {
+            time: 4.5,
+            location: Vector::new(4000.0, 0.0, 800.0),
+            velocity: Vector::ZERO,
+        };
+        let geometry = wall_approach_geometry(
+            &car,
+            slice,
+            0,
+            Vector::new(0.0, 5120.0, 300.0),
+            WallDriveMode::SingleJump,
+            4.5,
+        ).unwrap();
+
+        assert!((geometry.approach.distance(slice.location) - 134.85).abs() < 0.01);
+        assert!(geometry.target_position.x > 4096.0);
+        assert!(!geometry.on_wall);
+        assert!((500.0..=2200.0).contains(&geometry.speed_required));
+    }
+
+    #[test]
+    fn wall_approach_geometry_recognizes_matching_wall_attachment() {
+        let mut car = car(Vector::new(3900.0, 0.0, 500.0), Vector::ZERO, 25.0);
+        car.orientation.up = Vector::new(-1.0, 0.0, 0.0);
+        let slice = BallSlice {
+            time: 1.2,
+            location: Vector::new(4000.0, 0.0, 800.0),
+            velocity: Vector::ZERO,
+        };
+        let geometry = wall_approach_geometry(
+            &car,
+            slice,
+            0,
+            Vector::new(0.0, 5120.0, 300.0),
+            WallDriveMode::SingleJump,
+            1.2,
+        ).unwrap();
+
+        assert!(geometry.on_wall);
+        assert_eq!(geometry.surface_up, Some(Vector::new(-1.0, 0.0, 0.0)));
+    }
+
     #[test]
     fn airborne_car_must_be_attached_to_wall() {
         let mut airborne = car(Vector::ZERO, Vector::ZERO, 50.0);
