@@ -304,18 +304,6 @@ impl AerialShot {
     }
 }
 
- = self.dodge_input.y;
-            controls.jump = true;
-        } else {
-            self.finished = true;
-        }
-        if car.has_dodged {
-            self.finished = true;
-        }
-        controls
-    }
-}
-
 fn jump_prediction(
     car: CarState,
     time: f32,
