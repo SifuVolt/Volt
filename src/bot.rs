@@ -3272,6 +3272,7 @@ mod tests {
             &BallTrajectory { slices: Vec::new() },
             1.0,
             MatchState { round_active: true, kickoff: true, ..MatchState::default() },
+            ShotTargets::default(),
         );
         assert_eq!(plan.decision, Decision::KickoffCheat);
         assert_eq!(plan.target, Vector::new(0.0, 1650.0, 0.0));
@@ -3311,6 +3312,7 @@ mod tests {
             &BallTrajectory { slices: Vec::new() },
             1.0,
             MatchState { round_active: true, kickoff: false, ..MatchState::default() },
+            ShotTargets::default(),
         );
 
         assert_ne!(plan.decision, Decision::KickoffKicker);
