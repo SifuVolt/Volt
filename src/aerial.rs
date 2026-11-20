@@ -476,6 +476,23 @@ mod tests {
     }
 
     #[test]
+    fn party_cannon_wall_jump_adjusts_only_when_approach_crosses_wall_clearance() {
+        let far = wall_shot_adjust_jump(
+            Vector::new(0.0, 0.0, 500.0),
+            Vector::new(0.0, 1.0, 0.0),
+        );
+        assert!(far.1.is_none());
+
+        let near = wall_shot_adjust_jump(
+            Vector::new(4000.0, 0.0, 500.0),
+            Vector::new(-0.8, 0.6, 0.0),
+        );
+        assert_eq!(near.1, Some(Vector::new(-1.0, 0.0, 0.0)));
+        assert!(near.0.x < -0.1);
+        assert!(near.2 < 40.0);
+    }
+
+    #[test]
     fn party_cannon_contact_target_is_155_units_behind_ball() {
         let slice = BallSlice {
             time: 1.5,
