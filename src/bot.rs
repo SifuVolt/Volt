@@ -1703,7 +1703,7 @@ mod tests {
             started_at: 1.0,
             intercept_time: 1.2,
             ball: Vector::new(100.0, 0.0, 220.0),
-            approach: Vector::ZERO,
+            approach: Vector::new(50.0, 0.0, 0.0),
             shot_direction: Vector::new(1.0, 0.0, 0.0),
             quick: true,
             dodge_started_at: None,
