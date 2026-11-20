@@ -1,4 +1,5 @@
 mod math;
+mod state;
 
 use std::f32::consts::PI;
 use std::sync::Arc;
@@ -44,21 +45,21 @@ impl BotAgent for VoltRustAgent {
         game_packet: &GamePacket,
         packet_queue: &mut PacketQueue,
     ) {
-        let Some(ball) = game_packet.balls.first() else {
+        let Some(ball) = state::BallState::from_packet(game_packet) else {
             return;
         };
 
-        let player_index = self.index as usize;
-
-        if player_index >= game_packet.players.len() {
+        let Some(car_state) =
+            state::CarState::from_packet(game_packet, self.index as usize)
+        else {
             return;
-        }
+        };
 
-        let ball_location = &ball.physics.location;
-        let car = &game_packet.players[player_index].physics;
-
-        let dx = ball_location.x - car.location.x;
-        let dy = ball_location.y - car.location.y;
+        // Keep the existing world-yaw steering behaviour while the new
+        // state layer is introduced and validated.
+        let car = &game_packet.players[self.index as usize].physics;
+        let dx = ball.location.x - car_state.location.x;
+        let dy = ball.location.y - car_state.location.y;
 
         let target_yaw = dy.atan2(dx);
         let angle = (target_yaw - car.rotation.yaw + PI)
