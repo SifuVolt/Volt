@@ -356,13 +356,20 @@ impl BotBrain {
             let distance_remaining = (shot.approach - car.location).flat_distance(Vector::ZERO)
                 - car.hitbox.length / 3.0;
             let approach_direction = (shot.approach - car.location).flatten().normalize();
-            let closing_speed = car.velocity.flatten().dot(approach_direction);
+            let target_speed_along_approach = shot.ball_velocity.flatten().dot(approach_direction);
+            let closing_speed = car.velocity.flatten().dot(approach_direction)
+                - target_speed_along_approach;
             let time_distance_speed = distance_remaining.max(0.0) / t.max(0.001);
             // Closed-loop speed demand: compensate for current closing speed,
             // but avoid asking for maximum speed when the intercept is already
             // comfortably reachable. default_throttle applies the curvature cap.
+            let contact_power_adjustment = (0.72 - shot.contact_quality).max(0.0) * 350.0;
+            let ball_progress = shot.ball_velocity.flatten().dot(shot.shot_direction);
+            let progress_adjustment = (ball_progress - 800.0).clamp(0.0, 1000.0) * 0.12;
             let mut required_speed = (time_distance_speed
-                + (time_distance_speed - closing_speed) * 0.55)
+                + (time_distance_speed - closing_speed) * 0.55
+                + contact_power_adjustment
+                - progress_adjustment)
                 .clamp(450.0, MAX_SPEED);
             if t < 0.28 {
                 required_speed = required_speed.max(1900.0);
@@ -806,12 +813,12 @@ fn select_ground_contact(
         (-shot_direction - lateral * 0.55).normalize(),
     ];
 
-    let mut best = (ball - shot_direction * 300.0, shot_direction, f32::NEG_INFINITY);
+    let mut best = (ball - shot_direction * 300.0, -shot_direction, f32::NEG_INFINITY);
     for normal in candidates {
         let approach_alignment = car_from_ball.dot(normal);
         let shot_alignment = (-normal).dot(shot_direction);
         let velocity_alignment = if velocity_direction.magnitude() > 0.001 {
-            velocity_direction.dot(normal)
+            -velocity_direction.dot(normal)
         } else {
             approach_alignment
         };
@@ -1018,6 +1025,35 @@ mod tests {
         assert!(approach.x.is_finite() && approach.y.is_finite());
         assert!(normal.magnitude() > 0.9);
         assert!(quality.is_finite());
+    }
+
+    #[test]
+    fn predicted_goal_aim_leads_a_lateral_ball_toward_open_goal_space() {
+        let aim = predicted_goal_aim(
+            Vector::new(-300.0, 0.0, 200.0),
+            Vector::new(300.0, 1800.0, 0.0),
+            Vector::new(0.0, 5120.0, 300.0),
+        );
+
+        assert!(aim.x > 300.0);
+        assert!((120.0..=550.0).contains(&aim.z));
+        assert_eq!(aim.y, 5120.0);
+    }
+
+    #[test]
+    fn ground_contact_prefers_forward_velocity_toward_ball() {
+        let mut me = car(0, 0, Vector::new(0.0, -700.0, 0.0));
+        me.velocity = Vector::new(0.0, 900.0, 0.0);
+        let (_, normal, quality) = select_ground_contact(
+            me,
+            Vector::new(0.0, 0.0, 100.0),
+            Vector::ZERO,
+            Vector::new(0.0, 5120.0, 300.0),
+            0.2,
+        );
+
+        assert!(normal.y < -0.5);
+        assert!(quality > 0.7);
     }
 
     #[test]
