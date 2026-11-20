@@ -749,8 +749,9 @@ impl BotBrain {
                 self.kickoff_contest_until, urgent_save, true, self.unlimited_boost, self.shot_search_horizon(game_time),
             );
             let selected = candidate.map(|candidate| candidate_to_intercept(me, candidate, shot_targets));
-            let use_jump = selected.filter(|shot| shot.shot_type != ShotType::Ground || shot.can_jump);
-            let intercept = selected.filter(|shot| shot.shot_type == ShotType::Ground && !shot.can_jump);
+            let can_jump = candidate.is_some_and(|candidate| candidate.can_jump);
+            let use_jump = selected.filter(|shot| shot.shot_type != ShotType::Ground || can_jump);
+            let intercept = selected.filter(|shot| shot.shot_type == ShotType::Ground && !can_jump);
 
             // Noob Black's unfolded wall-shot scan competes with ordinary
             // ground/jump contacts, but never displaces an urgent save.
@@ -839,8 +840,9 @@ impl BotBrain {
             self.kickoff_contest_until, urgent_save, true, self.unlimited_boost, self.shot_search_horizon(game_time),
         );
         let selected = candidate.map(|candidate| candidate_to_intercept(me, candidate, shot_targets));
-        let use_jump = selected.filter(|shot| shot.shot_type != ShotType::Ground || shot.can_jump);
-        let intercept = selected.filter(|shot| shot.shot_type == ShotType::Ground && !shot.can_jump);
+        let can_jump = candidate.is_some_and(|candidate| candidate.can_jump);
+        let use_jump = selected.filter(|shot| shot.shot_type != ShotType::Ground || can_jump);
+        let intercept = selected.filter(|shot| shot.shot_type == ShotType::Ground && !can_jump);
         if self.jump_shot.is_none() && self.ground_flip.is_none() {
             if let Some(wall) = find_wall_drive(
                 &me, &prediction.slices, me.team, opponent_goal, 5.0,
