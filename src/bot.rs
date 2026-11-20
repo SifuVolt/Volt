@@ -292,6 +292,8 @@ impl BotBrain {
                 {
                     state.intercept_time = candidate_time;
                     state.ball = candidate.ball;
+                    state.ball_velocity = candidate.ball_velocity;
+                    state.contact_face = candidate.contact_face;
                     state.shot_direction = candidate.shot_direction;
                     if state.side_mode {
                         let lateral = Vector::new(-state.shot_direction.y, state.shot_direction.x, 0.0).normalize();
@@ -1389,16 +1391,39 @@ impl BotBrain {
     ) -> ControllerState {
         let elapsed = (game_time - state.started_at).max(0.0);
         let time_remaining = state.intercept_time - game_time;
+        let goal_aim = relative_goal_aim_point(car, state.ball, self.shot_targets);
+        let predicted_slice = BallSlice {
+            time: time_remaining.max(0.001),
+            location: state.ball,
+            velocity: state.ball_velocity,
+        };
+        let (_, predicted_shot) = party_cannon_contact_geometry(
+            car, predicted_slice, goal_aim, self.match_state.gravity,
+        );
+        let goal_shot = (goal_aim - state.ball).flatten().normalize();
+        let predicted_shot = predicted_shot.flatten().normalize();
+        let blended_shot = if goal_shot.magnitude() > 0.001 && predicted_shot.magnitude() > 0.001 {
+            (goal_shot * 0.65 + predicted_shot * 0.35).normalize()
+        } else {
+            goal_shot
+        };
+        let (adjusted_shot, wall_normal, _) = wall_shot_adjust_jump(state.ball, blended_shot);
+        state.shot_direction = adjusted_shot;
+
         if state.side_mode {
             let lateral = Vector::new(-state.shot_direction.y, state.shot_direction.x, 0.0).normalize();
             state.approach = state.ball - lateral * state.side_lateral_distance * state.side_sign;
         } else {
-            let (adjusted, wall_normal, _) = wall_shot_adjust_jump(state.ball, state.shot_direction);
-            state.shot_direction = adjusted;
+            let hitbox_target = state.ball - state.shot_direction * 155.0;
+            let contact_standoff = 92.75 + car.hitbox.length * 0.5;
+            let nominal_target = state.ball - state.shot_direction * contact_standoff;
+            let mut offset_target = contact_approach_from_label(
+                state.ball, state.shot_direction, state.contact_face, contact_standoff,
+            ).map_or(hitbox_target, |refreshed| refreshed + hitbox_target - nominal_target);
             if let Some(normal) = wall_normal {
                 let tangent = state.shot_direction - normal * state.shot_direction.dot(normal);
                 if tangent.magnitude() > 0.001 {
-                    state.approach -= tangent.normalize() * 25.0;
+                    offset_target -= tangent.normalize() * 25.0;
                 }
                 if normal.z.abs() < 0.95 {
                     let jump_time = get_jump_time(
@@ -1406,11 +1431,12 @@ impl BotBrain {
                         car.velocity.z,
                         self.match_state.gravity.z,
                     ).time as f32;
-                    state.approach.z = state.ball.z
-                        + (state.approach.z - state.ball.z).clamp(-120.0, 120.0);
-                    state.approach -= self.match_state.gravity * (0.5 * jump_time * jump_time);
+                    offset_target.z = state.ball.z
+                        + (offset_target.z - state.ball.z).clamp(-120.0, 120.0);
+                    offset_target -= self.match_state.gravity * (0.5 * jump_time * jump_time);
                 }
             }
+            state.approach = offset_target;
         }
         let local_ball = car.local_location(state.ball).flatten();
         let distance_to_contact = car.location.distance(state.approach);
