@@ -740,7 +740,7 @@ impl BotBrain {
 
         if let Some(shot) = plan.shot {
             if let Some(flip) = self.ground_flip {
-                return self.run_ground_flip(game_time, flip);
+                return self.run_ground_flip(Some(car), game_time, flip);
             }
             let t = shot.time;
             let local_offset = car.local_location(shot.approach.flatten());
@@ -808,7 +808,7 @@ impl BotBrain {
                     ),
                     cancel: angle > 2.0,
                 });
-                return self.run_ground_flip(game_time, self.ground_flip.unwrap());
+                return self.run_ground_flip(Some(car), game_time, self.ground_flip.unwrap());
             }
 
             let controller = controller_from_drive(output, car);
@@ -1040,7 +1040,7 @@ impl BotBrain {
         controller
     }
 
-    fn run_ground_flip(&mut self, game_time: f32, flip: FlipState) -> ControllerState {
+    fn run_ground_flip(&mut self, car: Option<CarState>, game_time: f32, flip: FlipState) -> ControllerState {
         let elapsed = game_time - flip.started_at;
         let mut controller = ControllerState::default();
 
@@ -1057,6 +1057,21 @@ impl BotBrain {
             controller.yaw = flip.direction.y;
         } else {
             self.ground_flip = None;
+            if game_time - self.last_flip_time >= 0.5 {
+                if let Some(car) = car.filter(|car| car.airborne) {
+                    let target = if car.velocity.magnitude() > 1.0 {
+                        car.location + car.velocity.normalize() * 1000.0
+                    } else {
+                        car.location + car.forward() * 1000.0
+                    };
+                    self.defense_recovery_target = Some(target);
+                    return GridDefense::recovery_controller(
+                        car,
+                        target,
+                        self.match_state.gravity.z,
+                    );
+                }
+            }
         }
 
         controller
@@ -2699,10 +2714,10 @@ mod tests {
             cancel: false,
         };
 
-        assert!(brain.run_ground_flip(1.05, flip).jump);
-        assert!(!brain.run_ground_flip(1.08, flip).jump);
+        assert!(brain.run_ground_flip(None, 1.05, flip).jump);
+        assert!(!brain.run_ground_flip(None, 1.08, flip).jump);
 
-        let dodge = brain.run_ground_flip(1.12, flip);
+        let dodge = brain.run_ground_flip(None, 1.12, flip);
         assert!(dodge.jump);
         assert!((dodge.pitch + 0.8).abs() < 1e-6);
         assert!((dodge.yaw - 0.6).abs() < 1e-6);
