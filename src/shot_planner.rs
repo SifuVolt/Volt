@@ -248,12 +248,12 @@ fn solve_quad(a:f64,b:f64,c:f64,y:f64,branch:i32)->Option<f32> {
         Some((-b/(2.0*a)+root.max(0.0).sqrt()*if branch>=0 {1.0}else{-1.0}) as f32)
     }
 }
-fn max_jump_height(double:bool)->f64 {
+pub fn grid_max_jump_height(double:bool)->f64 {
     let extra=292.0*if double {1.0}else{0.0};
     let x=-(564.9931640625+extra)/(-325.0556640625*2.0);
     -325.0556640625*x*x+(564.9931640625+extra)*x-11.6591796875-292.0*25.0/120.0*if double {1.0}else{0.0}
 }
-fn grid_jump_time(height:f32,double:bool)->Option<f32> {
+pub fn grid_jump_time(height:f32,double:bool)->Option<f32> {
     let h=height as f64;
     let single=solve_quad(-325.0556640625,564.9931640625,-11.6591796875,h.min(max_jump_height(false)),-1)?;
     if single>=24.0/120.0 {
@@ -288,7 +288,7 @@ fn find_grid_jump(car:CarState,pred:&BallTrajectory,tg:ShotTargets,horizon:f32)-
         let dir=(target-s.location).normalize();let contact=s.location-dir*R;
         let distance=contact.flat_distance(car.location);
         let Some(jt)=grid_jump_time((contact.z-car.location.z).max(0.0),true) else{continue;};
-        if contact.z>car.location.z+max_jump_height(true)+60.0 {continue;}
+        if contact.z as f64>car.location.z as f64+grid_max_jump_height(true)+60.0 {continue;}
         let charge=(t*120.0).round().clamp(0.0,600.0) as usize;
         let drive=((t-jt).max(0.0).min(5.0)*120.0).round().clamp(0.0,600.0) as usize;
         let reach=ds[drive]+vs[drive]*(charge as f32-drive as f32)/120.0;
