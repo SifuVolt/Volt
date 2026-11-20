@@ -667,7 +667,7 @@ impl BotBrain {
         if is_challenger {
             let aim = shot_aim_point(ball.location, side);
             let intercept = choose_ground_intercept(me, ball, prediction, aim, &opponents);
-            let jump = if urgent_save { None } else { choose_jump_intercept(me, prediction, aim, &opponents) };
+            let jump = if urgent_save { None } else { choose_jump_intercept(me, prediction, aim, &opponents, match_state.gravity.z) };
             let use_jump = jump.filter(|candidate| {
                 intercept.is_none_or(|ground| candidate.time < ground.time)
             });
@@ -738,7 +738,7 @@ impl BotBrain {
         // In 1v1 there is no separate goalie: the sole player challenges.
         let aim = shot_aim_point(ball.location, side);
         let intercept = choose_ground_intercept(me, ball, prediction, aim, &opponents);
-        let jump = choose_jump_intercept(me, prediction, aim, &opponents);
+        let jump = choose_jump_intercept(me, prediction, aim, &opponents, match_state.gravity.z);
         let use_jump = jump.filter(|candidate| {
             intercept.is_none_or(|ground| candidate.time < ground.time)
         });
@@ -981,7 +981,7 @@ impl BotBrain {
             }
             let local_ball = car.local_location(shot.ball);
             let local_contact_point = car.local_location(shot.contact_point);
-            let local_future_velocity = car.local(car.velocity + Vector::new(0.0, 0.0, -650.0) * t).flatten();
+            let local_future_velocity = car.local(car.velocity + Vector::new(0.0, 0.0, self.match_state.gravity.z) * t).flatten();
             let local_shot_direction = car.local(shot.shot_direction).flatten().normalize();
             let angle = local_offset.y.atan2(local_offset.x).abs();
 
@@ -1951,6 +1951,7 @@ fn choose_jump_intercept(
     prediction: &BallTrajectory,
     goal: Vector,
     opponents: &[CarState],
+    gravity_z: f32,
 ) -> Option<GroundIntercept> {
     if car.airborne || prediction.slices.is_empty() {
         return None;
@@ -1968,7 +1969,7 @@ fn choose_jump_intercept(
             continue;
         }
 
-        let jump_time = get_jump_time(height, car.velocity.z, -650.0).time as f32;
+        let jump_time = get_jump_time(height, car.velocity.z, gravity_z).time as f32;
         if jump_time <= 0.0 || jump_time + 0.12 > slice.time {
             continue;
         }
@@ -2779,6 +2780,7 @@ mod tests {
             &prediction,
             Vector::new(0.0, 5120.0, 300.0),
             &[],
+            -650.0,
         ).unwrap();
 
         assert_eq!(shot.time, 1.50);
@@ -2817,6 +2819,7 @@ mod tests {
             &prediction,
             Vector::new(0.0, 5120.0, 300.0),
             &[],
+            -650.0,
         ).unwrap();
         assert!(shot.contact_quality.is_finite());
         assert!(shot.contact_point.distance(shot.ball) <= BALL_RADIUS + 0.01);
