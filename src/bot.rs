@@ -1043,9 +1043,10 @@ mod tests {
         assert!(estimate_ground_eta(no_boost, target) > estimate_ground_eta(boosted, target));
 
         let mut already_turning = no_boost;
-        already_turning.angular_velocity.z = -1.0;
-        let turning_eta = estimate_ground_eta(already_turning, Vector::new(1500.0, 0.0, 0.0));
-        let neutral_eta = estimate_ground_eta(no_boost, Vector::new(1500.0, 0.0, 0.0));
+        already_turning.angular_velocity.z = 1.0;
+        let turning_target = Vector::new(1500.0, 1000.0, 0.0);
+        let turning_eta = estimate_ground_eta(already_turning, turning_target);
+        let neutral_eta = estimate_ground_eta(no_boost, turning_target);
         assert!(turning_eta < neutral_eta);
     }
 
