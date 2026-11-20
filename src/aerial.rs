@@ -120,12 +120,6 @@ impl AerialShot {
             } else {
                 self.jumped = true;
             }
-        } else if car.airborne || car.has_jumped {
-            // Preserve the double-jump release window after the first jump:
-            // packet has_jumped becomes true before the second jump is due.
-            if !self.double_jump || self.second_jump_frames >= 6 {
-                self.jumped = true;
-            }
         }
 
         let time = time_remaining.max(0.001);
@@ -181,7 +175,7 @@ impl AerialShot {
             && time > 0.5
             && required_accel * 0.8 > AIR_THROTTLE_ACCEL
             && (car.boost <= 0.0 || required_accel * 0.8 > boost_accel + AIR_THROTTLE_ACCEL);
-        if time_remaining <= 0.0 || cannot_reach || (car.airborne && !car.has_jumped && self.jumped) {
+        if time_remaining <= 0.0 || cannot_reach {
             self.finished = true;
         } else if time_remaining < 0.12 && offset_length < 115.0 {
             self.dodging = true;
