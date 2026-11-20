@@ -8,13 +8,13 @@
 
 use crate::{
     control::{default_drive, DriveInput},
+    physics::drive::dodge_impulse,
     math::Vector,
     prediction::BallTrajectory,
     state::{BallState, CarState},
 };
 use rlbot::flat::ControllerState;
 
-const BALL_RADIUS: f32 = 92.75;
 const MAX_SPEED: f32 = 2300.0;
 const BOOST_ACCEL: f32 = 991.6667;
 
@@ -44,16 +44,32 @@ enum Decision {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
+struct GroundIntercept {
+    time: f32,
+    ball: Vector,
+    approach: Vector,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
 struct Plan {
     decision: Decision,
     target: Vector,
     target_speed: f32,
+    shot: Option<GroundIntercept>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct FlipState {
+    started_at: f32,
+    direction: Vector,
+    cancel: bool,
 }
 
 #[derive(Debug, Default)]
 pub struct BotBrain {
     kickoff_complete: bool,
     last_kickoff_time: f32,
+    ground_flip: Option<FlipState>,
 }
 
 impl BotBrain {
@@ -61,6 +77,7 @@ impl BotBrain {
         Self {
             kickoff_complete: false,
             last_kickoff_time: -999.0,
+            ground_flip: None,
         }
     }
 
@@ -75,7 +92,7 @@ impl BotBrain {
         game_time: f32,
     ) -> ControllerState {
         let plan = self.choose_plan(me, cars, ball, prediction, game_time);
-        self.drive_to(me, plan)
+        self.drive_to(me, plan, game_time)
     }
 
     fn choose_plan(
@@ -121,6 +138,7 @@ impl BotBrain {
                     decision: Decision::KickoffKicker,
                     target: ball.location,
                     target_speed: MAX_SPEED,
+                    shot: None,
                 };
             }
 
@@ -129,6 +147,7 @@ impl BotBrain {
                     decision: Decision::KickoffCheat,
                     target: Vector::new(0.0, -side * 1650.0, 0.0),
                     target_speed: 1200.0,
+                    shot: None,
                 };
             }
 
@@ -141,6 +160,7 @@ impl BotBrain {
                 decision: Decision::KickoffBackBoost,
                 target: Vector::new(x_sign * 3000.0, side * 4200.0, 0.0),
                 target_speed: MAX_SPEED,
+                shot: None,
             };
         }
 
@@ -175,6 +195,7 @@ impl BotBrain {
                 decision: Decision::Goalkeeper,
                 target: Vector::new(0.0, side * 4970.0, 0.0),
                 target_speed: 1500.0,
+                shot: None,
             };
         }
 
@@ -191,11 +212,14 @@ impl BotBrain {
                 decision: Decision::Transition,
                 target: Vector::new(x_sign * 900.0, side * 5050.0, 0.0),
                 target_speed: 1700.0,
+                shot: None,
             };
         }
 
         if is_challenger {
-            let target = choose_ground_intercept(me, ball, prediction, shot_aim_point(ball.location, side))
+            let intercept = choose_ground_intercept(me, ball, prediction, shot_aim_point(ball.location, side));
+            let target = intercept
+                .map(|shot| shot.approach)
                 .unwrap_or_else(|| select_contact_approach(me, ball.location, shot_aim_point(ball.location, side)));
             return Plan {
                 decision: if urgent_save {
@@ -205,18 +229,77 @@ impl BotBrain {
                 },
                 target,
                 target_speed: MAX_SPEED,
+                shot: if urgent_save { None } else { intercept },
             };
         }
 
         // In 1v1 there is no separate goalie: the sole player challenges.
+        let intercept = choose_ground_intercept(me, ball, prediction, shot_aim_point(ball.location, side));
         Plan {
             decision: Decision::GroundChallenge,
-            target: select_contact_approach(me, ball.location, shot_aim_point(ball.location, side)),
+            target: intercept
+                .map(|shot| shot.approach)
+                .unwrap_or_else(|| select_contact_approach(me, ball.location, shot_aim_point(ball.location, side))),
             target_speed: MAX_SPEED,
+            shot: intercept,
         }
     }
 
-    fn drive_to(&self, car: CarState, plan: Plan) -> ControllerState {
+    fn drive_to(&mut self, car: CarState, plan: Plan, game_time: f32) -> ControllerState {
+        if let Some(shot) = plan.shot {
+            if let Some(flip) = self.ground_flip {
+                return self.run_ground_flip(game_time, flip);
+            }
+            let t = shot.time;
+            let local_offset = car.local_location(shot.approach.flatten());
+            let distance_remaining = (shot.approach - car.location).flat_distance(Vector::ZERO)
+                - car.hitbox.length / 3.0;
+            let required_speed = (distance_remaining.max(0.0) / t.max(0.001)).min(MAX_SPEED);
+            let local_ball = car.local_location(shot.ball);
+            let local_future_velocity = car.local(car.velocity + Vector::new(0.0, 0.0, -650.0) * t).flatten();
+            let angle = local_offset.y.atan2(local_offset.x).abs();
+
+            let output = default_drive(
+                &car,
+                DriveInput {
+                    target_speed: required_speed,
+                    local_target: car.local_location(plan.target.flatten()),
+                    upside_down: false,
+                    up: None,
+                    handbrake: false,
+                    boost_accel: BOOST_ACCEL,
+                },
+            );
+            let velocity = output.car_speed;
+            let impulse = dodge_impulse(car.velocity.flatten(), MAX_SPEED);
+            let aligned_contact = (velocity.abs() < 100.0
+                && distance_remaining < car.hitbox.length / 2.0)
+                || (local_offset.y.abs() < BALL_RADIUS
+                    && local_future_velocity.x >= local_offset.x - car.hitbox.length / 3.0
+                    && local_offset.x > 0.0);
+
+            if !car.airborne
+                && (0.1..0.35).contains(&t)
+                && (velocity.abs() + impulse).min(MAX_SPEED) <= required_speed.max(1900.0_f32.min(required_speed))
+                && aligned_contact
+                && local_ball.x > 0.0
+            {
+                self.ground_flip = Some(FlipState {
+                    started_at: game_time,
+                    direction: local_ball.flatten().normalize(),
+                    cancel: angle > 2.0,
+                });
+                return self.run_ground_flip(game_time, self.ground_flip.unwrap());
+            }
+
+            let mut controller = controller_from_drive(output, car);
+            if car.airborne {
+                self.ground_flip = None;
+            }
+            return controller;
+        }
+
+        self.ground_flip = None;
         let target = plan.target.flatten();
         let local_target = car.local_location(target);
         let distance = local_target.flatten().magnitude();
@@ -243,27 +326,50 @@ impl BotBrain {
             },
         );
 
-        let mut controller = ControllerState::default();
-        controller.steer = output.controls.steer;
-        controller.pitch = output.controls.pitch;
-        controller.yaw = output.controls.yaw;
-        controller.roll = output.controls.roll;
-
-        if let Some(throttle) = output.throttle {
-            controller.throttle = throttle;
-        }
-        if let Some(handbrake) = output.handbrake {
-            controller.handbrake = handbrake;
-        }
-        if let Some(boost) = output.boost {
-            controller.boost = boost && car.boost > 0.0;
-        }
+        let controller = controller_from_drive(output, car);
 
         // The selected decision is intentionally retained in Plan for
         // deterministic testing and future routine-specific execution.
         let _ = plan.decision;
         controller
     }
+
+    fn run_ground_flip(&mut self, game_time: f32, flip: FlipState) -> ControllerState {
+        let elapsed = game_time - flip.started_at;
+        let mut controller = ControllerState::default();
+
+        if elapsed < 0.075 {
+            controller.jump = true;
+        } else if elapsed < 0.10 {
+            controller.jump = false;
+        } else if elapsed < if flip.cancel { 0.4 } else { 0.9 } {
+            controller.jump = true;
+            controller.pitch = -flip.direction.x;
+            controller.yaw = flip.direction.y;
+        } else {
+            self.ground_flip = None;
+        }
+
+        controller
+    }
+}
+
+fn controller_from_drive(output: crate::control::DriveOutput, car: CarState) -> ControllerState {
+    let mut controller = ControllerState::default();
+    controller.steer = output.controls.steer;
+    controller.pitch = output.controls.pitch;
+    controller.yaw = output.controls.yaw;
+    controller.roll = output.controls.roll;
+    if let Some(throttle) = output.throttle {
+        controller.throttle = throttle;
+    }
+    if let Some(handbrake) = output.handbrake {
+        controller.handbrake = handbrake;
+    }
+    if let Some(boost) = output.boost {
+        controller.boost = boost && car.boost > 0.0;
+    }
+    controller
 }
 
 fn team_side(team: u32) -> f32 {
@@ -401,12 +507,12 @@ fn choose_ground_intercept(
     ball: BallState,
     prediction: &BallTrajectory,
     goal: Vector,
-) -> Option<Vector> {
+) -> Option<GroundIntercept> {
     if prediction.slices.is_empty() {
         return None;
     }
 
-    let mut best: Option<(f32, Vector)> = None;
+    let mut best: Option<(f32, GroundIntercept)> = None;
     for slice in prediction.slices.iter().filter(|slice| {
         slice.time >= 0.04 && slice.time <= 3.0 && slice.location.z <= 190.0
     }) {
@@ -431,13 +537,16 @@ fn choose_ground_intercept(
         // Earlier feasible contacts win; alignment breaks close ties.
         let score = slice.time + facing_angle * 0.08 + distance / 30000.0;
         if best.is_none_or(|(best_score, _)| score < best_score) {
-            best = Some((score, target));
+            best = Some((score, GroundIntercept {
+                time: slice.time,
+                ball: slice.location,
+                approach: target,
+            }));
         }
     }
 
-    best.map(|(_, target)| target).or_else(|| {
-        Some(select_contact_approach(car, ball.location, goal))
-    })
+    let _ = ball;
+    best.map(|(_, intercept)| intercept)
 }
 
 #[cfg(test)]
