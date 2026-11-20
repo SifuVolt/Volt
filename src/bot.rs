@@ -355,11 +355,14 @@ impl BotBrain {
             let local_offset = car.local_location(shot.approach.flatten());
             let distance_remaining = (shot.approach - car.location).flat_distance(Vector::ZERO)
                 - car.hitbox.length / 3.0;
+            let drive_target = shot_approach_target(car, shot.ball, shot.approach, shot.shot_direction, t);
+            let drive_distance_remaining = (drive_target - car.location).flat_distance(Vector::ZERO)
+                - car.hitbox.length / 3.0;
             let approach_direction = (shot.approach - car.location).flatten().normalize();
             let target_speed_along_approach = shot.ball_velocity.flatten().dot(approach_direction);
             let closing_speed = car.velocity.flatten().dot(approach_direction)
                 - target_speed_along_approach;
-            let time_distance_speed = distance_remaining.max(0.0) / t.max(0.001);
+            let time_distance_speed = drive_distance_remaining.max(0.0) / t.max(0.001);
             // Closed-loop speed demand: compensate for current closing speed,
             // but avoid asking for maximum speed when the intercept is already
             // comfortably reachable. default_throttle applies the curvature cap.
@@ -382,7 +385,7 @@ impl BotBrain {
                 &car,
                 DriveInput {
                     target_speed: required_speed,
-                    local_target: car.local_location(plan.target.flatten()),
+                    local_target: car.local_location(drive_target.flatten()),
                     upside_down: false,
                     up: None,
                     handbrake: false,
@@ -839,6 +842,54 @@ fn select_ground_contact(
     (best.0.flatten(), best.1, best.2)
 }
 
+/// Port of Python _shot_approach_target: when the car is poorly aligned
+/// with the desired shot, temporarily route around the ball on the side the
+/// car is already occupying. The offset fades out before contact.
+fn shot_approach_target(
+    car: CarState,
+    ball: Vector,
+    final_target: Vector,
+    shot_direction: Vector,
+    time_left: f32,
+) -> Vector {
+    let final_target = final_target.flatten();
+    if time_left <= 0.25 {
+        return final_target;
+    }
+
+    let shot_direction = shot_direction.flatten().normalize();
+    if shot_direction.magnitude() < 1.0 {
+        return final_target;
+    }
+
+    let car_to_ball = (ball - car.location).flatten().normalize();
+    if car_to_ball.magnitude() < 1.0 {
+        return final_target;
+    }
+
+    let alignment = car_to_ball.dot(shot_direction).clamp(-1.0, 1.0);
+    if alignment >= 0.88 {
+        return final_target;
+    }
+
+    let lateral = shot_direction.cross(Vector::new(0.0, 0.0, 1.0)).flatten().normalize();
+    if lateral.magnitude() < 1.0 {
+        return final_target;
+    }
+
+    let side_value = (car.location - ball).dot(lateral);
+    let car_side = if side_value < 0.0 { -1.0 } else { 1.0 };
+    let time_blend = ((time_left - 0.25) / 0.9).clamp(0.0, 1.0);
+    let alignment_blend = ((0.88 - alignment) / 1.35).clamp(0.0, 1.0);
+    let radius = 700.0 * time_blend * alignment_blend;
+
+    if radius < 80.0 {
+        final_target
+    } else {
+        final_target + lateral * (car_side * radius)
+    }
+}
+
 /// Estimate arrival time with turn-in cost and a short forward-acceleration
 /// simulation. Boost is only credited when the target is reasonably aligned.
 fn estimate_ground_eta(car: CarState, target: Vector) -> f32 {
@@ -913,7 +964,8 @@ fn choose_ground_intercept(
             0.0
         };
 
-        let eta = estimate_ground_eta(car, approach);
+        let drive_target = shot_approach_target(car, slice.location, approach, shot_direction, slice.time);
+        let eta = estimate_ground_eta(car, drive_target);
         if eta > slice.time + 0.08 {
             continue;
         }
@@ -1077,6 +1129,19 @@ mod tests {
 
         assert!(normal.y < -0.5);
         assert!(quality > 0.7);
+    }
+
+    #[test]
+    fn shot_approach_flank_fades_out_as_contact_nears() {
+        let me = car(0, 0, Vector::new(900.0, -500.0, 0.0));
+        let ball = Vector::new(0.0, 0.0, 100.0);
+        let final_target = Vector::new(0.0, -300.0, 0.0);
+        let shot_direction = Vector::new(0.0, 1.0, 0.0);
+
+        let early = shot_approach_target(me, ball, final_target, shot_direction, 1.5);
+        let late = shot_approach_target(me, ball, final_target, shot_direction, 0.30);
+        assert!(early.x.abs() > late.x.abs());
+        assert_eq!(late, final_target);
     }
 
     #[test]
