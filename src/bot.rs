@@ -611,7 +611,7 @@ impl BotBrain {
             .collect();
         let own_goal = Vector::new(0.0, side * 5120.0, 350.0);
         let opponent_goal = Vector::new(0.0, -side * 5120.0, 300.0);
-        let roles = if living_teammates.len() >= 3 {
+        let roles = if living_teammates.len() >= 2 {
             assign_roles_volt(
                 &living_teammates,
                 ball,
@@ -635,32 +635,13 @@ impl BotBrain {
         let urgent_save = toward_goal_speed >= 400.0
             && (ball_depth >= 1500.0 || to_own_goal.magnitude() <= 3200.0);
 
+        // The Python bot elects the challenger and deepest defender from
+        // the same ball-dependency scores in every team size. Do not use a
+        // separate 2v2 distance heuristic.
         let is_challenger = if living_teammates.len() <= 1 {
             true
-        } else if living_teammates.len() == 2 {
-            should_prioritize_ball(
-                me,
-                cars,
-                ball,
-                side,
-                game_time,
-                self.kickoff_contest_until,
-                urgent_save,
-                self.jump_shot.is_some() || self.ground_flip.is_some(),
-                None,
-            )
         } else {
-            should_prioritize_ball(
-                me,
-                cars,
-                ball,
-                side,
-                game_time,
-                self.kickoff_contest_until,
-                urgent_save,
-                self.jump_shot.is_some() || self.ground_flip.is_some(),
-                roles,
-            )
+            roles.map(|role| role.challenger == me.index).unwrap_or(false)
         };
         let is_goalie = roles.map(|r| r.goalie == me.index).unwrap_or(false);
 
