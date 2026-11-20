@@ -93,7 +93,7 @@ impl WallDash {
         match self.phase {
             0 => {
                 if !wall_contact {
-                    if self.last_wall_contact.is_none_or(|last| now - last > 0.15) {
+                    if self.last_wall_contact.map_or(true, |last| now - last > 0.15) {
                         return MechanicsOutput { finished: true, ..Default::default() };
                     }
                     return MechanicsOutput { controller: output, finished: false };
@@ -299,6 +299,7 @@ mod tests {
         assert!(!dash.tick(airborne, 1.01).controller.jump);
         assert!(!dash.tick(airborne, 1.02).controller.jump);
         assert!(!dash.tick(airborne, 1.03).controller.jump);
+        assert!(dash.tick(airborne, 1.04).controller.jump);
     }
 
     #[test]
