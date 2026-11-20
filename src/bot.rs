@@ -90,6 +90,15 @@ struct JumpShotState {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
+struct SpeedFlipState {
+    started_at: f32,
+    step_start: f32,
+    step_index: u8,
+    direction: f32,
+    use_boost: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
 struct HalfFlipState {
     started_at: f32,
     release_frames: u8,
@@ -113,6 +122,8 @@ pub struct BotBrain {
     last_flip_time: f32,
     defense_recovery_target: Option<Vector>,
     half_flip: Option<HalfFlipState>,
+    speed_flip: Option<SpeedFlipState>,
+    navigation_speedflip_used: bool,
 }
 
 impl BotBrain {
@@ -133,6 +144,8 @@ impl BotBrain {
             last_flip_time: -999.0,
             defense_recovery_target: None,
             half_flip: None,
+            speed_flip: None,
+            navigation_speedflip_used: false,
         }
     }
 
@@ -155,6 +168,9 @@ impl BotBrain {
         boost_pads: &[BoostPadState],
     ) -> ControllerState {
         self.match_state = match_state;
+        if let Some(state) = self.speed_flip {
+            return self.run_speed_flip(me, state, game_time);
+        }
         if let Some(state) = self.half_flip {
             return self.run_half_flip(me, state, game_time, match_state.gravity.z);
         }
@@ -202,6 +218,58 @@ impl BotBrain {
         }
 
         self.drive_to(me, plan, game_time)
+    }
+
+    fn run_speed_flip(
+        &mut self,
+        car: CarState,
+        mut state: SpeedFlipState,
+        game_time: f32,
+    ) -> ControllerState {
+        const DURATIONS: [f32; 6] = [
+            5.0 / 60.0,
+            1.0 / 60.0,
+            0.05,
+            1.0 / 60.0,
+            0.6,
+            0.2,
+        ];
+
+        let mut controller = ControllerState::default();
+        controller.throttle = 1.0;
+        controller.boost = state.use_boost && car.boost > 0.0;
+
+        match state.step_index {
+            0 => controller.steer = -state.direction,
+            1 => controller.jump = true,
+            2 => {}
+            3 => {
+                controller.yaw = state.direction;
+                controller.jump = true;
+                controller.pitch = -1.0;
+            }
+            4 => controller.pitch = 1.0,
+            5 => {
+                controller.yaw = state.direction;
+                controller.roll = state.direction;
+            }
+            _ => {
+                self.speed_flip = None;
+                return controller;
+            }
+        }
+
+        if game_time - state.step_start > DURATIONS[state.step_index as usize] {
+            state.step_index += 1;
+            state.step_start = game_time;
+            if state.step_index >= DURATIONS.len() as u8 {
+                self.speed_flip = None;
+                return controller;
+            }
+        }
+
+        self.speed_flip = Some(state);
+        controller
     }
 
     fn run_half_flip(
@@ -723,6 +791,32 @@ impl BotBrain {
         let local_target = car.local_location(target);
         let distance = local_target.flatten().magnitude();
         let angle = local_target.y.atan2(local_target.x).abs();
+
+        // Port of goto's one-speedflip-per-navigation-run gate.
+        let forward_speed = car.local_velocity().x;
+        if distance < 600.0 {
+            self.navigation_speedflip_used = false;
+        }
+        if !car.airborne
+            && !self.navigation_speedflip_used
+            && local_target.x > 0.0
+            && angle < 0.14
+            && distance > 3000.0
+            && (600.0..1600.0).contains(&forward_speed)
+            && car.boost >= 20.0
+        {
+            let right_handed = car.location.x * -team_side(car.team) > 0.0;
+            let state = SpeedFlipState {
+                started_at: game_time,
+                step_start: game_time,
+                step_index: 0,
+                direction: if right_handed { 1.0 } else { -1.0 },
+                use_boost: true,
+            };
+            self.navigation_speedflip_used = true;
+            self.speed_flip = Some(state);
+            return self.run_speed_flip(car, state, game_time);
+        }
 
         // Exact half_flip_manager navigation gate from Volt's goto routine:
         // target is substantially behind, reverse velocity is established,
