@@ -82,7 +82,7 @@ impl BotAgent for VoltRustAgent {
         // packet's clock. Prediction updates arrive independently of ticks.
         let _prediction = BallTrajectory::from_absolute_slices(
             self.ball_prediction.iter().copied(),
-            game_packet.game_info.seconds_elapsed,
+            game_packet.match_info.seconds_elapsed,
         );
 
         let Some(ball) = state::BallState::from_packet(game_packet) else {
