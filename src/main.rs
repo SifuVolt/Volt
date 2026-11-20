@@ -5,6 +5,8 @@ mod control;
 mod math;
 mod state;
 
+use crate::prediction::{AbsoluteBallSlice, BallTrajectory};
+
 use std::f32::consts::PI;
 use std::sync::Arc;
 
@@ -12,6 +14,7 @@ use rlbot::{
     RLBotConnection,
     agents::{BotAgent, run_bot_agents},
     flat::{
+        BallPrediction,
         ControllableInfo,
         ControllerState,
         FieldInfo,
@@ -24,6 +27,7 @@ use rlbot::{
 
 struct VoltRustAgent {
     index: u32,
+    ball_prediction: Vec<AbsoluteBallSlice>,
 }
 
 impl BotAgent for VoltRustAgent {
@@ -41,7 +45,32 @@ impl BotAgent for VoltRustAgent {
 
         Self {
             index: controllable_info.index,
+            ball_prediction: Vec::new(),
         }
+    }
+
+    fn on_ball_prediction(
+        &mut self,
+        ball_prediction: &BallPrediction,
+        _packet_queue: &mut PacketQueue,
+    ) {
+        self.ball_prediction = ball_prediction
+            .slices
+            .iter()
+            .map(|slice| AbsoluteBallSlice {
+                game_seconds: slice.game_seconds,
+                location: crate::math::Vector::new(
+                    slice.physics.location.x,
+                    slice.physics.location.y,
+                    slice.physics.location.z,
+                ),
+                velocity: crate::math::Vector::new(
+                    slice.physics.velocity.x,
+                    slice.physics.velocity.y,
+                    slice.physics.velocity.z,
+                ),
+            })
+            .collect();
     }
 
     fn tick(
@@ -49,6 +78,13 @@ impl BotAgent for VoltRustAgent {
         game_packet: &GamePacket,
         packet_queue: &mut PacketQueue,
     ) {
+        // Convert the latest authoritative RLBot prediction using this
+        // packet's clock. Prediction updates arrive independently of ticks.
+        let _prediction = BallTrajectory::from_absolute_slices(
+            self.ball_prediction.iter().copied(),
+            game_packet.game_info.seconds_elapsed,
+        );
+
         let Some(ball) = state::BallState::from_packet(game_packet) else {
             return;
         };
