@@ -2,9 +2,8 @@
 //!
 //! This is the first gameplay-connected port of Volt's current run_logic
 //! priorities: kickoff assignment, Noob Black-style challenger/goalie roles,
-//! urgent own-half saves, and Grid defensive positioning. Shot routines are
-//! still being translated; until they are connected, the challenger uses the
-//! authoritative RLBot prediction to select a reachable ground approach.
+//! urgent own-half saves, and Grid defensive positioning. Predicted ground
+//! and single-jump contacts feed active drive, dodge, and jump-shot routines.
 
 use crate::{
     control::{default_drive, default_pd, DriveInput},
@@ -886,6 +885,54 @@ mod tests {
 
         assert_eq!(shot.time, 1.50);
         assert!(shot.ball.z > 190.0);
+    }
+
+    #[test]
+    fn jump_shot_holds_jump_then_uses_directional_dodge() {
+        let mut brain = BotBrain::new();
+        let mut me = car(0, 0, Vector::ZERO);
+        me.airborne = true;
+        me.air_state = AirState::InAir;
+        let state = JumpShotState {
+            started_at: 1.0,
+            intercept_time: 1.2,
+            ball: Vector::new(100.0, 0.0, 220.0),
+            approach: Vector::ZERO,
+            shot_direction: Vector::new(1.0, 0.0, 0.0),
+            quick: true,
+            dodge_started_at: None,
+            dodge_direction: Vector::new(1.0, 0.0, 0.0),
+        };
+
+        let controller = brain.run_jump_shot(me, state, 1.10);
+        assert!(controller.jump);
+        assert_eq!(controller.pitch, -1.0);
+        assert_eq!(controller.yaw, 0.0);
+        assert!(brain.jump_shot.unwrap().dodge_started_at.is_some());
+    }
+
+    #[test]
+    fn normal_jump_shot_uses_s_tilt_but_quick_shot_does_not() {
+        let mut brain = BotBrain::new();
+        let me = car(0, 0, Vector::ZERO);
+        let state = JumpShotState {
+            started_at: 1.0,
+            intercept_time: 1.5,
+            ball: Vector::new(300.0, 0.0, 200.0),
+            approach: Vector::new(200.0, 0.0, 0.0),
+            shot_direction: Vector::new(1.0, 0.0, 0.0),
+            quick: false,
+            dodge_started_at: None,
+            dodge_direction: Vector::new(1.0, 0.0, 0.0),
+        };
+
+        let normal = brain.run_jump_shot(me, state, 1.01);
+        assert!(normal.jump);
+        assert_eq!(normal.pitch, 1.0);
+
+        let quick = JumpShotState { quick: true, ..state };
+        let fast = brain.run_jump_shot(me, quick, 1.01);
+        assert_ne!(fast.pitch, 1.0);
     }
 
     #[test]
