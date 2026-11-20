@@ -107,7 +107,7 @@ impl BotBrain {
         Self {
             kickoff_complete: false,
             match_state: MatchState::default(),
-            boost_accel,
+            boost_accel: BOOST_ACCEL,
             boost_pads: Vec::new(),
             last_kickoff_time: -999.0,
             kickoff_was_active: false,
@@ -894,8 +894,8 @@ fn assign_roles_volt(
     if let Some(backwall) = backwall_point {
         ball_dependency = (backwall.y - foe_goal.y).abs();
     } else {
-        let double_jump_height_time =
-            -(564.993_16 + 292.0) / (-325.055_66 * 2.0);
+        let double_jump_height_time: f32 =
+            -(564.993_16_f32 + 292.0_f32) / (-325.055_66_f32 * 2.0_f32);
         let double_jump_height = -325.055_66 * double_jump_height_time.powi(2)
             + (564.993_16 + 292.0) * double_jump_height_time
             - 11.659_18
