@@ -65,6 +65,7 @@ struct GroundIntercept {
     contact_point: Vector,
     contact_face: &'static str,
     shot_type: ShotType,
+    side_shot: Option<SideShotPlan>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -84,6 +85,13 @@ struct FlipState {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
+struct SideShotPlan {
+    side_sign: f32,
+    lateral_distance: f32,
+    shot_direction: Vector,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
 struct JumpShotState {
     started_at: f32,
     intercept_time: f32,
@@ -93,6 +101,9 @@ struct JumpShotState {
     quick: bool,
     dodge_started_at: Option<f32>,
     dodge_direction: Vector,
+    side_mode: bool,
+    side_sign: f32,
+    side_lateral_distance: f32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -2175,12 +2186,59 @@ fn select_ball_contact(car: CarState, ball: Vector, targets: ShotTargets) -> (Ve
     (ball+normal*BALL_RADIUS,ball+normal*120.0,label,quality)
 }
 
+fn select_side_shot(car:CarState,candidate:ShotCandidate,targets:ShotTargets)->Option<SideShotPlan> {
+    if !matches!(candidate.shot_type,ShotType::Ground|ShotType::Jump) {return None;}
+    let ball=candidate.ball;
+    let velocity=candidate.ball_velocity;
+    let goal_center=(targets.left+targets.right)*0.5;
+    let shot_direction=(goal_center-ball).flatten().normalize();
+    if shot_direction.magnitude()<0.001 {return None;}
+    let left_of_goal=Vector::new(-shot_direction.y,shot_direction.x,0.0).normalize();
+    let half_goal_width=(targets.left.x-targets.right.x).abs()*0.5;
+    let time_to_goal_line=if velocity.y.abs()>150.0 {(goal_center.y-ball.y)/velocity.y}else{-1.0};
+    let projected_goal_x=if time_to_goal_line>0.0 && time_to_goal_line<=2.5 {
+        Some(ball.x+velocity.x*time_to_goal_line)
+    } else {None};
+    let rolling_toward_goal=ball.z<=420.0
+        && velocity.flatten().magnitude()>=300.0
+        && time_to_goal_line>0.0 && time_to_goal_line<=2.5;
+    let projected_x=projected_goal_x?;
+    if !rolling_toward_goal {return None;}
+    let projected_lateral=(Vector::new(projected_x,goal_center.y,0.0)-goal_center).dot(left_of_goal);
+    let approach_side=if projected_lateral>half_goal_width-92.75 {
+        -1.0
+    } else if projected_lateral< -half_goal_width+92.75 {
+        1.0
+    } else {return None;};
+    let left_of_shot=Vector::new(-shot_direction.y,shot_direction.x,0.0).normalize();
+    let lateral_distance=(car.location.flat_distance(ball)*0.22).clamp(350.0,650.0);
+    let side_setup=ball-left_of_shot*lateral_distance*approach_side;
+    let side_setup_distance=car.location.flat_distance(side_setup);
+    let side_setup_speed=(car.velocity.flatten().magnitude()+500.0).clamp(1000.0,1700.0);
+    let local=car.local_location(side_setup);
+    let turn_angle=local.y.atan2(local.x).abs();
+    let setup_time=side_setup_distance/side_setup_speed+turn_angle*0.30;
+    if candidate.time>setup_time+0.35 && side_setup.x.abs()<3900.0 && side_setup.y.abs()<4900.0 {
+        Some(SideShotPlan {
+            side_sign:approach_side,
+            lateral_distance:car.location.flat_distance(ball)*0.5,
+            shot_direction,
+        })
+    } else {None}
+}
+
 fn candidate_to_intercept(car:CarState,candidate:ShotCandidate,targets:ShotTargets)->GroundIntercept {
-    let (contact_point,approach,contact_face,contact_quality)=select_ball_contact(car,candidate.ball,targets);
+    let (contact_point,mut approach,contact_face,contact_quality)=select_ball_contact(car,candidate.ball,targets);
+    let side_shot=select_side_shot(car,candidate,targets);
+    let shot_direction=side_shot.map_or(candidate.shot_direction,|s|s.shot_direction);
+    if let Some(side)=side_shot {
+        let lateral=Vector::new(-side.shot_direction.y,side.shot_direction.x,0.0).normalize();
+        approach=candidate.ball-lateral*side.lateral_distance*side.side_sign;
+    }
     GroundIntercept {
         time:candidate.time, ball:candidate.ball, ball_velocity:candidate.ball_velocity,
-        approach, shot_direction:candidate.shot_direction, contact_quality,
-        contact_point, contact_face, shot_type:candidate.shot_type,
+        approach, shot_direction, contact_quality,
+        contact_point, contact_face, shot_type:candidate.shot_type, side_shot,
     }
 }
 
@@ -2311,6 +2369,7 @@ fn choose_jump_intercept(
                 contact_point,
                 contact_face,
                 shot_type: ShotType::Jump,
+                side_shot: None,
             }));
         }
     }
@@ -2777,6 +2836,7 @@ fn choose_ground_intercept(
             contact_point,
             contact_face,
             shot_type: ShotType::Ground,
+            side_shot: None,
         };
 
         if best.is_none_or(|(best_score, _)| score < best_score) {
