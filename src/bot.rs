@@ -165,7 +165,7 @@ impl BotBrain {
         if urgent_save && is_challenger {
             return Plan {
                 decision: Decision::EmergencyChallenge,
-                target: contact_approach(me, ball.location, foe_goal(side)),
+                target: select_contact_approach(me, ball.location, shot_aim_point(ball.location, side)),
                 target_speed: MAX_SPEED,
             };
         }
@@ -195,8 +195,8 @@ impl BotBrain {
         }
 
         if is_challenger {
-            let target = choose_ground_intercept(me, ball, prediction, foe_goal(side))
-                .unwrap_or_else(|| contact_approach(me, ball.location, foe_goal(side)));
+            let target = choose_ground_intercept(me, ball, prediction, shot_aim_point(ball.location, side))
+                .unwrap_or_else(|| select_contact_approach(me, ball.location, shot_aim_point(ball.location, side)));
             return Plan {
                 decision: if urgent_save {
                     Decision::EmergencyChallenge
@@ -211,7 +211,7 @@ impl BotBrain {
         // In 1v1 there is no separate goalie: the sole player challenges.
         Plan {
             decision: Decision::GroundChallenge,
-            target: contact_approach(me, ball.location, foe_goal(side)),
+            target: select_contact_approach(me, ball.location, shot_aim_point(ball.location, side)),
             target_speed: MAX_SPEED,
         }
     }
@@ -295,7 +295,6 @@ fn assign_roles(cars: &[CarState], ball: BallState, side: f32) -> Option<TeamRol
     for car in cars {
         // Mirrors the live Noob Black role score's facing and bad-position
         // penalties, while preserving the actual source's closest-ball basis.
-        let to_ball = (ball.location - car.location).flatten();
         let facing_badly = car.forward().y * side > 0.0;
         let on_goal_post = car.location.flat_distance(Vector::new(
             if car.location.x >= 0.0 { 900.0 } else { -900.0 },
@@ -351,14 +350,47 @@ fn assign_roles(cars: &[CarState], ball: BallState, side: f32) -> Option<TeamRol
     })
 }
 
-fn contact_approach(car: CarState, ball: Vector, goal: Vector) -> Vector {
-    let shot_direction = (goal - ball).flatten().normalize();
+/// Volt's relative goal aim: use a higher central target while the ball
+/// remains in our half, then return to the normal ground-shot height.
+fn shot_aim_point(ball: Vector, side: f32) -> Vector {
+    Vector::new(0.0, -side * 5120.0, if ball.y * side <= 0.0 { 470.0 } else { 300.0 })
+}
+
+/// Port of tools.select_ball_contact. Score the centre, left, right, high and
+/// low ball surfaces against both the car's actual approach side and the
+/// desired outgoing shot direction. This avoids blindly asking every car to
+/// hit the exact centre line of the ball.
+fn select_contact_approach(car: CarState, ball: Vector, target: Vector) -> Vector {
+    let shot_direction = (target - ball).flatten().normalize();
     if shot_direction.magnitude() < 0.001 {
         return ball.flatten();
     }
 
-    let hitbox_length = car.hitbox.length.max(100.0);
-    (ball - shot_direction * (BALL_RADIUS + hitbox_length * 0.35)).flatten()
+    let lateral = Vector::new(-shot_direction.y, shot_direction.x, 0.0).normalize();
+    let car_from_ball = (car.location - ball).normalize();
+    let candidates = [
+        -shot_direction,
+        (-shot_direction + lateral * 0.55).normalize(),
+        (-shot_direction - lateral * 0.55).normalize(),
+        (-shot_direction + Vector::new(0.0, 0.0, 0.30)).normalize(),
+        (-shot_direction - Vector::new(0.0, 0.0, 0.30)).normalize(),
+    ];
+
+    let normal = candidates
+        .into_iter()
+        .max_by(|a, b| {
+            let score = |normal: Vector| {
+                car_from_ball.dot(normal) * 0.75
+                    + (-normal).dot(shot_direction) * 0.25
+            };
+            score(*a).total_cmp(&score(*b))
+        })
+        .unwrap_or(-shot_direction);
+
+    // Python uses max(120, agent.best_shot_value). Volt's standard
+    // best_shot_value is represented here by the same 300-unit approach
+    // standoff used by its shot planning configuration.
+    (ball + normal * 300.0).flatten()
 }
 
 /// Select the earliest prediction sample that the current ground-drive model
@@ -464,11 +496,19 @@ mod tests {
 
     #[test]
     fn contact_approach_is_behind_the_ball_relative_to_goal() {
-        let car = car(0, 0, Vector::ZERO);
+        let car = car(0, 0, Vector::new(0.0, -1000.0, 0.0));
         let ball = Vector::new(0.0, 0.0, 100.0);
-        let target = contact_approach(car, ball, Vector::new(0.0, 5120.0, 0.0));
+        let target = select_contact_approach(car, ball, Vector::new(0.0, 5120.0, 300.0));
         assert!(target.y < ball.y);
         assert_eq!(target.z, 0.0);
+    }
+
+    #[test]
+    fn contact_selection_can_choose_a_flank_when_car_is_offset() {
+        let car = car(0, 0, Vector::new(800.0, -500.0, 0.0));
+        let ball = Vector::new(0.0, 0.0, 100.0);
+        let target = select_contact_approach(car, ball, Vector::new(0.0, 5120.0, 300.0));
+        assert!(target.x.abs() > 10.0);
     }
 
     #[test]
