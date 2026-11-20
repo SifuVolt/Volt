@@ -500,6 +500,7 @@ pub fn find_aerial_candidate(
             + if validation.fast { 0.025 } else { 0.0 };
         let candidate = AerialCandidate {
             slice,
+            shot_target: goal,
             target_location,
             shot_direction,
             // CLib's fast-aerial branch includes the second jump impulse;
@@ -651,6 +652,7 @@ mod tests {
             &[],
             Vector::new(0.0, 0.0, -650.0),
             991.6667,
+            0.0,
         );
         assert!(result.is_some());
         assert!(result.unwrap().estimated_boost >= 0.0);
@@ -665,6 +667,7 @@ mod tests {
                 location: Vector::new(0.0, 0.0, 900.0),
                 velocity: Vector::ZERO,
             },
+            shot_target: Vector::new(0.0, 5120.0, 300.0),
             target_location: Vector::new(0.0, 0.0, 745.0),
             shot_direction: Vector::new(0.0, 0.0, 1.0),
             double_jump: false,
@@ -672,7 +675,7 @@ mod tests {
             estimated_boost: 20.0,
             score: 1.5,
         };
-        let mut shot = AerialShot::new(car, candidate, 1.0);
+        let mut shot = AerialShot::new(car, candidate, 1.0, Vector::new(0.0, 0.0, -650.0), 991.6667);
         let controls = shot.run(
             car,
             1.05,
