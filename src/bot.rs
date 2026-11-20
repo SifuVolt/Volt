@@ -90,6 +90,12 @@ struct JumpShotState {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
+struct KickoffDodgeState {
+    started_at: f32,
+    direction: Vector,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
 struct SpeedFlipState {
     started_at: f32,
     step_start: f32,
@@ -124,6 +130,7 @@ pub struct BotBrain {
     half_flip: Option<HalfFlipState>,
     speed_flip: Option<SpeedFlipState>,
     navigation_speedflip_used: bool,
+    kickoff_dodge: Option<KickoffDodgeState>,
 }
 
 impl BotBrain {
@@ -146,6 +153,7 @@ impl BotBrain {
             half_flip: None,
             speed_flip: None,
             navigation_speedflip_used: false,
+            kickoff_dodge: None,
         }
     }
 
@@ -168,6 +176,9 @@ impl BotBrain {
         boost_pads: &[BoostPadState],
     ) -> ControllerState {
         self.match_state = match_state;
+        if let Some(state) = self.kickoff_dodge {
+            return self.run_kickoff_dodge(state, game_time);
+        }
         if let Some(state) = self.speed_flip {
             return self.run_speed_flip(me, state, game_time);
         }
@@ -218,6 +229,28 @@ impl BotBrain {
         }
 
         self.drive_to(me, plan, game_time)
+    }
+
+    fn run_kickoff_dodge(
+        &mut self,
+        state: KickoffDodgeState,
+        game_time: f32,
+    ) -> ControllerState {
+        let elapsed = game_time - state.started_at;
+        let mut controller = ControllerState::default();
+        if elapsed < 0.05 {
+            controller.jump = true;
+        } else if elapsed < 0.083 {
+            controller.jump = false;
+        } else if elapsed < 0.15 {
+            controller.jump = true;
+            controller.pitch = -state.direction.x;
+            controller.yaw = state.direction.y;
+        } else {
+            self.kickoff_dodge = None;
+            self.kickoff_complete = true;
+        }
+        controller
     }
 
     fn run_speed_flip(
@@ -791,6 +824,25 @@ impl BotBrain {
         let local_target = car.local_location(target);
         let distance = local_target.flatten().magnitude();
         let angle = local_target.y.atan2(local_target.x).abs();
+
+        // generic_kickoff's final forward dodge, triggered only once the
+        // kicker is within the original 550-unit launch window.
+        if plan.decision == Decision::KickoffKicker
+            && !car.airborne
+            && distance < 550.0
+        {
+            let direction = car.local(Vector::new(
+                0.0,
+                -team_side(car.team) * 5120.0,
+                0.0,
+            )).flatten().normalize();
+            let state = KickoffDodgeState {
+                started_at: game_time,
+                direction,
+            };
+            self.kickoff_dodge = Some(state);
+            return self.run_kickoff_dodge(state, game_time);
+        }
 
         // Port of goto's one-speedflip-per-navigation-run gate.
         let forward_speed = car.local_velocity().x;
