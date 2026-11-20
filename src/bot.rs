@@ -379,6 +379,7 @@ impl BotBrain {
                 required_speed = required_speed.max(1900.0);
             }
             let local_ball = car.local_location(shot.ball);
+            let local_contact_point = car.local_location(shot.contact_point);
             let local_future_velocity = car.local(car.velocity + Vector::new(0.0, 0.0, -650.0) * t).flatten();
             let local_shot_direction = car.local(shot.shot_direction).flatten().normalize();
             let angle = local_offset.y.atan2(local_offset.x).abs();
@@ -396,9 +397,12 @@ impl BotBrain {
             );
             let velocity = output.car_speed;
             let impulse = dodge_impulse(car.velocity.flatten(), MAX_SPEED);
+            let contact_surface_aligned = local_contact_point.x > 0.0
+                && local_contact_point.x < car.hitbox.length * 0.5 + BALL_RADIUS + 50.0
+                && local_contact_point.y.abs() < car.hitbox.width * 0.5 + BALL_RADIUS;
             let aligned_contact = (velocity.abs() < 100.0
                 && distance_remaining < car.hitbox.length / 2.0)
-                || (local_offset.y.abs() < BALL_RADIUS
+                || (contact_surface_aligned
                     && local_future_velocity.x >= local_offset.x - car.hitbox.length / 3.0
                     && local_offset.x > 0.0);
 
@@ -420,6 +424,7 @@ impl BotBrain {
                         local_ball.flatten(),
                         local_shot_direction,
                         shot.contact_quality,
+                        shot.contact_face,
                     ),
                     cancel: angle > 2.0,
                 });
@@ -871,6 +876,7 @@ fn select_ground_contact(
     ];
 
     let predicted_car = car.location + car.velocity * horizon;
+    let relative_velocity = (car.velocity - ball_velocity).flatten().normalize();
     let mut best: Option<(f32, Vector, Vector, Vector, &'static str)> = None;
     for (label, lateral, vertical) in faces {
         let front_offset = impact_forward * half_length
@@ -888,8 +894,14 @@ fn select_ground_contact(
         let required_car_centre =
             ball - shot_forward * BALL_RADIUS - front_offset;
         let reach_cost = required_car_centre.flat_distance(predicted_car);
+        let closing_alignment = if relative_velocity.magnitude() > 0.001 {
+            relative_velocity.dot(incoming_normal).clamp(-1.0, 1.0)
+        } else {
+            0.0
+        };
         let score = shot_alignment
             + front_alignment.clamp(-1.0, 1.0) * 0.12
+            + closing_alignment * 0.08
             - reach_cost * 0.00020;
 
         if best.is_none_or(|(best_score, ..)| score > best_score) {
@@ -926,6 +938,7 @@ fn ground_dodge_direction(
     local_ball: Vector,
     local_shot_direction: Vector,
     contact_quality: f32,
+    contact_face: &'static str,
 ) -> Vector {
     let ball = local_ball.flatten();
     let shot = local_shot_direction.flatten().normalize();
@@ -934,10 +947,19 @@ fn ground_dodge_direction(
     }
 
     let lateral_ratio = ball.y / ball.x.max(1.0);
+    let face_lateral = if contact_face.contains("left") {
+        -1.0
+    } else if contact_face.contains("right") {
+        1.0
+    } else {
+        0.0
+    };
     let direction = if lateral_ratio.abs() > 0.34 && ball.y.abs() > 35.0 {
         Vector::new(1.0, lateral_ratio.clamp(-0.72, 0.72), 0.0)
     } else if shot.x > 0.25 && shot.y.abs() > 0.42 && contact_quality > 0.35 {
         Vector::new(shot.x.max(0.35), shot.y.clamp(-0.75, 0.75), 0.0)
+    } else if face_lateral != 0.0 && contact_quality > 0.55 {
+        Vector::new(1.0, face_lateral * 0.30, 0.0)
     } else {
         Vector::new(1.0, 0.0, 0.0)
     };
