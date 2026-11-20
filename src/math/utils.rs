@@ -164,7 +164,8 @@ mod tests {
 
     #[test]
     fn slope_and_quadratic_match_python_helpers() {
-        assert_eq!(find_slope(Vector::new(0.0, 1.0, 0.0), Vector::new(0.0, 2.0, 0.0)), 3.0);
+        assert_eq!(find_slope(Vector::new(0.0, 1.0, 0.0), Vector::new(0.0, 2.0, 0.0)), 10.0);
+        assert_eq!(find_slope(Vector::new(0.0, 1.0, 0.0), Vector::new(2.0, 2.0, 0.0)), 1.0);
         assert_eq!(quadratic(1.0, -3.0, 2.0), vec![2.0, 1.0]);
         assert_eq!(quadratic(1.0, 0.0, 1.0), Vec::<f32>::new());
     }
