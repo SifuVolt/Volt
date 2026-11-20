@@ -410,7 +410,7 @@ fn choose_ground_intercept(
     for slice in prediction.slices.iter().filter(|slice| {
         slice.time >= 0.04 && slice.time <= 3.0 && slice.location.z <= 190.0
     }) {
-        let target = contact_approach(car, slice.location, goal);
+        let target = select_contact_approach(car, slice.location, goal);
         let delta = (target - car.location).flatten();
         let distance = delta.magnitude();
         let direction = delta.normalize();
@@ -436,7 +436,7 @@ fn choose_ground_intercept(
     }
 
     best.map(|(_, target)| target).or_else(|| {
-        Some(contact_approach(car, ball.location, goal))
+        Some(select_contact_approach(car, ball.location, goal))
     })
 }
 
