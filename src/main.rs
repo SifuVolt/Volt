@@ -1,6 +1,7 @@
 pub mod physics;
 pub mod prediction;
 pub mod planning;
+pub mod shot_physics;
 mod control;
 mod math;
 mod state;
