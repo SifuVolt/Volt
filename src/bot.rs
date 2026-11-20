@@ -12,7 +12,7 @@ use crate::{
     physics::drive::{curvature, dodge_impulse, throttle_acceleration},
     prediction::{BallSlice, BallTrajectory},
     planning::{find_wall_drive, wall_approach_geometry, WallDriveMode, WallDrivePlan},
-    shot_physics::{get_jump_time, jump_shot_is_viable, ShotType},
+    shot_physics::{double_jump_shot_is_viable, get_jump_time, jump_shot_is_viable, ShotType},
     shot_parser::ShotTargets,
     shot_planner::{find_best_shot, grid_jump_time, ShotCandidate},
     state::{BallState, BoostPadState, CarState, MatchState},
@@ -1060,7 +1060,7 @@ impl BotBrain {
                 car.velocity.z,
                 car.hitbox.height,
                 car.airborne,
-                jump.approach.z - car.location.z,
+                jump.approach.z,
                 true,
             );
             let side_ready = side_mode && distance_remaining < 180.0
@@ -1360,7 +1360,16 @@ impl BotBrain {
             return GridDefense::recovery_controller(car, final_target, self.match_state.gravity.z);
         }
 
-        if t <= jump_time {
+        let double_jump_viable = double_jump_shot_is_viable(
+            t,
+            self.match_state.gravity.z,
+            car.velocity.z,
+            car.hitbox.height * 0.5,
+            car.airborne,
+            offset_target.z,
+            true,
+        );
+        if t <= jump_time || (tj > 0.0 && distance_remaining > 50.0 && !double_jump_viable) {
             return ControllerState::default();
         }
 
