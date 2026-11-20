@@ -13,7 +13,7 @@ use crate::{
     prediction::BallTrajectory,
     planning::{find_wall_drive, wall_approach_geometry, WallDriveMode, WallDrivePlan},
     shot_physics::{get_jump_time, ShotType},
-    shot_planner::{find_best_shot, ShotCandidate, ShotTargets},
+    shot_planner::{find_best_shot, grid_jump_time, ShotCandidate, ShotTargets},
     state::{BallState, BoostPadState, CarState, MatchState},
 };
 use rlbot::flat::ControllerState;
@@ -95,6 +95,19 @@ struct JumpShotState {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
+struct DoubleJumpState {
+    started_at: f32,
+    intercept_time: f32,
+    ball: Vector,
+    offset_target: Vector,
+    shot_direction: Vector,
+    jump_time: f32,
+    jump_frames: u32,
+    second_jump_sent: bool,
+    prev_jump: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
 struct KickoffDodgeState {
     started_at: f32,
     direction: Vector,
@@ -127,6 +140,7 @@ pub struct BotBrain {
     kickoff_contest_until: f32,
     ground_flip: Option<FlipState>,
     jump_shot: Option<JumpShotState>,
+    double_jump_shot: Option<DoubleJumpState>,
     defense: GridDefense,
     defense_flip: Option<FlipState>,
     last_flip_time: f32,
@@ -153,6 +167,7 @@ impl BotBrain {
             kickoff_contest_until: -999.0,
             ground_flip: None,
             jump_shot: None,
+            double_jump_shot: None,
             defense: GridDefense::default(),
             defense_flip: None,
             last_flip_time: -999.0,
@@ -217,6 +232,10 @@ impl BotBrain {
         // A launched aerial is a committed, uninterruptible mechanic. Keep
         // executing its own prediction/boost controller until contact or a
         // physically impossible recovery, just like the source routine stack.
+        if let Some(state) = self.double_jump_shot {
+            return self.run_double_jump(me, state, game_time);
+        }
+
         if let Some(mut aerial) = self.aerial_shot {
             let controls = aerial.run(me, game_time, match_state.gravity, self.boost_accel);
             if aerial.finished {
@@ -880,6 +899,9 @@ impl BotBrain {
     }
 
     fn drive_to(&mut self, car: CarState, plan: Plan, game_time: f32) -> ControllerState {
+        if let Some(state) = self.double_jump_shot {
+            return self.run_double_jump(car, state, game_time);
+        }
         if let Some(state) = self.jump_shot {
             return self.run_jump_shot(car, state, game_time);
         }
@@ -907,6 +929,9 @@ impl BotBrain {
         }
 
         if let Some(jump) = plan.jump {
+            if jump.shot_type == ShotType::DoubleJump {
+                return self.drive_double_jump(car, jump, game_time);
+            }
             let t = jump.time;
             let jump_time = get_jump_time(
                 jump.ball.z - car.location.z,
@@ -1119,6 +1144,174 @@ impl BotBrain {
         // The selected decision is intentionally retained in Plan for
         // deterministic testing and future routine-specific execution.
         let _ = plan.decision;
+        controller
+    }
+
+
+    fn drive_double_jump(
+        &mut self,
+        car: CarState,
+        shot: GroundIntercept,
+        game_time: f32,
+    ) -> ControllerState {
+        let t = shot.time;
+        let offset_target = shot.approach;
+        let required_height = (offset_target.z - car.location.z).max(0.0);
+        let Some(jump_time) = grid_jump_time(required_height, true) else {
+            return ControllerState::default();
+        };
+        let tj = t - jump_time * 1.15;
+        let mut final_target = offset_target.flatten();
+        if tj > 0.0 {
+            final_target = shot_approach_target(
+                car, shot.ball, final_target, shot.shot_direction, tj,
+            );
+        }
+        final_target = cap_in_field(&car, final_target);
+        let local_target = car.local_location(final_target);
+        let local_offset = car.local_location(offset_target.flatten());
+        let angle = local_target.y.atan2(local_target.x).abs();
+        let distance_remaining = final_target.flat_distance(car.location)
+            - car.hitbox.length / 3.0;
+        let local_ball = car.local_location(shot.ball);
+        let direction_sign = if angle >= 1.6
+            && car.local_velocity().x <= 1000.0
+            && local_ball.x < -250.0
+        { -1.0 } else { 1.0 };
+
+        let speed_required = distance_remaining / t.clamp(0.000001, 6.0);
+        let output = controlled_drive(
+            &car, final_target, speed_required * direction_sign, self.boost_accel,
+        );
+        let mut velocity = output.car_speed;
+        if velocity == 0.0 { velocity = 1.0; }
+        let local_velocity = car.local_velocity();
+        let time_to_target = distance_remaining
+            / (velocity.abs() + dodge_impulse(car.velocity.flatten(), MAX_SPEED));
+        let aligned = local_offset.y.abs() < 92.0
+            && direction_sign * local_velocity.x
+                >= direction_sign * (local_offset.x - car.hitbox.length / 3.0)
+            && direction_sign * local_offset.x > 0.0;
+        let close_enough = velocity.abs() < 100.0
+            && distance_remaining < car.hitbox.length / 2.0;
+
+        if !car.airborne && t <= jump_time && (aligned || close_enough) {
+            let state = DoubleJumpState {
+                started_at: game_time,
+                intercept_time: game_time + t,
+                ball: shot.ball,
+                offset_target,
+                shot_direction: shot.shot_direction,
+                jump_time,
+                jump_frames: 0,
+                second_jump_sent: false,
+                prev_jump: false,
+            };
+            self.double_jump_shot = Some(state);
+            return self.run_double_jump(car, state, game_time);
+        }
+
+        if car.airborne {
+            self.defense_recovery_target = Some(offset_target);
+            return GridDefense::recovery_controller(car, offset_target, self.match_state.gravity.z);
+        }
+
+        if t <= jump_time {
+            self.double_jump_shot = None;
+            return ControllerState::default();
+        }
+
+        if !car.airborne
+            && self.match_state.gravity.z < -450.0
+            && car.boost < 48.0
+            && angle < 0.03
+            && velocity > 600.0
+            && time_to_target >= jump_time * 1.15 + 1.75
+            && time_to_target < 5.0
+        {
+            let mut wave = crate::mechanics::WaveDash::new(Some(local_offset));
+            let result = wave.tick(car, game_time);
+            // The source uses wave_dash as a short launch preparation. Keep
+            // the controller for its first step; normal shot planning resumes
+            // if the mechanic has already completed.
+            if !result.finished {
+                return result.controller;
+            }
+        }
+
+        if angle >= 2.0 && velocity < 200.0
+            && time_to_target >= jump_time * 1.15 + 2.0
+            && distance_remaining > 1280.0
+        {
+            let state = HalfFlipState {
+                started_at: game_time,
+                release_frames: 0,
+                flip_started_at: None,
+            };
+            self.half_flip = Some(state);
+            return self.run_half_flip(car, state, game_time, self.match_state.gravity.z);
+        }
+
+        controller_from_drive(output, car)
+    }
+
+    fn run_double_jump(
+        &mut self,
+        car: CarState,
+        mut state: DoubleJumpState,
+        game_time: f32,
+    ) -> ControllerState {
+        let time_remaining = state.intercept_time - game_time;
+        let elapsed = (game_time - state.started_at).max(0.0);
+        state.jump_frames = (elapsed * 120.0).round().max(0.0) as u32;
+        if time_remaining <= -0.4 || (!car.airborne && state.jump_frames >= 30) {
+            self.double_jump_shot = None;
+            self.defense_recovery_target = if car.airborne { Some(state.offset_target) } else { None };
+            return ControllerState::default();
+        }
+
+        let local_contact = car.local_location(state.offset_target);
+        let (_, pd) = default_pd(&car, local_contact, false, None);
+        let mut controller = ControllerState::default();
+        controller.pitch = pd.pitch;
+        controller.yaw = pd.yaw;
+        controller.roll = pd.roll;
+
+        if state.jump_frames < 24 {
+            controller.jump = true;
+            state.prev_jump = true;
+        } else if !state.second_jump_sent && !car.doublejumped {
+            if state.prev_jump {
+                controller.jump = false;
+                state.prev_jump = false;
+            } else {
+                controller.jump = true;
+                state.second_jump_sent = true;
+                state.prev_jump = true;
+            }
+        } else {
+            controller.jump = false;
+            state.prev_jump = false;
+        }
+
+        if time_remaining > 0.0 {
+            let future_position = car.location
+                + car.velocity * time_remaining
+                + self.match_state.gravity * (0.5 * time_remaining * time_remaining);
+            let delta = state.offset_target - future_position;
+            let forward_need = delta.dot(car.forward()) / time_remaining.max(0.000001);
+            let min_boost_time = 1.0 / 30.0;
+            let throttle_accel = 66.0 + (2.0 / 3.0);
+            if forward_need > self.boost_accel * min_boost_time && car.boost > 0.0 {
+                controller.boost = true;
+            } else if forward_need.abs() > 1.0 {
+                controller.throttle = (forward_need / (throttle_accel * min_boost_time))
+                    .clamp(-1.0, 1.0);
+            }
+        }
+
+        let _ = state.shot_direction;
+        self.double_jump_shot = Some(state);
         controller
     }
 
