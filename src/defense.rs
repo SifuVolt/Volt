@@ -401,6 +401,7 @@ impl GridDefense {
         let mut controller = ControllerState::default();
         controller.throttle = 1.0;
         controller.boost = false;
+        controller.steer = controls.steer;
         controller.pitch = controls.pitch;
         controller.yaw = controls.yaw;
         controller.roll = controls.roll;
