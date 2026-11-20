@@ -9,7 +9,7 @@ mod state;
 
 use crate::bot::BotBrain;
 use crate::prediction::{AbsoluteBallSlice, BallTrajectory};
-use crate::state::{AgentFrame, BoostPadState, MatchState};
+use crate::state::{AgentFrame, AgentSettings, BotPersistentState, BoostPadState, GoalState, MatchState};
 
 use std::sync::Arc;
 
@@ -32,6 +32,12 @@ struct VoltRustAgent {
     index: u32,
     team: u32,
     match_state: MatchState,
+    settings: AgentSettings,
+    friend_goal: GoalState,
+    foe_goal: GoalState,
+    foe_goal_shot: (crate::math::Vector, crate::math::Vector),
+    anti_target: (crate::math::Vector, crate::math::Vector),
+    persistent: BotPersistentState,
     ball_prediction: Vec<AbsoluteBallSlice>,
     boost_pads: Vec<BoostPadState>,
     brain: BotBrain,
@@ -41,7 +47,7 @@ impl BotAgent for VoltRustAgent {
     fn new(
         team: u32,
         controllable_info: ControllableInfo,
-        _match_config: Arc<MatchConfiguration>,
+        match_config: Arc<MatchConfiguration>,
         field_info: Arc<FieldInfo>,
         _packet_queue: &mut PacketQueue,
     ) -> Self {
@@ -50,15 +56,39 @@ impl BotAgent for VoltRustAgent {
             controllable_info.index
         );
 
+        let settings = AgentSettings::from_match_configuration(&match_config);
+        let friend_goal = GoalState::new(team as usize, 820.0, 350.0);
+        let foe_goal = GoalState::new(1usize.saturating_sub(team as usize), 760.0, 300.0);
+
+        let foe_goal_width_direction =
+            (foe_goal.right_post - foe_goal.left_post).normalize();
+        let foe_goal_shot = (
+            foe_goal.left_post + foe_goal_width_direction * 39.0,
+            foe_goal.right_post - foe_goal_width_direction * 39.0,
+        );
+
+        let friend_goal_width_direction =
+            (friend_goal.right_post - friend_goal.left_post).normalize();
+        let anti_target = (
+            friend_goal.right_post + friend_goal_width_direction * 100.0,
+            friend_goal.left_post - friend_goal_width_direction * 100.0,
+        );
+
         Self {
             index: controllable_info.index,
             team,
             match_state: MatchState::default(),
+            settings,
+            friend_goal,
+            foe_goal,
+            foe_goal_shot,
+            anti_target,
+            persistent: BotPersistentState::new(),
             ball_prediction: Vec::new(),
             boost_pads: field_info.boost_pads.iter().enumerate().map(|(index, pad)| {
                 BoostPadState::from_field_info(index, pad)
             }).collect(),
-            brain: BotBrain::new(),
+            brain: BotBrain::new_with_boost_accel(settings.boost_accel),
         }
     }
 
@@ -108,6 +138,20 @@ impl BotAgent for VoltRustAgent {
             return;
         };
         self.match_state = frame.match_state;
+        self.persistent.time = frame.match_state.time;
+        self.persistent.odd_tick += 1;
+        if self.persistent.odd_tick > 3 {
+            self.persistent.odd_tick = 0;
+        }
+        if !self.persistent.kickoff_flag
+            && frame.match_state.round_active
+            && frame.match_state.kickoff
+        {
+            self.persistent.kickoff_done = false;
+            self.persistent.kickoff_routine_started = false;
+        }
+        self.persistent.kickoff_flag =
+            frame.match_state.round_active && frame.match_state.kickoff;
         self.boost_pads = frame.boost_pads.clone();
 
         // VirxERLU does not run gameplay routines outside Active/Kickoff.
