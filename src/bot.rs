@@ -1216,63 +1216,6 @@ mod tests {
 
     #[test]
     fn hitbox_offset_moves_the_selected_car_centre_target() {
-        let mut centred = car(0, 0, Vector::new(0.0, -500.0, 0.0));
-        let mut offset = centred;
-        offset.hitbox.offset.x = 20.0;
-        let ball = Vector::new(0.0, 0.0, 100.0);
-        let aim = Vector::new(0.0, 5120.0, 300.0);
-        let (plain, _, _, _, _) =
-            select_ground_contact(centred, ball, Vector::ZERO, aim, 0.2);
-        let (shifted, _, _, _, _) =
-            select_ground_contact(offset, ball, Vector::ZERO, aim, 0.2);
-
-        assert!((shifted.x - (plain.x - 20.0)).abs() < 0.01);
-        centred.hitbox.offset.x = 0.0;
-    }
-
-    #[test]
-    fn ground_dodge_stays_forward_for_centre_contact() {
-        let direction = ground_dodge_direction(
-            Vector::new(150.0, 20.0, 0.0),
-            Vector::new(1.0, 0.05, 0.0),
-            0.9,
-            "centre",
-        );
-        assert!(direction.x > 0.99);
-        assert!(direction.y.abs() < 0.01);
-    }
-
-    #[test]
-    fn ground_dodge_uses_lateral_direction_only_for_side_geometry() {
-        let right = ground_dodge_direction(
-            Vector::new(120.0, 90.0, 0.0),
-            Vector::new(1.0, 0.0, 0.0),
-            0.8,
-            "centre",
-        );
-        let left = ground_dodge_direction(
-            Vector::new(120.0, -90.0, 0.0),
-            Vector::new(1.0, 0.0, 0.0),
-            0.8,
-            "centre",
-        );
-        assert!(right.y > 0.0);
-        assert!(left.y < 0.0);
-    }
-
-    #[test]
-    fn selected_front_face_can_bias_a_clean_side_dodge() {
-        let direction = ground_dodge_direction(
-            Vector::new(180.0, 10.0, 0.0),
-            Vector::new(1.0, 0.0, 0.0),
-            0.9,
-            "top_right",
-        );
-        assert!(direction.y > 0.0);
-    }
-
-    #[test]
-    fn hitbox_offset_moves_the_selected_car_centre_target() {
         let centred = car(0, 0, Vector::new(0.0, -500.0, 0.0));
         let mut offset = centred;
         offset.hitbox.offset.x = 20.0;
