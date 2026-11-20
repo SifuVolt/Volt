@@ -1013,7 +1013,7 @@ impl BotBrain {
             let local_ball = car.local_location(jump.ball);
             let distance_remaining = final_target.flat_distance(car.location)
                 - car.hitbox.length / 3.0;
-            let mut speed_required = distance_remaining / t.max(0.001);
+            let speed_required = distance_remaining / t.max(0.001);
             let current_forward_speed = car.local_velocity().x;
             let power_dodge_window = t < 0.35 && t > 0.10
                 && local_ball.x > 0.0 && current_forward_speed > 700.0;
@@ -1027,7 +1027,12 @@ impl BotBrain {
             let future_velocity = car.velocity + self.match_state.gravity * t;
             let local_future_velocity = car.local(future_velocity.flatten());
             let impulse = dodge_impulse(car.velocity.flatten(), MAX_SPEED);
-            let time_to_target = distance_remaining / (velocity + impulse).max(0.001);
+            let denominator = velocity + impulse;
+            let time_to_target = if denominator.abs() > 0.001 {
+                distance_remaining / denominator
+            } else {
+                f32::INFINITY
+            };
             let aligned = local_offset_target.y.abs() < 92.0
                 && local_future_velocity.x >= local_offset_target.x - car.hitbox.length / 3.0
                 && local_offset_target.x > 0.0;
@@ -1082,8 +1087,6 @@ impl BotBrain {
             if t <= jump_time {
                 return ControllerState::default();
             }
-            speed_required = speed_required.max(0.0);
-            let _ = speed_required;
             return controller_from_drive(output, car);
         }
 
