@@ -15,6 +15,7 @@ use crate::{
 };
 use rlbot::flat::ControllerState;
 
+const BALL_RADIUS: f32 = 92.75;
 const MAX_SPEED: f32 = 2300.0;
 const BOOST_ACCEL: f32 = 991.6667;
 
@@ -187,6 +188,7 @@ impl BotBrain {
                 decision: Decision::EmergencyChallenge,
                 target: select_contact_approach(me, ball.location, shot_aim_point(ball.location, side)),
                 target_speed: MAX_SPEED,
+                shot: None,
             };
         }
 
@@ -278,9 +280,15 @@ impl BotBrain {
                     && local_future_velocity.x >= local_offset.x - car.hitbox.length / 3.0
                     && local_offset.x > 0.0);
 
+            let flip_speed_limit = if car.boost > 12.0 {
+                required_speed.abs()
+            } else {
+                1900.0
+            };
+
             if !car.airborne
                 && (0.1..0.35).contains(&t)
-                && (velocity.abs() + impulse).min(MAX_SPEED) <= required_speed.max(1900.0_f32.min(required_speed))
+                && (velocity.abs() + impulse).min(MAX_SPEED) <= flip_speed_limit
                 && aligned_contact
                 && local_ball.x > 0.0
             {
@@ -292,7 +300,7 @@ impl BotBrain {
                 return self.run_ground_flip(game_time, self.ground_flip.unwrap());
             }
 
-            let mut controller = controller_from_drive(output, car);
+            let controller = controller_from_drive(output, car);
             if car.airborne {
                 self.ground_flip = None;
             }
@@ -618,6 +626,24 @@ mod tests {
         let ball = Vector::new(0.0, 0.0, 100.0);
         let target = select_contact_approach(car, ball, Vector::new(0.0, 5120.0, 300.0));
         assert!(target.x.abs() > 10.0);
+    }
+
+    #[test]
+    fn ground_flip_releases_jump_before_directional_dodge() {
+        let mut brain = BotBrain::new();
+        let flip = FlipState {
+            started_at: 1.0,
+            direction: Vector::new(0.8, 0.6, 0.0),
+            cancel: false,
+        };
+
+        assert!(brain.run_ground_flip(1.05, flip).jump);
+        assert!(!brain.run_ground_flip(1.08, flip).jump);
+
+        let dodge = brain.run_ground_flip(1.12, flip);
+        assert!(dodge.jump);
+        assert!((dodge.pitch + 0.8).abs() < 1e-6);
+        assert!((dodge.yaw - 0.6).abs() < 1e-6);
     }
 
     #[test]
