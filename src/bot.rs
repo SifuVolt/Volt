@@ -719,7 +719,7 @@ impl BotBrain {
         }
 
         if is_challenger {
-            let aim = shot_aim_point(ball.location, side);
+            let aim = shot_aim_point(ball.location, side, me.airborne);
             let candidate = find_best_shot(
                 me, cars, ball.location, prediction, shot_targets,
                 match_state.gravity, self.boost_accel, game_time,
@@ -809,7 +809,7 @@ impl BotBrain {
         }
 
         // In 1v1 there is no separate goalie: the sole player challenges.
-        let aim = shot_aim_point(ball.location, side);
+        let aim = shot_aim_point(ball.location, side, me.airborne);
         let candidate = find_best_shot(
             me, cars, ball.location, prediction, shot_targets,
             match_state.gravity, self.boost_accel, game_time,
