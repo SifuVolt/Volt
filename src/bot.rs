@@ -749,8 +749,8 @@ impl BotBrain {
                 self.kickoff_contest_until, urgent_save, true, self.unlimited_boost, self.shot_search_horizon(game_time),
             );
             let selected = candidate.map(|candidate| candidate_to_intercept(me, candidate, shot_targets));
-            let use_jump = selected;
-            let intercept = None;
+            let use_jump = selected.filter(|shot| shot.shot_type != ShotType::Ground || shot.can_jump);
+            let intercept = selected.filter(|shot| shot.shot_type == ShotType::Ground && !shot.can_jump);
 
             // Noob Black's unfolded wall-shot scan competes with ordinary
             // ground/jump contacts, but never displaces an urgent save.
@@ -839,8 +839,8 @@ impl BotBrain {
             self.kickoff_contest_until, urgent_save, true, self.unlimited_boost, self.shot_search_horizon(game_time),
         );
         let selected = candidate.map(|candidate| candidate_to_intercept(me, candidate, shot_targets));
-        let use_jump = selected;
-        let intercept = None;
+        let use_jump = selected.filter(|shot| shot.shot_type != ShotType::Ground || shot.can_jump);
+        let intercept = selected.filter(|shot| shot.shot_type == ShotType::Ground && !shot.can_jump);
         if self.jump_shot.is_none() && self.ground_flip.is_none() {
             if let Some(wall) = find_wall_drive(
                 &me, &prediction.slices, me.team, opponent_goal, 5.0,
@@ -2382,7 +2382,7 @@ fn select_ball_contact(car: CarState, ball: Vector, targets: ShotTargets) -> (Ve
 }
 
 fn select_side_shot(car:CarState,candidate:ShotCandidate,targets:ShotTargets)->Option<SideShotPlan> {
-    if !matches!(candidate.shot_type,ShotType::Ground|ShotType::Jump) {return None;}
+    if !candidate.can_jump || !matches!(candidate.shot_type,ShotType::Ground|ShotType::Jump) {return None;}
     let ball=candidate.ball;
     let velocity=candidate.ball_velocity;
     let goal_center=(targets.left+targets.right)*0.5;
@@ -3418,6 +3418,7 @@ mod tests {
             approach: Vector::ZERO,
             shot_direction: Vector::new(0.0, 1.0, 0.0),
             shot_type: ShotType::Ground,
+            can_jump: true,
             fast: false,
             score: 0.0,
             parser: Default::default(),
