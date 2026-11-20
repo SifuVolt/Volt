@@ -315,8 +315,25 @@ impl BotBrain {
         if is_goalie && !is_challenger {
             return Plan {
                 decision: Decision::Goalkeeper,
-                target: Vector::new(0.0, side * 4970.0, 0.0),
+                target: Vector::new(0.0, side * 5270.0, 0.0),
                 target_speed: 1500.0,
+                shot: None,
+                jump: None,
+            };
+        }
+
+        // In 2v2, should_prioritize_ball() can elect the teammate with
+        // the better immediate challenge. The non-challenger runs the
+        // non-goalie grid_defense lane rather than also driving at the ball.
+        if living_teammates.len() == 2 && !is_challenger {
+            return Plan {
+                decision: Decision::Transition,
+                target: Vector::new(
+                    if me.location.x == 0.0 { 0.0 } else { me.location.x.signum() * 900.0 },
+                    side * 5050.0,
+                    0.0,
+                ),
+                target_speed: 1700.0,
                 shot: None,
                 jump: None,
             };
@@ -2335,6 +2352,82 @@ mod tests {
         assert!(dodge.jump);
         assert!((dodge.pitch + 0.8).abs() < 1e-6);
         assert!((dodge.yaw - 0.6).abs() < 1e-6);
+    }
+
+    #[test]
+    fn two_v_two_priority_yields_when_teammate_is_clearly_closer_and_facing_ball() {
+        let me = car(0, 0, Vector::new(-1000.0, -1000.0, 0.0));
+        let teammate = car(1, 0, Vector::new(-100.0, -100.0, 0.0));
+        let opponent = car(2, 1, Vector::new(1500.0, 0.0, 0.0));
+        let ball = BallState {
+            location: Vector::ZERO,
+            velocity: Vector::ZERO,
+        };
+
+        assert!(!should_prioritize_ball(
+            me,
+            &[me, teammate, opponent],
+            ball,
+            -1.0,
+            5.0,
+            -999.0,
+            false,
+            false,
+            None,
+        ));
+    }
+
+    #[test]
+    fn two_v_two_priority_keeps_emergency_defence_over_teammate_awareness() {
+        let me = car(0, 0, Vector::new(-1000.0, -1000.0, 0.0));
+        let teammate = car(1, 0, Vector::new(-100.0, -100.0, 0.0));
+        let opponent = car(2, 1, Vector::new(1500.0, 0.0, 0.0));
+        let ball = BallState {
+            location: Vector::new(0.0, -4500.0, 200.0),
+            velocity: Vector::new(0.0, -500.0, 0.0),
+        };
+
+        assert!(should_prioritize_ball(
+            me,
+            &[me, teammate, opponent],
+            ball,
+            -1.0,
+            5.0,
+            -999.0,
+            true,
+            false,
+            None,
+        ));
+    }
+
+    #[test]
+    fn kickoff_boost_selection_prefers_own_half_full_pads() {
+        let me = car(0, 0, Vector::new(0.0, -3000.0, 0.0));
+        let pads = [
+            BoostPadState {
+                index: 0,
+                location: Vector::new(3500.0, -4000.0, 0.0),
+                large: true,
+                active: true,
+            },
+            BoostPadState {
+                index: 1,
+                location: Vector::new(-3500.0, 4000.0, 0.0),
+                large: true,
+                active: true,
+            },
+            BoostPadState {
+                index: 2,
+                location: Vector::new(0.0, -2000.0, 0.0),
+                large: false,
+                active: true,
+            },
+        ];
+
+        assert_eq!(
+            kickoff_boost_target(me, -1.0, &pads),
+            Some(pads[0].location)
+        );
     }
 
     #[test]
