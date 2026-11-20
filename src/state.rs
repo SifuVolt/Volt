@@ -1,5 +1,5 @@
 use crate::math::{Matrix3, Vector};
-use rlbot::flat::{AirState, GamePacket};
+use rlbot::flat::{AirState, FieldInfo, GamePacket, MatchPhase};
 
 /// Hitbox dimensions and local-space offset, matching Volt's Python hitbox_object.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
@@ -287,5 +287,71 @@ mod frame_tests {
         assert!(!pad.active);
         assert_eq!(pad.index, 0);
         assert_eq!(pad.location, Vector::ZERO);
+    }
+}
+
+
+/// Match-level state copied from the authoritative RLBot packet, matching
+/// the fields maintained by Volt's Python game_object.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct MatchState {
+    pub seconds_elapsed: f32,
+    pub time_remaining: f32,
+    pub overtime: bool,
+    pub round_active: bool,
+    pub kickoff: bool,
+    pub match_ended: bool,
+    pub team_score: i32,
+    pub opponent_score: i32,
+    pub gravity: Vector,
+}
+
+impl MatchState {
+    pub fn from_packet(packet: &GamePacket, team: usize) -> Self {
+        let game = &packet.match_info;
+        let team_score = packet.teams.get(team).map_or(0, |entry| entry.score);
+        let opponent = if team == 0 { 1 } else { 0 };
+        let opponent_score = packet.teams.get(opponent).map_or(0, |entry| entry.score);
+
+        Self {
+            seconds_elapsed: game.seconds_elapsed,
+            time_remaining: game.game_time_remaining,
+            overtime: game.is_overtime,
+            round_active: matches!(game.match_phase, MatchPhase::Active | MatchPhase::Kickoff),
+            kickoff: game.match_phase == MatchPhase::Kickoff,
+            match_ended: game.match_phase == MatchPhase::Ended,
+            team_score,
+            opponent_score,
+            gravity: Vector::new(0.0, 0.0, game.world_gravity_z),
+        }
+    }
+}
+
+/// Static boost-pad metadata plus the live active flag from each packet.
+/// This is the Rust equivalent of Python boost_object.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct BoostPadState {
+    pub index: usize,
+    pub location: Vector,
+    pub active: bool,
+    pub large: bool,
+}
+
+impl BoostPadState {
+    pub fn from_field_info(field: &FieldInfo) -> Vec<Self> {
+        field.boost_pads.iter().enumerate().map(|(index, pad)| Self {
+            index,
+            location: Vector::new(pad.location.x, pad.location.y, pad.location.z),
+            active: true,
+            large: pad.is_full_boost,
+        }).collect()
+    }
+
+    pub fn update_all(pads: &mut [Self], packet: &GamePacket) {
+        for pad in pads {
+            if let Some(packet_pad) = packet.boost_pads.get(pad.index) {
+                pad.active = packet_pad.is_active;
+            }
+        }
     }
 }
