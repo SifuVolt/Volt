@@ -2248,6 +2248,13 @@ fn select_side_shot(car:CarState,candidate:ShotCandidate,targets:ShotTargets)->O
 
 fn candidate_to_intercept(car:CarState,candidate:ShotCandidate,targets:ShotTargets)->GroundIntercept {
     let (mut contact_point,mut approach,mut contact_face,contact_quality)=select_ball_contact(car,candidate.ball,targets);
+    let contact_normal=(contact_point-candidate.ball).normalize();
+    let contact_standoff=if candidate.shot_type==ShotType::Ground {
+        BALL_RADIUS
+    } else {
+        BALL_RADIUS+car.hitbox.length*0.5
+    };
+    approach=candidate.ball+contact_normal*contact_standoff;
     let side_shot=select_side_shot(car,candidate,targets);
     let shot_direction=side_shot.map_or(candidate.shot_direction,|s|s.shot_direction);
     if let Some(side)=side_shot {
