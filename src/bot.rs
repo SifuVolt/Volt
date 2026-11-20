@@ -1049,7 +1049,7 @@ fn select_ground_contact(
 ) -> (Vector, Vector, f32, Vector, &'static str) {
     let shot_forward = (aim - ball).flatten().normalize();
     if shot_forward.magnitude() < 0.001 {
-        return (ball.flatten(), Vector::ZERO, 0.0, ball, "centre");
+        return (cap_in_field(&car, ball.flatten()), Vector::ZERO, 0.0, ball, "centre");
     }
 
     let horizon = time.clamp(0.0, 0.18);
@@ -1070,7 +1070,7 @@ fn select_ground_contact(
     impact_up = impact_forward.cross(impact_right).normalize();
     if impact_forward.magnitude() < 0.001 || impact_right.magnitude() < 0.001 {
         return (
-            ball - shot_forward * 300.0,
+            cap_in_field(&car, ball - shot_forward * 300.0),
             -shot_forward,
             0.0,
             ball - shot_forward * BALL_RADIUS,
@@ -1137,7 +1137,7 @@ fn select_ground_contact(
 
     let Some((score, approach, normal, contact_point, label)) = best else {
         return (
-            ball - shot_forward * 300.0,
+            cap_in_field(&car, ball - shot_forward * 300.0),
             -shot_forward,
             0.0,
             ball - shot_forward * BALL_RADIUS,
@@ -1147,7 +1147,7 @@ fn select_ground_contact(
 
     // Keep quality bounded and useful as a weight in planner scoring.
     let quality = ((score + 0.25) / 1.25).clamp(0.0, 1.0);
-    (approach.flatten(), normal, quality, contact_point, label)
+    (cap_in_field(&car, approach.flatten()), normal, quality, contact_point, label)
 }
 
 /// Choose the dodge vector from the ball offset and intended shot direction.
