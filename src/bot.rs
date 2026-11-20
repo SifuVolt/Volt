@@ -1446,7 +1446,7 @@ impl BotBrain {
         let distance_to_contact = car.location.distance(state.approach);
         let mut controller = ControllerState::default();
 
-        if time_remaining < -0.10
+        if time_remaining < -0.40
             || (elapsed > 0.30 && !car.airborne && state.dodge_started_at.is_none())
         {
             self.jump_shot = None;
@@ -1467,6 +1467,7 @@ impl BotBrain {
         controller.roll = pd.roll;
 
         let hold_s = !state.quick
+            && state.ball.z > 130.0
             && state.ball.z > car.location.z + 65.0
             && state.dodge_started_at.is_none();
         if hold_s {
