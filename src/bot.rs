@@ -104,6 +104,7 @@ pub struct BotBrain {
     defense: GridDefense,
     defense_flip: Option<FlipState>,
     last_flip_time: f32,
+    defense_recovery_target: Option<Vector>,
 }
 
 impl BotBrain {
@@ -122,6 +123,7 @@ impl BotBrain {
             defense: GridDefense::default(),
             defense_flip: None,
             last_flip_time: -999.0,
+            defense_recovery_target: None,
         }
     }
 
@@ -147,6 +149,20 @@ impl BotBrain {
         self.boost_pads.clear();
         self.boost_pads.extend_from_slice(boost_pads);
         let plan = self.choose_plan(me, cars, ball, prediction, game_time, match_state);
+
+        // VirxERLU routines are stack-prioritized: a recovery pushed by
+        // grid_defense remains active until the car regains wheel contact,
+        // even if the strategic role changes during flight.
+        if let Some(target) = self.defense_recovery_target {
+            if me.airborne {
+                return GridDefense::recovery_controller(me, target, match_state.gravity.z);
+            }
+            self.defense_recovery_target = None;
+        }
+
+        if self.defense_flip.is_some() {
+            return self.run_grid_defense(me, cars, ball, game_time, plan.decision);
+        }
 
         // Keep a committed jump shot, but refresh its moving contact while the
         // same predicted opportunity remains nearby. This prevents stale
@@ -236,6 +252,7 @@ impl BotBrain {
             && me.velocity.z < -10.0
         {
             if let Some(target) = output.recovery_target {
+                self.defense_recovery_target = Some(target);
                 return GridDefense::recovery_controller(me, target, self.match_state.gravity.z);
             }
         }
