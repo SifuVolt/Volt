@@ -549,11 +549,11 @@ impl BotBrain {
         // The packet on the launch frame has not yet incorporated the first
         // jump impulse. On later frames, the live velocity already contains it.
         if elapsed <= 1.0 / 120.0 {
-            predicted_velocity += car.up() * JUMP_SPEED;
-            predicted_car += car.up() * (JUMP_SPEED * time_remaining.max(0.0));
+            predicted_velocity = predicted_velocity + car.up() * JUMP_SPEED;
+            predicted_car = predicted_car + car.up() * (JUMP_SPEED * time_remaining.max(0.0));
         }
-        predicted_velocity += car.up() * (JUMP_ACCEL * tau);
-        predicted_car += car.up()
+        predicted_velocity = predicted_velocity + car.up() * (JUMP_ACCEL * tau);
+        predicted_car = predicted_car + car.up()
             * (JUMP_ACCEL * tau * (time_remaining.max(0.0) - 0.5 * tau));
 
         let delta = state.approach - predicted_car;
