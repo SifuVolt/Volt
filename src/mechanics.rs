@@ -202,7 +202,6 @@ impl WaveDash {
             _ => output.handbrake = true,
         }
 
-        self.step += 1;
         if self.step < 1 {
             output.jump = true;
         } else if self.step < 4 {
@@ -223,6 +222,7 @@ impl WaveDash {
             }
         }
 
+        self.step += 1;
         MechanicsOutput { controller: output, finished: false }
     }
 }
@@ -278,13 +278,11 @@ mod tests {
             Vector::new(-1.0, 0.0, 0.0),
         );
         assert!(dash.tick(wall_car, 1.0).controller.jump);
-        assert!(!dash.tick(wall_car, 1.08).controller.jump);
+        assert!(dash.tick(wall_car, 1.08).controller.jump);
         assert!(!dash.tick(wall_car, 1.14).controller.jump);
         let dodge = dash.tick(wall_car, 1.23).controller;
         assert!(dodge.jump);
         assert_eq!(dodge.pitch, -1.0);
-        assert_eq!(dash.dash_count(), 0);
-        dash.tick(wall_car, 1.32);
         assert_eq!(dash.dash_count(), 1);
     }
 
@@ -297,10 +295,10 @@ mod tests {
             true,
             Vector::new(0.0, 0.0, 1.0),
         );
-        assert!(!dash.tick(airborne, 1.0).controller.jump);
+        assert!(dash.tick(airborne, 1.0).controller.jump);
         assert!(!dash.tick(airborne, 1.01).controller.jump);
         assert!(!dash.tick(airborne, 1.02).controller.jump);
-        assert!(dash.tick(airborne, 1.03).controller.jump);
+        assert!(!dash.tick(airborne, 1.03).controller.jump);
     }
 
     #[test]
