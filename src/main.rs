@@ -108,7 +108,7 @@ impl BotAgent for VoltRustAgent {
             return;
         };
         self.match_state = frame.match_state;
-        self.boost_pads = frame.boost_pads;
+        self.boost_pads = frame.boost_pads.clone();
 
         // VirxERLU does not run gameplay routines outside Active/Kickoff.
         if !frame.match_state.round_active {
