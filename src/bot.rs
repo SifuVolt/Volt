@@ -669,13 +669,14 @@ impl BotBrain {
         }
 
         if is_challenger {
-            let aim = shot_aim_point(ball.location, side);
-            let intercept = choose_ground_intercept(me, ball, prediction, aim, &opponents);
-            let jump = if urgent_save { None } else { choose_jump_intercept(me, prediction, aim, &opponents, match_state.gravity.z) };
-            let use_jump = jump.filter(|candidate| {
-                intercept.is_none_or(|ground| candidate.time < ground.time)
-            });
-            let selected = use_jump.or(intercept);
+            let candidate = find_best_shot(
+                me, cars, ball.location, prediction, shot_targets,
+                match_state.gravity, self.boost_accel, game_time,
+                self.kickoff_contest_until, urgent_save, true, 6.0,
+            );
+            let selected = candidate.map(|candidate| candidate_to_intercept(me, candidate, shot_targets));
+            let use_jump = selected.filter(|shot| shot.shot_type != ShotType::Ground);
+            let intercept = selected.filter(|shot| shot.shot_type == ShotType::Ground);
 
             // Noob Black's unfolded wall-shot scan competes with ordinary
             // ground/jump contacts, but never displaces an urgent save.
@@ -740,13 +741,14 @@ impl BotBrain {
         }
 
         // In 1v1 there is no separate goalie: the sole player challenges.
-        let aim = shot_aim_point(ball.location, side);
-        let intercept = choose_ground_intercept(me, ball, prediction, aim, &opponents);
-        let jump = choose_jump_intercept(me, prediction, aim, &opponents, match_state.gravity.z);
-        let use_jump = jump.filter(|candidate| {
-            intercept.is_none_or(|ground| candidate.time < ground.time)
-        });
-        let selected = use_jump.or(intercept);
+        let candidate = find_best_shot(
+            me, cars, ball.location, prediction, shot_targets,
+            match_state.gravity, self.boost_accel, game_time,
+            self.kickoff_contest_until, urgent_save, true, 6.0,
+        );
+        let selected = candidate.map(|candidate| candidate_to_intercept(me, candidate, shot_targets));
+        let use_jump = selected.filter(|shot| shot.shot_type != ShotType::Ground);
+        let intercept = selected.filter(|shot| shot.shot_type == ShotType::Ground);
         if self.jump_shot.is_none() && self.ground_flip.is_none() {
             if let Some(wall) = find_wall_drive(
                 &me, &prediction.slices, me.team, opponent_goal, 5.0,
@@ -1903,6 +1905,41 @@ fn assign_roles(cars: &[CarState], ball: BallState, side: f32) -> Option<TeamRol
     })
 }
 
+
+/// Port of tools.select_ball_contact: select centre/left/right/high/low
+/// contact using the car's current approach and the intended shot direction.
+fn select_ball_contact(car: CarState, ball: Vector, targets: ShotTargets) -> (Vector, Vector, &'static str, f32) {
+    let target_center=(targets.left+targets.right)*0.5;
+    let mut shot_direction=(target_center-ball).flatten().normalize();
+    if shot_direction.magnitude()<0.001 {
+        shot_direction=Vector::new(0.0,team_side(car.team),0.0);
+    }
+    let lateral=Vector::new(-shot_direction.y,shot_direction.x,0.0).normalize();
+    let car_from_ball=(car.location-ball).normalize();
+    let candidates=[
+        ("centre",-shot_direction),
+        ("left",(-shot_direction+lateral*0.55).normalize()),
+        ("right",(-shot_direction-lateral*0.55).normalize()),
+        ("high",(-shot_direction+Vector::new(0.0,0.0,0.30)).normalize()),
+        ("low",(-shot_direction-Vector::new(0.0,0.0,0.30)).normalize()),
+    ];
+    let (label,normal,quality)=candidates.into_iter().map(|(label,normal)|{
+        let approach_alignment=car_from_ball.dot(normal);
+        let shot_alignment=(-normal).dot(shot_direction);
+        (label,normal,approach_alignment*0.75+shot_alignment*0.25)
+    }).max_by(|a,b|a.2.total_cmp(&b.2)).unwrap_or(("centre",-shot_direction,0.0));
+    (ball+normal*BALL_RADIUS,ball+normal*120.0,label,quality)
+}
+
+fn candidate_to_intercept(car:CarState,candidate:ShotCandidate,targets:ShotTargets)->GroundIntercept {
+    let (contact_point,approach,contact_face,contact_quality)=select_ball_contact(car,candidate.ball,targets);
+    GroundIntercept {
+        time:candidate.time, ball:candidate.ball, ball_velocity:candidate.ball_velocity,
+        approach, shot_direction:candidate.shot_direction, contact_quality,
+        contact_point, contact_face, shot_type:candidate.shot_type,
+    }
+}
+
 /// Volt's relative goal aim: use a higher central target while the ball
 /// remains in our half, then return to the normal ground-shot height.
 fn shot_aim_point(ball: Vector, side: f32) -> Vector {
@@ -2029,6 +2066,7 @@ fn choose_jump_intercept(
                 contact_quality,
                 contact_point,
                 contact_face,
+                shot_type: ShotType::Jump,
             }));
         }
     }
@@ -2494,6 +2532,7 @@ fn choose_ground_intercept(
             contact_quality,
             contact_point,
             contact_face,
+            shot_type: ShotType::Ground,
         };
 
         if best.is_none_or(|(best_score, _)| score < best_score) {
