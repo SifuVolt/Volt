@@ -45,6 +45,7 @@ pub struct ParsedShot {
     pub shot_type: Option<ShotType>,
     pub targets: ShotTargets,
     pub ball_offset: Vector,
+    pub shot_vector: Vector,
     pub approach_target: Vector,
     pub time: f32,
 }
@@ -263,6 +264,7 @@ pub fn parse_slice_for_shot_with_target(
     if !fits { return result; }
     result.targets=corrected;
     let shot_vector=get_shot_vector(ball,car.location,corrected);
+    result.shot_vector=shot_vector;
     let ball_offset=ball-shot_vector*ball_radius;
     let angle_to_target=angle2(car_to_ball,shot_vector).abs();
     if angle_to_target>=MAX_ADJUST { return result; }
@@ -340,6 +342,7 @@ pub fn parse_slice_for_shot(
 ) -> ParsedShot {
     let mut result=ParsedShot::default();
     let direction=(ball-car.location).normalize();
+    result.shot_vector=direction;
     let ball_offset=ball-direction*ball_radius;
     if !in_field_2d(ball_offset,car.hitbox) { return result; }
     let mut found_time=time_remaining as f64;
