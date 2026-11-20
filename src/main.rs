@@ -2,13 +2,15 @@ pub mod physics;
 pub mod prediction;
 pub mod planning;
 pub mod shot_physics;
+pub mod bot;
 mod control;
 mod math;
 mod state;
 
+use crate::bot::BotBrain;
 use crate::prediction::{AbsoluteBallSlice, BallTrajectory};
+use crate::state::{BallState, CarState};
 
-use std::f32::consts::PI;
 use std::sync::Arc;
 
 use rlbot::{
@@ -29,6 +31,7 @@ use rlbot::{
 struct VoltRustAgent {
     index: u32,
     ball_prediction: Vec<AbsoluteBallSlice>,
+    brain: BotBrain,
 }
 
 impl BotAgent for VoltRustAgent {
@@ -47,6 +50,7 @@ impl BotAgent for VoltRustAgent {
         Self {
             index: controllable_info.index,
             ball_prediction: Vec::new(),
+            brain: BotBrain::new(),
         }
     }
 
@@ -79,37 +83,25 @@ impl BotAgent for VoltRustAgent {
         game_packet: &GamePacket,
         packet_queue: &mut PacketQueue,
     ) {
-        // Convert the latest authoritative RLBot prediction using this
-        // packet's clock. Prediction updates arrive independently of ticks.
-        let _prediction = BallTrajectory::from_absolute_slices(
+        let game_time = game_packet.match_info.seconds_elapsed;
+        let prediction = BallTrajectory::from_absolute_slices(
             self.ball_prediction.iter().copied(),
-            game_packet.match_info.seconds_elapsed,
+            game_time,
         );
 
-        let Some(ball) = state::BallState::from_packet(game_packet) else {
+        let Some(ball) = BallState::from_packet(game_packet) else {
+            return;
+        };
+        let Some(me) = CarState::from_packet(game_packet, self.index as usize) else {
             return;
         };
 
-        let Some(car_state) =
-            state::CarState::from_packet(game_packet, self.index as usize)
-        else {
-            return;
-        };
+        let cars: Vec<CarState> = (0..game_packet.players.len())
+            .filter_map(|index| CarState::from_packet(game_packet, index))
+            .collect();
 
-        // Keep the existing world-yaw steering behaviour while the new
-        // state layer is introduced and validated.
-        let car = &game_packet.players[self.index as usize].physics;
-        let dx = ball.location.x - car_state.location.x;
-        let dy = ball.location.y - car_state.location.y;
-
-        let target_yaw = dy.atan2(dx);
-        let angle = (target_yaw - car.rotation.yaw + PI)
-            .rem_euclid(2.0 * PI) - PI;
-
-        let mut controller = ControllerState::default();
-
-        controller.throttle = 1.0;
-        controller.steer = angle.clamp(-1.0, 1.0);
+        let controller: ControllerState =
+            self.brain.tick(me, &cars, ball, &prediction, game_time);
 
         packet_queue.push(PlayerInput {
             player_index: self.index,
