@@ -431,7 +431,9 @@ fn find_wall_drive_inner(
     wait_for_fall[0] = 1.0;
 
     let jump_index = if single.is_some() { 0 } else { 1 };
-    single.or(double)?;
+    if single.is_none() && double.is_none() {
+        return None;
+    }
     let aerial_available = aerial.is_some()
         && wait_for_fall[jump_index] >= 0.0
         && car.boost / 100.0 * 3.0
