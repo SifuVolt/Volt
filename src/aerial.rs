@@ -663,7 +663,7 @@ mod tests {
         let car = car(Vector::ZERO, 100.0);
         let candidate = AerialCandidate {
             slice: BallSlice {
-                time: 1.5,
+                time: 2.0,
                 location: Vector::new(0.0, 0.0, 900.0),
                 velocity: Vector::ZERO,
             },
