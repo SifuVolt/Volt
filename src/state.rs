@@ -164,3 +164,128 @@ impl BallState {
         })
     }
 }
+
+
+/// Match-level state mirrored from VirxERLU's game_object.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct MatchState {
+    pub time: f32,
+    pub time_remaining: f32,
+    pub overtime: bool,
+    pub round_active: bool,
+    pub kickoff: bool,
+    pub match_ended: bool,
+    pub friend_score: i32,
+    pub foe_score: i32,
+    pub gravity: Vector,
+}
+
+impl MatchState {
+    /// Build match state using the bot's team index, preserving Volt's
+    /// friend/foe score convention and the live mutator gravity.
+    pub fn from_packet(packet: &GamePacket, team: usize) -> Option<Self> {
+        use rlbot::flat::MatchPhase;
+
+        let friend_score = packet.teams.get(team)?.score;
+        let foe_score = packet.teams.get(1usize.checked_sub(team)?)?.score;
+        let game = &packet.match_info;
+        let phase = game.match_phase;
+
+        Some(Self {
+            time: game.seconds_elapsed,
+            time_remaining: game.game_time_remaining,
+            overtime: game.is_overtime,
+            round_active: matches!(phase, MatchPhase::Active | MatchPhase::Kickoff),
+            kickoff: phase == MatchPhase::Kickoff,
+            match_ended: phase == MatchPhase::Ended,
+            friend_score,
+            foe_score,
+            gravity: Vector::new(0.0, 0.0, game.world_gravity_z),
+        })
+    }
+}
+
+/// A boost pad's static field geometry and packet-updated active state.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct BoostPadState {
+    pub index: usize,
+    pub location: Vector,
+    pub large: bool,
+    pub active: bool,
+}
+
+impl BoostPadState {
+    pub fn from_field_info(
+        index: usize,
+        pad: &rlbot::flat::BoostPad,
+    ) -> Self {
+        Self {
+            index,
+            location: Vector::new(pad.location.x, pad.location.y, pad.location.z),
+            large: pad.is_full_boost,
+            active: true,
+        }
+    }
+
+    pub fn update(&mut self, packet: &GamePacket) {
+        if let Some(state) = packet.boost_pads.get(self.index) {
+            self.active = state.is_active;
+        }
+    }
+}
+
+/// Immutable per-tick snapshot produced from the RLBot packet. Strategy code
+/// consumes this instead of repeatedly decoding FlatBuffer fields.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AgentFrame {
+    pub me: CarState,
+    pub cars: Vec<CarState>,
+    pub ball: BallState,
+    pub match_state: MatchState,
+    pub boost_pads: Vec<BoostPadState>,
+}
+
+impl AgentFrame {
+    pub fn from_packet(
+        packet: &GamePacket,
+        player_index: usize,
+        team: usize,
+        boost_pads: &[BoostPadState],
+    ) -> Option<Self> {
+        let me = CarState::from_packet(packet, player_index)?;
+        let ball = BallState::from_packet(packet)?;
+        let match_state = MatchState::from_packet(packet, team)?;
+        let cars = (0..packet.players.len())
+            .filter_map(|index| CarState::from_packet(packet, index))
+            .collect();
+
+        let mut pads = boost_pads.to_vec();
+        for pad in &mut pads {
+            pad.update(packet);
+        }
+
+        Some(Self { me, cars, ball, match_state, boost_pads: pads })
+    }
+}
+
+#[cfg(test)]
+mod frame_tests {
+    use super::*;
+
+    #[test]
+    fn match_state_default_is_safe_for_uninitialized_agent() {
+        let state = MatchState::default();
+        assert_eq!(state.time, 0.0);
+        assert!(!state.round_active);
+        assert!(!state.kickoff);
+        assert!(!state.match_ended);
+    }
+
+    #[test]
+    fn boost_pad_defaults_to_active_until_first_packet_update() {
+        let pad = BoostPadState::default();
+        assert!(!pad.active);
+        assert_eq!(pad.index, 0);
+        assert_eq!(pad.location, Vector::ZERO);
+    }
+}
