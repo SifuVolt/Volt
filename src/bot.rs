@@ -1718,12 +1718,34 @@ mod tests {
     }
 
     #[test]
-    fn normal_jump_shot_uses_s_tilt_but_quick_shot_does_not() {
+    fn jump_shot_uses_air_boost_to_correct_the_contact_path() {
+        let mut brain = BotBrain::new();
+        let mut me = car(0, 0, Vector::ZERO);
+        me.airborne = true;
+        me.air_state = AirState::InAir;
+        let state = JumpShotState {
+            started_at: 1.0,
+            intercept_time: 2.0,
+            ball: Vector::new(1000.0, 0.0, 300.0),
+            approach: Vector::new(1000.0, 0.0, 0.0),
+            shot_direction: Vector::new(1.0, 0.0, 0.0),
+            quick: false,
+            dodge_started_at: None,
+            dodge_direction: Vector::new(1.0, 0.0, 0.0),
+        };
+
+        let controller = brain.run_jump_shot(me, state, 1.10);
+        assert!(controller.boost);
+        assert!(controller.throttle > 0.0);
+    }
+
+    #[test]
+    fn expired_jump_shot_is_cleared_instead_of_looping() {
         let mut brain = BotBrain::new();
         let me = car(0, 0, Vector::ZERO);
         let state = JumpShotState {
             started_at: 1.0,
-            intercept_time: 1.5,
+            intercept_time: 1.0,
             ball: Vector::new(300.0, 0.0, 200.0),
             approach: Vector::new(200.0, 0.0, 0.0),
             shot_direction: Vector::new(1.0, 0.0, 0.0),
@@ -1732,13 +1754,36 @@ mod tests {
             dodge_direction: Vector::new(1.0, 0.0, 0.0),
         };
 
+        let controller = brain.run_jump_shot(me, state, 1.20);
+        assert!(!controller.jump);
+        assert!(brain.jump_shot.is_none());
+    }
+
+    #[test]
+    fn normal_jump_shot_uses_s_tilt_but_quick_shot_does_not() {
+        let mut brain = BotBrain::new();
+        let me = car(0, 0, Vector::ZERO);
+        let state = JumpShotState {
+            started_at: 1.0,
+            intercept_time: 1.5,
+            ball: Vector::new(300.0, 0.0, 200.0),
+            approach: Vector::new(200.0, 0.0, 0.0),
+            shot_direction: Vector::new(1.0, 1.0, 0.0),
+            quick: false,
+            dodge_started_at: None,
+            dodge_direction: Vector::new(1.0, 0.0, 0.0),
+        };
+
         let normal = brain.run_jump_shot(me, state, 1.01);
         assert!(normal.jump);
         assert_eq!(normal.pitch, 1.0);
+        assert!(normal.yaw > 0.0);
+        assert!(normal.roll < 0.0);
 
         let quick = JumpShotState { quick: true, ..state };
         let fast = brain.run_jump_shot(me, quick, 1.01);
         assert_ne!(fast.pitch, 1.0);
+        assert_eq!(fast.roll, 0.0);
     }
 
     #[test]
