@@ -14,7 +14,7 @@ mod state;
 
 use crate::bot::BotBrain;
 use crate::prediction::{AbsoluteBallSlice, BallTrajectory};
-use crate::state::{AgentFrame, AgentSettings, BotPersistentState, BoostPadState, GoalState, MatchState};
+use crate::state::{AgentFrame, AgentSettings, BoostAmountMode, BotPersistentState, BoostPadState, GoalState, MatchState};
 
 use std::sync::Arc;
 
@@ -79,6 +79,9 @@ impl BotAgent for VoltRustAgent {
             friend_goal.left_post - friend_goal_width_direction * 100.0,
         );
 
+        let mut brain = BotBrain::new_with_boost_accel(settings.boost_accel);
+        brain.set_unlimited_boost(settings.boost_amount == BoostAmountMode::Unlimited);
+
         Self {
             index: controllable_info.index,
             team,
@@ -93,7 +96,7 @@ impl BotAgent for VoltRustAgent {
             boost_pads: field_info.boost_pads.iter().enumerate().map(|(index, pad)| {
                 BoostPadState::from_field_info(index, pad)
             }).collect(),
-            brain: BotBrain::new_with_boost_accel(settings.boost_accel),
+            brain,
         }
     }
 
