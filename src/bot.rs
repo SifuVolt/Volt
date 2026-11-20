@@ -89,6 +89,13 @@ struct JumpShotState {
     dodge_direction: Vector,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct HalfFlipState {
+    started_at: f32,
+    release_frames: u8,
+    flip_started_at: Option<f32>,
+}
+
 #[derive(Debug, Default)]
 pub struct BotBrain {
     kickoff_complete: bool,
@@ -105,6 +112,7 @@ pub struct BotBrain {
     defense_flip: Option<FlipState>,
     last_flip_time: f32,
     defense_recovery_target: Option<Vector>,
+    half_flip: Option<HalfFlipState>,
 }
 
 impl BotBrain {
@@ -124,6 +132,7 @@ impl BotBrain {
             defense_flip: None,
             last_flip_time: -999.0,
             defense_recovery_target: None,
+            half_flip: None,
         }
     }
 
@@ -146,6 +155,9 @@ impl BotBrain {
         boost_pads: &[BoostPadState],
     ) -> ControllerState {
         self.match_state = match_state;
+        if let Some(state) = self.half_flip {
+            return self.run_half_flip(me, state, game_time, match_state.gravity.z);
+        }
         self.boost_pads.clear();
         self.boost_pads.extend_from_slice(boost_pads);
         let plan = self.choose_plan(me, cars, ball, prediction, game_time, match_state);
@@ -190,6 +202,63 @@ impl BotBrain {
         }
 
         self.drive_to(me, plan, game_time)
+    }
+
+    fn run_half_flip(
+        &mut self,
+        car: CarState,
+        mut state: HalfFlipState,
+        game_time: f32,
+        gravity_z: f32,
+    ) -> ControllerState {
+        let elapsed = game_time - state.started_at;
+        let mut controller = ControllerState::default();
+
+        // Python half_flip: initial jump, three release frames, backwards
+        // dodge, then cancel by reversing pitch.
+        if elapsed < 0.075 {
+            controller.jump = true;
+            controller.pitch = 1.0;
+            self.half_flip = Some(state);
+            return controller;
+        }
+
+        if state.release_frames < 3 {
+            controller.jump = false;
+            state.release_frames += 1;
+            self.half_flip = Some(state);
+            return controller;
+        }
+
+        if elapsed < 0.20 {
+            controller.jump = true;
+            controller.pitch = 1.0;
+            self.half_flip = Some(state);
+            return controller;
+        }
+
+        if elapsed < 0.40 {
+            if state.flip_started_at.is_none() {
+                state.flip_started_at = Some(game_time);
+                self.last_flip_time = game_time;
+            }
+            controller.jump = true;
+            controller.pitch = -1.0;
+            self.half_flip = Some(state);
+            return controller;
+        }
+
+        self.half_flip = None;
+        let target = if car.velocity.magnitude() > 1.0 {
+            car.location + car.velocity.normalize() * 1000.0
+        } else {
+            car.location + car.forward() * 1000.0
+        };
+        if game_time - self.last_flip_time >= 0.5 && car.airborne {
+            self.defense_recovery_target = Some(target);
+            return GridDefense::recovery_controller(car, target, gravity_z);
+        }
+        controller
     }
 
     fn run_grid_defense(
@@ -654,6 +723,23 @@ impl BotBrain {
         let local_target = car.local_location(target);
         let distance = local_target.flatten().magnitude();
         let angle = local_target.y.atan2(local_target.x).abs();
+
+        // Exact half_flip_manager navigation gate from Volt's goto routine:
+        // target is substantially behind, reverse velocity is established,
+        // and enough distance remains to benefit from the reposition.
+        if !car.airborne
+            && angle > 2.5
+            && car.local_velocity().x < -300.0
+            && distance > 600.0
+        {
+            let state = HalfFlipState {
+                started_at: game_time,
+                release_frames: 0,
+                flip_started_at: None,
+            };
+            self.half_flip = Some(state);
+            return self.run_half_flip(car, state, game_time, self.match_state.gravity.z);
+        }
 
         let mut target_speed = plan.target_speed;
         if distance < 700.0 {
