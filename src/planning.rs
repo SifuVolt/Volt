@@ -280,6 +280,11 @@ fn find_wall_drive_inner(
     } else {
         WallTransform::YWall
     };
+    let car_surface = match transform {
+        WallTransform::Ground => car_location.flatten(),
+        WallTransform::XWall => car_on_x_wall(car_location),
+        WallTransform::YWall => car_on_y_wall(car_location),
+    };
 
     let target_height = |ball_pos: Vector| {
         let deviation = (ball_pos.y - foe_goal.y).abs();
