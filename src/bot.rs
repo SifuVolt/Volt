@@ -830,10 +830,10 @@ impl BotBrain {
             && !car.airborne
             && distance < 550.0
         {
-            let direction = car.local(Vector::new(
+            let direction = car.local_location(Vector::new(
                 0.0,
                 -team_side(car.team) * 5120.0,
-                0.0,
+                300.0,
             )).flatten().normalize();
             let state = KickoffDodgeState {
                 started_at: game_time,
