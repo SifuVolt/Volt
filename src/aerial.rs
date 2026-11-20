@@ -410,11 +410,12 @@ pub fn find_aerial_candidate(
 /// Only the four vertical side walls participate; floor and ceiling contacts
 /// are handled by the normal jump/aerial contact model.
 pub fn wall_shot_adjust_jump(ball: Vector, shot_direction: Vector) -> (Vector, Option<Vector>, f32) {
+    let target = ball - shot_direction * 165.0;
     let walls = [
-        ((4096.0 - ball.x).abs(), Vector::new(4096.0, ball.y, ball.z), Vector::new(-1.0, 0.0, 0.0)),
-        ((-4096.0 - ball.x).abs(), Vector::new(-4096.0, ball.y, ball.z), Vector::new(1.0, 0.0, 0.0)),
-        ((5120.0 - ball.y).abs(), Vector::new(ball.x, 5120.0, ball.z), Vector::new(0.0, -1.0, 0.0)),
-        ((-5120.0 - ball.y).abs(), Vector::new(ball.x, -5120.0, ball.z), Vector::new(0.0, 1.0, 0.0)),
+        ((4096.0 - target.x).abs(), Vector::new(4096.0, target.y, target.z), Vector::new(-1.0, 0.0, 0.0)),
+        ((-4096.0 - target.x).abs(), Vector::new(-4096.0, target.y, target.z), Vector::new(1.0, 0.0, 0.0)),
+        ((5120.0 - target.y).abs(), Vector::new(target.x, 5120.0, target.z), Vector::new(0.0, -1.0, 0.0)),
+        ((-5120.0 - target.y).abs(), Vector::new(target.x, -5120.0, target.z), Vector::new(0.0, 1.0, 0.0)),
     ];
     let (_, _, normal) = walls.into_iter().min_by(|a,b| a.0.total_cmp(&b.0)).unwrap();
     let plane_point = match (normal.x, normal.y) {
@@ -423,7 +424,6 @@ pub fn wall_shot_adjust_jump(ball: Vector, shot_direction: Vector) -> (Vector, O
         (0.0, -1.0) => Vector::new(ball.x, 5120.0, ball.z),
         _ => Vector::new(ball.x, -5120.0, ball.z),
     };
-    let target = ball - shot_direction * 165.0;
     let target_surface = match (normal.x, normal.y) {
         (-1.0, 0.0) => Vector::new(4096.0, target.y, target.z),
         (1.0, 0.0) => Vector::new(-4096.0, target.y, target.z),
@@ -443,7 +443,6 @@ pub fn wall_shot_adjust_jump(ball: Vector, shot_direction: Vector) -> (Vector, O
     let adjusted = (tangent.normalize() * angle.cos() + normal * angle.sin()).normalize();
     (adjusted, Some(normal), target_height)
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
