@@ -17,6 +17,11 @@ use rlbot::flat::ControllerState;
 const BALL_RADIUS: f32 = 92.75;
 const MAX_SPEED: f32 = 2300.0;
 const BOOST_ACCEL: f32 = 991.6667;
+const JUMP_SPEED: f32 = 291.6667;
+const JUMP_ACCEL: f32 = 1458.3333;
+const JUMP_MAX_DURATION: f32 = 0.20;
+const JUMP_GRAVITY: f32 = -650.0;
+const MIN_AIR_BOOST_TIME: f32 = 0.05;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Role {
@@ -112,6 +117,26 @@ impl BotBrain {
         game_time: f32,
     ) -> ControllerState {
         let plan = self.choose_plan(me, cars, ball, prediction, game_time);
+
+        // Keep a committed jump shot, but refresh its moving contact while the
+        // same predicted opportunity remains nearby. This prevents stale
+        // ball/approach coordinates without allowing every planner tick to
+        // replace the mechanic with a different shot.
+        if let (Some(mut state), Some(candidate)) = (self.jump_shot, plan.jump) {
+            if state.dodge_started_at.is_none() {
+                let candidate_time = game_time + candidate.time;
+                if (candidate_time - state.intercept_time).abs() <= 0.28
+                    && candidate.ball.distance(state.ball) <= 450.0
+                {
+                    state.intercept_time = candidate_time;
+                    state.ball = candidate.ball;
+                    state.approach = candidate.approach;
+                    state.shot_direction = candidate.shot_direction;
+                    self.jump_shot = Some(state);
+                }
+            }
+        }
+
         self.drive_to(me, plan, game_time)
     }
 
@@ -337,16 +362,10 @@ impl BotBrain {
                 return self.run_jump_shot(car, state, game_time);
             }
 
-            let output = default_drive(
+            let output = controlled_drive(
                 &car,
-                DriveInput {
-                    target_speed: required_speed.max(900.0),
-                    local_target: local_approach.flatten(),
-                    upside_down: false,
-                    up: None,
-                    handbrake: false,
-                    boost_accel: BOOST_ACCEL,
-                },
+                jump.approach,
+                required_speed.max(900.0),
             );
             return controller_from_drive(output, car);
         }
@@ -387,17 +406,7 @@ impl BotBrain {
             let local_shot_direction = car.local(shot.shot_direction).flatten().normalize();
             let angle = local_offset.y.atan2(local_offset.x).abs();
 
-            let output = default_drive(
-                &car,
-                DriveInput {
-                    target_speed: required_speed,
-                    local_target: car.local_location(drive_target.flatten()),
-                    upside_down: false,
-                    up: None,
-                    handbrake: false,
-                    boost_accel: BOOST_ACCEL,
-                },
-            );
+            let output = controlled_drive(&car, drive_target, required_speed);
             let velocity = output.car_speed;
             let impulse = dodge_impulse(car.velocity.flatten(), MAX_SPEED);
             let contact_surface_aligned = local_contact_point.x > 0.0
@@ -456,17 +465,7 @@ impl BotBrain {
             target_speed = target_speed.min(1650.0);
         }
 
-        let output = default_drive(
-            &car,
-            DriveInput {
-                target_speed,
-                local_target,
-                upside_down: false,
-                up: None,
-                handbrake: false,
-                boost_accel: BOOST_ACCEL,
-            },
-        );
+        let output = controlled_drive(&car, target, target_speed);
 
         let controller = controller_from_drive(output, car);
 
@@ -482,36 +481,44 @@ impl BotBrain {
         mut state: JumpShotState,
         game_time: f32,
     ) -> ControllerState {
-        let elapsed = game_time - state.started_at;
+        let elapsed = (game_time - state.started_at).max(0.0);
         let time_remaining = state.intercept_time - game_time;
         let local_ball = car.local_location(state.ball).flatten();
         let distance_to_contact = car.location.distance(state.approach);
         let mut controller = ControllerState::default();
 
-        if time_remaining < -0.25 || (elapsed > 0.30 && !car.airborne && state.dodge_started_at.is_none()) {
+        if time_remaining < -0.10
+            || (elapsed > 0.30 && !car.airborne && state.dodge_started_at.is_none())
+        {
             self.jump_shot = None;
             return controller;
         }
 
-        let local_shot_direction = car.local(state.shot_direction).flatten();
+        // Keep the nose aimed along the planned outgoing shot vector. The
+        // normal shot posture deliberately pitches back (S) while the ball is
+        // above the car; quick shots skip that posture and go straight to the
+        // contact/dodge sequence.
+        let local_shot_direction = car
+            .local(state.shot_direction.flatten())
+            .flatten()
+            .normalize();
         let (_, pd) = default_pd(&car, local_shot_direction, false, None);
         controller.pitch = pd.pitch;
         controller.yaw = pd.yaw;
         controller.roll = pd.roll;
 
-        let hold_s = !state.quick && state.ball.z > car.location.z + 65.0;
+        let hold_s = !state.quick
+            && state.ball.z > car.location.z + 65.0
+            && state.dodge_started_at.is_none();
         if hold_s {
             controller.pitch = 1.0;
-            if pd.yaw.abs() > 0.08 {
-                controller.roll = -0.20 * pd.yaw.signum();
+            // Pair A/D yaw correction with a small opposite air-roll input,
+            // matching Volt's Python jump-shot controller.
+            controller.roll = if pd.yaw.abs() > 0.08 {
+                -0.20 * pd.yaw.signum()
             } else {
-                controller.roll = 0.0;
-            }
-        }
-
-        // Keep the first jump held briefly, then release it before the dodge.
-        if elapsed <= 0.075 {
-            controller.jump = true;
+                0.0
+            };
         }
 
         if let Some(dodge_time) = state.dodge_started_at {
@@ -519,7 +526,8 @@ impl BotBrain {
             controller.jump = dodge_elapsed <= 0.045;
             controller.pitch = -state.dodge_direction.x;
             controller.yaw = state.dodge_direction.y;
-            if dodge_elapsed > 0.12 {
+            controller.roll = 0.0;
+            if dodge_elapsed > 0.12 || car.has_dodged {
                 self.jump_shot = None;
             } else {
                 self.jump_shot = Some(state);
@@ -527,29 +535,78 @@ impl BotBrain {
             return controller;
         }
 
+        // Predict the remaining jump arc and use the remaining approach error
+        // to add throttle/boost along the car's forward axis. This is the
+        // important part missing from the previous "jump, wait, dodge" logic:
+        // the car actively corrects its flight instead of merely pointing.
+        let tau = (JUMP_MAX_DURATION - elapsed).max(0.0);
+        let gravity = Vector::new(0.0, 0.0, JUMP_GRAVITY);
+        let mut predicted_velocity = car.velocity + gravity * time_remaining.max(0.0);
+        let mut predicted_car = car.location
+            + car.velocity * time_remaining.max(0.0)
+            + gravity * (0.5 * time_remaining.max(0.0).powi(2));
+
+        // The packet on the launch frame has not yet incorporated the first
+        // jump impulse. On later frames, the live velocity already contains it.
+        if elapsed <= 1.0 / 120.0 {
+            predicted_velocity += car.up() * JUMP_SPEED;
+            predicted_car += car.up() * (JUMP_SPEED * time_remaining.max(0.0));
+        }
+        predicted_velocity += car.up() * (JUMP_ACCEL * tau);
+        predicted_car += car.up()
+            * (JUMP_ACCEL * tau * (time_remaining.max(0.0) - 0.5 * tau));
+
+        let delta = state.approach - predicted_car;
+        let delta_direction = delta.normalize();
+        let forward = car.forward().normalize();
+        if delta_direction.magnitude() > 0.001 && forward.dot(delta_direction) > 0.5 {
+            let required_velocity = delta.dot(forward) / time_remaining.max(0.05);
+            let mut delta_velocity = required_velocity;
+            if car.boost > 0.0 && delta_velocity >= BOOST_ACCEL * MIN_AIR_BOOST_TIME {
+                controller.boost = true;
+                delta_velocity -= BOOST_ACCEL * MIN_AIR_BOOST_TIME;
+            }
+            let forward_speed = car.local_velocity().x;
+            let acceleration = throttle_acceleration(forward_speed);
+            if acceleration > 0.0 && delta_velocity.abs() > acceleration * MIN_AIR_BOOST_TIME {
+                controller.throttle =
+                    (delta_velocity / (acceleration * MIN_AIR_BOOST_TIME)).clamp(-1.0, 1.0);
+            }
+        }
+
+        // Hold the first jump long enough to leave the ground, then release
+        // until the real contact window. Never burn the second jump early.
+        let desired_vertical_speed = (state.approach.z - car.location.z)
+            / time_remaining.max(0.05);
+        if elapsed <= 0.06
+            || (elapsed <= JUMP_MAX_DURATION && predicted_velocity.z < desired_vertical_speed)
+        {
+            controller.jump = true;
+        }
+
         let close_enough = distance_to_contact < (92.75 + car.hitbox.length) * 1.02;
-        if elapsed >= 0.075
-            && car.airborne
+        let local_target = car.local_location(state.approach).flatten();
+        if car.airborne
+            && elapsed >= 0.06
             && local_ball.x > 0.0
             && close_enough
             && time_remaining <= 0.18
             && !car.has_double_jumped
             && !car.has_dodged
+            && local_target.x > 0.0
         {
             state.dodge_started_at = Some(game_time);
             state.dodge_direction = local_ball.normalize();
             controller.jump = true;
             controller.pitch = -state.dodge_direction.x;
             controller.yaw = state.dodge_direction.y;
+            controller.throttle = 1.0;
+            controller.boost = false;
             self.jump_shot = Some(state);
             return controller;
         }
 
-        if time_remaining < -0.10 {
-            self.jump_shot = None;
-        } else {
-            self.jump_shot = Some(state);
-        }
+        self.jump_shot = Some(state);
         controller
     }
 
@@ -571,6 +628,43 @@ impl BotBrain {
 
         controller
     }
+}
+
+/// Turn-aware drive execution used by ordinary navigation and shot setup.
+/// At large heading errors it scrubs speed before continuing the turn, which
+/// prevents the bot from carrying full speed around a missed target in a loop.
+fn controlled_drive(car: &CarState, world_target: Vector, requested_speed: f32) -> crate::control::DriveOutput {
+    let local_target = car.local_location(world_target.flatten());
+    let distance = local_target.flatten().magnitude();
+    let angle = local_target.y.atan2(local_target.x).abs();
+    let mut target_speed = requested_speed;
+
+    if distance < 260.0 {
+        target_speed = target_speed.min(450.0);
+    }
+    if angle > 2.45 {
+        target_speed = target_speed.min(350.0);
+    } else if angle > 1.85 {
+        target_speed = target_speed.min(600.0);
+    } else if angle > 1.25 {
+        target_speed = target_speed.min(1000.0);
+    } else if angle > 0.80 {
+        target_speed = target_speed.min(1500.0);
+    }
+
+    default_drive(
+        car,
+        DriveInput {
+            target_speed,
+            local_target,
+            upside_down: false,
+            up: None,
+            // Let defaultThrottle engage its radius/velocity-based powerslide
+            // only when a tight turn is actually physically appropriate.
+            handbrake: angle > 1.05,
+            boost_accel: BOOST_ACCEL,
+        },
+    )
 }
 
 fn controller_from_drive(output: crate::control::DriveOutput, car: CarState) -> ControllerState {
@@ -750,7 +844,11 @@ fn choose_jump_intercept(
         }
 
         let aim = defender_adjusted_aim(slice.location, slice.velocity, goal, opponents);
-        let mut approach = select_contact_approach(car, slice.location, aim);
+        // Use the same seven-point front-hitbox contact search as ground
+        // shots. This makes jump shots choose centre/top/left/right contact
+        // geometry instead of approaching every ball through its centre.
+        let (mut approach, _normal, contact_quality, contact_point, contact_face) =
+            select_ground_contact(car, slice.location, slice.velocity, aim, slice.time);
         // Ground steering uses the flattened projection, but the jump routine
         // must retain the predicted contact height for its launch geometry.
         approach.z = slice.location.z;
@@ -783,6 +881,7 @@ fn choose_jump_intercept(
         let score = slice.time
             + facing_angle * 0.08
             + distance / 30000.0
+            + (1.0 - contact_quality) * 0.16
             + race_pressure
             + lane_pressure;
         if best.is_none_or(|(best_score, _)| score < best_score) {
@@ -792,10 +891,9 @@ fn choose_jump_intercept(
                 ball_velocity: slice.velocity,
                 approach,
                 shot_direction: (aim - slice.location).flatten().normalize(),
-                contact_quality: 1.0,
-                contact_point: slice.location
-                    - (aim - slice.location).flatten().normalize() * BALL_RADIUS,
-                contact_face: "centre",
+                contact_quality,
+                contact_point,
+                contact_face,
             }));
         }
     }
@@ -1556,6 +1654,43 @@ mod tests {
         assert_eq!(shot.time, 1.50);
         assert!(shot.ball.z > 190.0);
         assert_eq!(shot.approach.z, shot.ball.z);
+    }
+
+    #[test]
+    fn turn_aware_drive_reduces_speed_for_a_target_behind_the_car() {
+        let me = car(0, 0, Vector::ZERO);
+        let output = controlled_drive(&me, Vector::new(-1800.0, 0.0, 0.0), 2300.0);
+        assert!(output.target_speed <= 350.0);
+        assert_eq!(output.boost, Some(false));
+    }
+
+    #[test]
+    fn jump_contact_selection_uses_a_real_front_face() {
+        let mut me = car(0, 0, Vector::new(250.0, -500.0, 0.0));
+        me.velocity = Vector::new(0.0, 700.0, 0.0);
+        let prediction = BallTrajectory {
+            slices: vec![
+                crate::prediction::BallSlice {
+                    time: 0.55,
+                    location: Vector::new(0.0, 0.0, 260.0),
+                    velocity: Vector::ZERO,
+                },
+                crate::prediction::BallSlice {
+                    time: 1.45,
+                    location: Vector::new(0.0, 0.0, 260.0),
+                    velocity: Vector::ZERO,
+                },
+            ],
+        };
+        let shot = choose_jump_intercept(
+            me,
+            &prediction,
+            Vector::new(0.0, 5120.0, 300.0),
+            &[],
+        ).unwrap();
+        assert!(shot.contact_quality.is_finite());
+        assert!(shot.contact_point.distance(shot.ball) <= BALL_RADIUS + 0.01);
+        assert!(!shot.contact_face.is_empty());
     }
 
     #[test]
