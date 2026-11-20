@@ -675,7 +675,8 @@ fn assign_roles(cars: &[CarState], ball: BallState, side: f32) -> Option<TeamRol
 /// Volt's relative goal aim: use a higher central target while the ball
 /// remains in our half, then return to the normal ground-shot height.
 fn shot_aim_point(ball: Vector, side: f32) -> Vector {
-    Vector::new(0.0, -side * 5120.0, if ball.y * side <= 0.0 { 470.0 } else { 300.0 })
+    let goal = foe_goal(side);
+    Vector::new(goal.x, goal.y, if ball.y * side <= 0.0 { 470.0 } else { 300.0 })
 }
 
 /// Port of tools.select_ball_contact. Score the centre, left, right, high and
