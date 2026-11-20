@@ -14,3 +14,5 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - name: Run Rust tests
         run: cargo test --locked
+      - name: Build RLBot release binary
+        run: cargo build --release --locked
