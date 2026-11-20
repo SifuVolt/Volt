@@ -1,0 +1,15 @@
+
+#:schema https://rlbot.org/schemas/agent.json
+
+[settings]
+name = "Volt-Rust"
+agent_id = "sifu/volt-rust"
+root_dir = "."
+run_command = ".\\target\\release\\volt-rust.exe"
+hivemind = false
+
+[details]
+description = "Volt rewritten in Rust"
+developer = ""
+language = "Rust"
+tags = ["1v1"]

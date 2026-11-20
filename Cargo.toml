@@ -1,0 +1,8 @@
+[package]
+name = "volt-rust"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+glam = "0.34.3"
+rlbot = "0.7.1"
