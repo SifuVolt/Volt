@@ -3277,9 +3277,9 @@ mod tests {
         let state = JumpShotState {
             started_at: 1.0,
             intercept_time: 1.2,
-            ball: Vector::new(100.0, 0.0, 220.0),
+            ball: Vector::new(300.0, 0.0, 220.0),
             ball_velocity: Vector::ZERO,
-            approach: Vector::new(50.0, 0.0, 0.0),
+            approach: Vector::new(200.0, 0.0, 0.0),
             shot_direction: Vector::new(1.0, 0.0, 0.0),
             contact_face: "centre",
             quick: true,
