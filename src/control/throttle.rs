@@ -275,6 +275,6 @@ mod tests {
 
         let result = default_throttle(args);
         assert_eq!(result.boost, Some(false));
-        assert_eq!(result.throttle, Some(-1.0));
+        assert_eq!(result.throttle, Some(-500.0 / 1600.0));
     }
 }
