@@ -667,7 +667,7 @@ impl BotBrain {
         if urgent_save && is_challenger {
             return Plan {
                 decision: Decision::EmergencyChallenge,
-                target: select_contact_approach(me, ball.location, shot_aim_point(ball.location, side)),
+                target: select_contact_approach(me, ball.location, shot_aim_point(ball.location, side, me.airborne)),
                 target_speed: MAX_SPEED,
                 shot: None,
                 jump: None,
@@ -2272,9 +2272,10 @@ fn candidate_to_intercept(car:CarState,candidate:ShotCandidate,targets:ShotTarge
 
 /// Volt's relative goal aim: use a higher central target while the ball
 /// remains in our half, then return to the normal ground-shot height.
-fn shot_aim_point(ball: Vector, side: f32) -> Vector {
+fn shot_aim_point(ball: Vector, side: f32, airborne: bool) -> Vector {
     let goal = foe_goal(side);
-    Vector::new(goal.x, goal.y, if ball.y * side <= 0.0 { 470.0 } else { 300.0 })
+    let height = if ball.y * side <= 0.0 { 470.0 } else if airborne { 210.0 } else { 310.0 };
+    Vector::new(goal.x, goal.y, height)
 }
 
 /// Port of tools.select_ball_contact. Score the centre, left, right, high and
