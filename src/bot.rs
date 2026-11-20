@@ -97,7 +97,6 @@ struct KickoffDodgeState {
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct SpeedFlipState {
-    started_at: f32,
     step_start: f32,
     step_index: u8,
     direction: f32,
@@ -859,7 +858,6 @@ impl BotBrain {
         {
             let right_handed = car.location.x * -team_side(car.team) > 0.0;
             let state = SpeedFlipState {
-                started_at: game_time,
                 step_start: game_time,
                 step_index: 0,
                 direction: if right_handed { 1.0 } else { -1.0 },
@@ -2841,6 +2839,73 @@ mod tests {
         );
 
         assert_ne!(plan.decision, Decision::KickoffKicker);
+    }
+
+    #[test]
+    fn kickoff_dodge_uses_python_jump_release_dodge_windows() {
+        let mut brain = BotBrain::new();
+        let state = KickoffDodgeState {
+            started_at: 0.0,
+            direction: Vector::new(1.0, 0.0, 0.0),
+        };
+        assert!(brain.run_kickoff_dodge(state, 0.02).jump);
+        let release = brain.run_kickoff_dodge(state, 0.06);
+        assert!(!release.jump);
+        let dodge = brain.run_kickoff_dodge(state, 0.10);
+        assert!(dodge.jump);
+        assert_eq!(dodge.pitch, -1.0);
+        let done = brain.run_kickoff_dodge(state, 0.16);
+        assert!(!done.jump);
+        assert!(brain.kickoff_complete);
+        assert!(brain.kickoff_dodge.is_none());
+    }
+
+    #[test]
+    fn speedflip_applies_the_python_diagonal_dodge_and_cancel_sequence() {
+        let mut brain = BotBrain::new();
+        let mut me = car(0, 0, Vector::ZERO);
+        me.boost = 50.0;
+        let state = SpeedFlipState {
+            step_start: 0.0,
+            step_index: 3,
+            direction: 1.0,
+            use_boost: true,
+        };
+        let dodge = brain.run_speed_flip(me, state, 0.07);
+        assert!(dodge.jump);
+        assert_eq!(dodge.pitch, -1.0);
+        assert_eq!(dodge.yaw, 1.0);
+        assert!(dodge.boost);
+
+        let cancel_state = brain.speed_flip.unwrap();
+        let cancel = brain.run_speed_flip(me, cancel_state, 0.09);
+        assert_eq!(cancel.pitch, 1.0);
+        assert!(cancel.boost);
+    }
+
+    #[test]
+    fn half_flip_releases_jump_then_cancels_backflip() {
+        let mut brain = BotBrain::new();
+        let me = car(0, 0, Vector::ZERO);
+        let state = HalfFlipState {
+            started_at: 0.0,
+            release_frames: 0,
+            flip_started_at: None,
+        };
+        let initial = brain.run_half_flip(me, state, 0.02, -650.0);
+        assert!(initial.jump);
+        assert_eq!(initial.pitch, 1.0);
+
+        let release_state = brain.half_flip.unwrap();
+        let release = brain.run_half_flip(me, release_state, 0.08, -650.0);
+        assert!(!release.jump);
+
+        let mut cancel_state = brain.half_flip.unwrap();
+        cancel_state.release_frames = 3;
+        let cancel = brain.run_half_flip(me, cancel_state, 0.25, -650.0);
+        assert!(cancel.jump);
+        assert_eq!(cancel.pitch, -1.0);
+        assert!(brain.half_flip.unwrap().flip_started_at.is_some());
     }
 
 }
