@@ -275,7 +275,7 @@ pub fn parse_slice_for_shot_with_target(
     if angle_to_target>NO_ADJUST {
         let side=sign(dot3(cross3(shot_vector,Vector::new(0.0,0.0,1.0)),car_to_ball));
         let to_offset=final_target-car_flat;
-        let perp=Vector::new(to_offset.x,to_offset.y,0.0).cross(Vector::new(0.0,0.0,side)).normalize();
+        let perp=Vector::new(to_offset.x,to_offset.y,0.0).cross(Vector::new(0.0,0.0,side as f32)).normalize();
         final_target=if min_adjust {
             final_target+perp*offset_width as f32
         } else {
@@ -285,7 +285,7 @@ pub fn parse_slice_for_shot_with_target(
     if !in_field_2d(final_target,car.hitbox) { return result; }
 
     let mut found_time=time_remaining as f64;
-    if do_ground || do_jump || do_double {
+    if do_ground || do_jump || do_double_jump {
         let distance=get_travel_distance(ball.flatten(),ball_offset.flatten(),car_flat,shot_vector.flatten(),offset_width)
             -(car.hitbox.length as f64*0.45);
         let direction=(final_target-car_flat).normalize();
@@ -293,14 +293,14 @@ pub fn parse_slice_for_shot_with_target(
         if viable_time!=-1.0 {
             found_time=viable_time;
             if do_ground {
-                result.found=ground_shot_is_viable(found_time as f32,car.hitbox.height,car.airborne,ball_offset.z);
+                result.found=ground_shot_is_viable(car.hitbox.height,car.airborne,ball_offset.z);
                 if result.found { result.shot_type=Some(ShotType::Ground); }
             }
             if do_jump && !result.found {
                 result.found=jump_shot_is_viable(found_time as f32,gravity.z,car.velocity.z,car.hitbox.height,car.airborne,ball_offset.z,safe);
                 if result.found { result.shot_type=Some(ShotType::Jump); }
             }
-            if do_double && !result.found {
+            if do_double_jump && !result.found {
                 result.found=double_jump_shot_is_viable(found_time as f32,gravity.z,car.velocity.z,car.hitbox.height*0.5,car.airborne,ball_offset.z,safe);
                 if result.found { result.shot_type=Some(ShotType::DoubleJump); }
             }
