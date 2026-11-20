@@ -1550,6 +1550,7 @@ mod tests {
             me,
             &prediction,
             Vector::new(0.0, 5120.0, 300.0),
+            &[],
         ).unwrap();
 
         assert_eq!(shot.time, 1.50);
