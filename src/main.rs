@@ -183,6 +183,10 @@ impl BotAgent for VoltRustAgent {
             game_time,
             frame.match_state,
             &frame.boost_pads,
+            crate::shot_parser::ShotTargets {
+                left: self.foe_goal_shot.0,
+                right: self.foe_goal_shot.1,
+            },
         );
 
         packet_queue.push(PlayerInput {
