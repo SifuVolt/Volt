@@ -462,7 +462,9 @@ mod tests {
 
     #[test]
     fn aerial_candidate_requires_a_valid_boost_budget() {
-        let car = car(Vector::new(0.0, -1200.0, 17.0), 100.0);
+        let mut car = car(Vector::new(0.0, -1200.0, 17.0), 100.0);
+        // Face downfield (+Y in this test setup), matching the approach lane.
+        car.orientation = Matrix3::new(0.0, std::f32::consts::FRAC_PI_2, 0.0);
         let prediction = BallTrajectory {
             slices: vec![
                 BallSlice {
