@@ -913,14 +913,19 @@ impl BotBrain {
 
         if geometry.on_wall && geometry.distance < 320.0 && time_remaining < 1.65 {
             if plan.mode == WallDriveMode::Aerial {
+                let slice = crate::prediction::BallSlice {
+                    time: time_remaining,
+                    ..plan.ball_slice
+                };
+                let shot_target = relative_goal_aim_point(car, geometry.ball, self.shot_targets);
+                let (target_location, shot_direction) = party_cannon_contact_geometry(
+                    car, slice, shot_target, self.match_state.gravity,
+                );
                 let candidate = AerialCandidate {
-                    slice: crate::prediction::BallSlice {
-                        time: time_remaining,
-                        ..plan.ball_slice
-                    },
-                    shot_target: relative_goal_aim_point(car, geometry.ball, self.shot_targets),
-                    target_location: geometry.approach,
-                    shot_direction: geometry.shot_direction,
+                    slice,
+                    shot_target,
+                    target_location,
+                    shot_direction,
                     double_jump: true,
                     fast: true,
                     estimated_boost: car.boost,
