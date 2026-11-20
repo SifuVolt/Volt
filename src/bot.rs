@@ -1,9 +1,8 @@
-//! Active Volt decision layer.
+//! Active Volt decision and shot-execution layer.
 //!
-//! This is the first gameplay-connected port of Volt's current run_logic
-//! priorities: kickoff assignment, Noob Black-style challenger/goalie roles,
-//! urgent own-half saves, and Grid defensive positioning. Predicted ground
-//! and single-jump contacts feed active drive, dodge, and jump-shot routines.
+//! Kickoff assignment, team roles, defensive priorities, prediction-based
+//! ground/jump contacts, finite-boost reachability, contact geometry and
+//! timed shot execution all feed the live RLBot controller.
 
 use crate::{
     control::{default_drive, default_pd, DriveInput},
@@ -825,14 +824,11 @@ fn select_ground_contact(
         } else {
             approach_alignment
         };
-        let ball_motion_alignment = ball_velocity.flatten().normalize().dot(shot_direction);
-
         // The outgoing shot angle remains important, but a reachable flank
         // can beat a centre-line approach that would require a large cut.
-        let score = approach_alignment * 0.48
-            + shot_alignment * 0.37
-            + velocity_alignment * 0.10
-            + ball_motion_alignment * 0.05;
+        let score = approach_alignment * 0.52
+            + shot_alignment * 0.38
+            + velocity_alignment * 0.10;
 
         if score > best.2 {
             best = (ball + normal * 300.0, normal, score);
