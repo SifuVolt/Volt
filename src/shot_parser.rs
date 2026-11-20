@@ -349,7 +349,7 @@ pub fn parse_slice_for_shot(
         if viable!=-1.0 {
             found_time=viable;
             if do_ground {
-                result.found=ground_shot_is_viable(found_time as f32,car.hitbox.height,car.airborne,ball_offset.z);
+                result.found=ground_shot_is_viable(car.hitbox.height,car.airborne,ball_offset.z);
                 if result.found { result.shot_type=Some(ShotType::Ground); }
             }
             if do_jump && !result.found {
