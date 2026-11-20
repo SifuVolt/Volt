@@ -808,7 +808,9 @@ fn select_ground_contact(
     let lateral = Vector::new(-shot_direction.y, shot_direction.x, 0.0);
     let projected_car = car.location + car.velocity.flatten() * time.min(0.35);
     let car_from_ball = (projected_car - ball).flatten().normalize();
-    let velocity_direction = car.velocity.flatten().normalize();
+    // Score the approach using closing velocity, not car velocity alone: a
+    // moving ball changes which face of the car can meet it cleanly.
+    let velocity_direction = (car.velocity - ball_velocity).flatten().normalize();
     let candidates = [
         -shot_direction,
         (-shot_direction + lateral * 0.55).normalize(),
@@ -1087,7 +1089,9 @@ mod tests {
         no_boost.boost = 0.0;
         let mut boosted = no_boost;
         boosted.boost = 100.0;
-        let target = Vector::new(0.0, -2200.0, 0.0);
+        // The car's forward axis is world +X at zero yaw, so keep this
+        // target aligned to ensure the boost comparison tests boost itself.
+        let target = Vector::new(2200.0, 0.0, 0.0);
         assert!(estimate_ground_eta(no_boost, target) > estimate_ground_eta(boosted, target));
 
         let mut already_turning = no_boost;
@@ -1143,8 +1147,9 @@ mod tests {
     #[test]
     fn ground_eta_increases_for_a_large_heading_change() {
         let me = car(0, 0, Vector::ZERO);
-        let straight = estimate_ground_eta(me, Vector::new(0.0, -1500.0, 0.0));
-        let turning = estimate_ground_eta(me, Vector::new(1500.0, 0.0, 0.0));
+        // At zero yaw, +X is straight ahead and +Y requires a 90-degree turn.
+        let straight = estimate_ground_eta(me, Vector::new(1500.0, 0.0, 0.0));
+        let turning = estimate_ground_eta(me, Vector::new(0.0, 1500.0, 0.0));
         assert!(turning > straight);
     }
 
