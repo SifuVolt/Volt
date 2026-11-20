@@ -11,7 +11,6 @@ use crate::{
 };
 use rlbot::flat::ControllerState;
 
-#[derive(Debug)]
 pub struct DefenseOutput {
     pub controller: ControllerState,
     pub start_flip: bool,
@@ -451,5 +450,40 @@ mod tests {
         );
         assert_eq!(output.controller.throttle, 1.0);
         assert!(output.controller.steer.is_finite());
+    }
+
+    #[test]
+    fn landing_plane_matches_virx_wall_and_goal_line_branches() {
+        assert_eq!(
+            GridDefense::landing_plane(
+                Vector::new(4000.0, 0.0, 1000.0),
+                Vector::new(1000.0, 0.0, 0.0),
+                -650.0,
+            ),
+            0,
+        );
+        assert_eq!(
+            GridDefense::landing_plane(
+                Vector::new(0.0, 5120.0, 1000.0),
+                Vector::new(0.0, 0.0, -500.0),
+                -650.0,
+            ),
+            5,
+        );
+    }
+
+    #[test]
+    fn recovery_uses_landing_plane_orientation_and_throttle() {
+        let me = car(0, Vector::new(0.0, -1000.0, 700.0));
+        let controller = GridDefense::recovery_controller(
+            me,
+            Vector::new(1000.0, -3000.0, 0.0),
+            -650.0,
+        );
+        assert_eq!(controller.throttle, 1.0);
+        assert!(!controller.boost);
+        assert!(controller.pitch.is_finite());
+        assert!(controller.yaw.is_finite());
+        assert!(controller.roll.is_finite());
     }
 }
