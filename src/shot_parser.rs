@@ -210,7 +210,12 @@ fn ray_intersects_line(origin: V2, direction: V2, p1: V2, p2: V2) -> f64 {
     let v2=p2.sub(p1);
     let v3=V2::new(-direction.y,direction.x);
     let denominator=v2.dot(v3);
-    let t1=(v2.x*v1.y-v2.y*v1.x)/denominator;
+    // CLib's flat_cross returns a 3-component Vector and the source calls
+    // its full 3D magnitude here; retain that exact calculation.
+    let cross_x=v2.y-v1.y;
+    let cross_y=v1.x-v2.x;
+    let cross_z=v2.x*v1.y-v2.y*v1.x;
+    let t1=(cross_x*cross_x+cross_y*cross_y+cross_z*cross_z).sqrt()/denominator;
     if t1<0.0 { return -1.0; }
     let t2=v1.dot(v3)/denominator;
     if t1>=0.0 && t2<=1.0 { t1 } else { -1.0 }
@@ -255,8 +260,8 @@ pub fn parse_slice_for_shot_with_target(
     let mut result=ParsedShot::default();
     let car_to_ball=ball-car.location;
     let (corrected,fits)=correct_for_posts(ball,targets);
-    result.targets=corrected;
     if !fits { return result; }
+    result.targets=corrected;
     let shot_vector=get_shot_vector(ball,car.location,corrected);
     let ball_offset=ball-shot_vector*ball_radius;
     let angle_to_target=angle2(car_to_ball,shot_vector).abs();
@@ -407,7 +412,8 @@ mod tests {
         let c=car(50.0,Vector::new(0.0,-1000.0,17.0),Vector::new(0.0,1200.0,0.0),Matrix3::new(0.0,1.5707963,0.0));
         let targets=ShotTargets{left:Vector::new(-700.0,5120.0,350.0),right:Vector::new(700.0,5120.0,350.0)};
         let result=parse_slice_for_shot_with_target(&c,Vector::new(0.0,0.0,100.0),Vector::ZERO,1.0,92.75,991.6667,Vector::new(0.0,0.0,-650.0),targets,true,true,true,false,true,true);
-        assert!(result.found || !result.found); // geometry may correctly reject if goal window cannot fit this contact
+        assert!(result.time.is_finite());
+        assert!(result.ball_offset.x.is_finite() && result.ball_offset.y.is_finite() && result.ball_offset.z.is_finite());
     }
 
     #[test]
