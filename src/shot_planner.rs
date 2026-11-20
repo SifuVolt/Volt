@@ -169,7 +169,7 @@ pub fn find_best_shot(
     targets:ShotTargets,gravity:Vector,boost_accel:f32,game_time:f32,
     kickoff_contest_until:f32,urgent_save:bool,elected_challenger:bool,horizon:f32,
 )->Option<ShotCandidate> {
-    if me.airborne || prediction.slices.is_empty() {return None;}
+    if me.airborne || prediction.slices.is_empty() || horizon.min(6.0)<=0.10 {return None;}
     let friends:Vec<CarState>=cars.iter().copied().filter(|c|c.team==me.team&&!c.demolished&&c.index!=me.index).collect();
     let foes:Vec<CarState>=cars.iter().copied().filter(|c|c.team!=me.team&&!c.demolished).collect();
     let in_own_net=me.location.y*team_side(me.team)>=5120.0 && me.location.x.abs()<=900.0;
@@ -195,6 +195,13 @@ pub fn find_best_shot(
         let parsed=parse_budget(me,*slice,remaining,targets,gravity,boost_accel,flags);
         if !parsed.found {continue;}
         let Some(kind)=parsed.shot_type else{continue;};
+        if kind==ShotType::Jump && me.boost<8.0 {
+            let required_jump_time=get_jump_time(
+                slice.location.z-me.location.z,me.velocity.z,gravity.z,
+            ).time as f32;
+            let required_sequence_time=required_jump_time.max(0.0)*1.08+0.23;
+            if remaining<required_sequence_time {continue;}
+        }
         if !useful(me,&foes,&friends,slice.location,remaining,kind,game_time<kickoff_contest_until,elected_challenger) {continue;}
         let mut value=if urgent_save {remaining+match kind {ShotType::Ground=>0.0,ShotType::Jump=>0.005,ShotType::DoubleJump=>0.015,ShotType::Aerial=>0.025}}
             else {score(me,&friends,slice.location,slice.velocity,kind,remaining,targets,gravity.z)};
