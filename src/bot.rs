@@ -7,7 +7,7 @@
 use crate::{
     control::{default_drive, default_pd, DriveInput},
     math::Vector,
-    physics::drive::{dodge_impulse, throttle_acceleration},
+    physics::drive::{curvature, dodge_impulse, throttle_acceleration},
     prediction::BallTrajectory,
     shot_physics::get_jump_time,
     state::{BallState, CarState},
@@ -1026,15 +1026,32 @@ fn estimate_ground_eta(car: CarState, target: Vector) -> f32 {
 
     let angle = local.y.atan2(local.x).abs();
     let speed = car.velocity.flatten().magnitude();
-    let base_turn_rate = (2.8 - 0.75 * (speed / MAX_SPEED).clamp(0.0, 1.0)).max(1.4);
+    // Convert the same curvature table used by live steering into an expected
+    // yaw rate. A low-speed floor covers steering response near a standstill.
+    let curvature_turn_rate = speed * curvature(speed);
+    let base_turn_rate = if speed < 250.0 {
+        2.6
+    } else {
+        curvature_turn_rate.clamp(1.6, 4.5)
+    };
     let turn_sign = local.y.signum();
     let current_yaw_rate = car.angular_velocity.z * turn_sign;
     let turn_rate = (base_turn_rate + current_yaw_rate.clamp(-1.5, 1.5) * 0.45).max(0.8);
-    let turn_time = (angle / turn_rate).min(1.6);
-    let forward_speed = car.local_velocity().x.max(0.0);
-    let distance_during_turn = forward_speed * turn_time * 0.35;
+    let raw_turn_time = (angle / turn_rate).min(1.6);
+    // Fast cars need room to scrub speed before a sharp turn. This mirrors
+    // defaultThrottle's curvature speed cap instead of assuming instant steering.
+    let braking_time = if angle > 0.65 && speed > 1000.0 {
+        ((speed - 1000.0) / 3500.0).clamp(0.0, 0.35)
+            * (angle / std::f32::consts::PI).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    let turn_time = (raw_turn_time + braking_time).min(1.9);
+    let target_direction = (target - car.location).flatten().normalize();
+    let projected_speed = car.velocity.flatten().dot(target_direction).max(0.0);
+    let distance_during_turn = projected_speed * raw_turn_time * 0.45;
     let mut remaining = (distance - distance_during_turn).max(0.0);
-    let mut velocity = forward_speed;
+    let mut velocity = projected_speed;
     let can_boost = angle < 0.55;
     // Boost is finite: never let the planner spend more than the car actually has.
     let mut boost_remaining = car.boost.max(0.0) / 33.333333;
@@ -1287,6 +1304,16 @@ mod tests {
         let turning_eta = estimate_ground_eta(already_turning, turning_target);
         let neutral_eta = estimate_ground_eta(no_boost, turning_target);
         assert!(turning_eta < neutral_eta);
+    }
+
+    #[test]
+    fn ground_eta_accounts_for_speed_scrub_before_a_sharp_turn() {
+        let mut fast = car(0, 0, Vector::ZERO);
+        fast.velocity = Vector::new(2000.0, 0.0, 0.0);
+        let slow = car(1, 0, Vector::ZERO);
+        let target = Vector::new(0.0, 1500.0, 0.0);
+
+        assert!(estimate_ground_eta(fast, target) > estimate_ground_eta(slow, target));
     }
 
     #[test]
