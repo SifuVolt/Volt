@@ -45,7 +45,7 @@ pub struct AerialShot {
     pub double_jump: bool,
     pub fast: bool,
     pub elapsed: f32,
-    pub jump_released: bool,
+    pub jump_release_frames: u8,
     pub second_jump_frames: u8,
     pub jumped: bool,
     pub dodging: bool,
@@ -67,7 +67,7 @@ impl AerialShot {
             double_jump: candidate.double_jump,
             fast: candidate.fast,
             elapsed: 0.0,
-            jump_released: false,
+            jump_release_frames: 0,
             second_jump_frames: 0,
             jumped: car.has_jumped || car.airborne,
             dodging: false,
@@ -105,12 +105,12 @@ impl AerialShot {
         self.elapsed = (game_time - self.started_at).max(0.0);
         let mut currently_double_jumping = false;
 
-        if !self.jumped && !car.airborne && !car.has_dodged {
+        if !self.jumped && !car.has_dodged {
             if self.elapsed <= JUMP_DURATION {
                 controls.jump = true;
-            } else if self.double_jump && !self.jump_released {
-                self.jump_released = true;
+            } else if self.double_jump && self.jump_release_frames < 3 {
                 controls.jump = false;
+                self.jump_release_frames += 1;
                 return controls;
             } else if self.double_jump && self.second_jump_frames < 6 {
                 controls.jump = true;
@@ -394,10 +394,9 @@ pub fn find_aerial_candidate(
             slice,
             target_location,
             shot_direction,
-            // The CLib aerial validator does not expose a second-jump flag.
-            // Keep this false until the full Party Cannon boost estimator is
-            // ported rather than guessing from the acceleration ratio.
-            double_jump: false,
+            // CLib's fast-aerial branch includes the second jump impulse;
+            // execute the matching three-frame release and second-jump hold.
+            double_jump: validation.fast,
             fast: validation.fast,
             estimated_boost: validation.validation.boost_estimate as f32,
             score,
@@ -471,6 +470,11 @@ mod tests {
                 BallSlice {
                     time: 2.0,
                     location: Vector::new(500.0, 0.0, 1100.0),
+                    velocity: Vector::ZERO,
+                },
+                BallSlice {
+                    time: 3.0,
+                    location: Vector::new(0.0, 0.0, 900.0),
                     velocity: Vector::ZERO,
                 },
             ],
