@@ -8,7 +8,7 @@
 use crate::{
     control::{default_drive, default_pd, DriveInput},
     math::Vector,
-    physics::drive::dodge_impulse,
+    physics::drive::{dodge_impulse, throttle_acceleration},
     prediction::BallTrajectory,
     shot_physics::get_jump_time,
     state::{BallState, CarState},
@@ -48,7 +48,10 @@ enum Decision {
 struct GroundIntercept {
     time: f32,
     ball: Vector,
+    ball_velocity: Vector,
     approach: Vector,
+    shot_direction: Vector,
+    contact_quality: f32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -352,7 +355,18 @@ impl BotBrain {
             let local_offset = car.local_location(shot.approach.flatten());
             let distance_remaining = (shot.approach - car.location).flat_distance(Vector::ZERO)
                 - car.hitbox.length / 3.0;
-            let required_speed = (distance_remaining.max(0.0) / t.max(0.001)).min(MAX_SPEED);
+            let approach_direction = (shot.approach - car.location).flatten().normalize();
+            let closing_speed = car.velocity.flatten().dot(approach_direction);
+            let time_distance_speed = distance_remaining.max(0.0) / t.max(0.001);
+            // Closed-loop speed demand: compensate for current closing speed,
+            // but avoid asking for maximum speed when the intercept is already
+            // comfortably reachable. default_throttle applies the curvature cap.
+            let mut required_speed = (time_distance_speed
+                + (time_distance_speed - closing_speed) * 0.55)
+                .clamp(450.0, MAX_SPEED);
+            if t < 0.28 {
+                required_speed = required_speed.max(1900.0);
+            }
             let local_ball = car.local_location(shot.ball);
             let local_future_velocity = car.local(car.velocity + Vector::new(0.0, 0.0, -650.0) * t).flatten();
             let angle = local_offset.y.atan2(local_offset.x).abs();
@@ -734,7 +748,10 @@ fn choose_jump_intercept(
             best = Some((score, GroundIntercept {
                 time: slice.time,
                 ball: slice.location,
+                ball_velocity: slice.velocity,
                 approach,
+                shot_direction: (goal - slice.location).flatten().normalize(),
+                contact_quality: 1.0,
             }));
         }
     }
@@ -742,12 +759,123 @@ fn choose_jump_intercept(
     best.map(|(_, intercept)| intercept)
 }
 
-/// Select the earliest prediction sample that the current ground-drive model
-/// can plausibly reach. The authoritative RLBot prediction already includes
-/// collisions; this function only ranks its samples and does not resimulate it.
+/// Predict a useful point inside the opponent goal window using the
+/// ball's velocity. This is deliberately conservative when the ball is not
+/// travelling toward the goal plane.
+fn predicted_goal_aim(ball: Vector, velocity: Vector, goal: Vector) -> Vector {
+    let dy = goal.y - ball.y;
+    let time = if velocity.y.abs() > 100.0 {
+        dy / velocity.y
+    } else {
+        -1.0
+    };
+
+    if (0.05..3.0).contains(&time) {
+        Vector::new(
+            (ball.x + velocity.x * time).clamp(-780.0, 780.0),
+            goal.y,
+            (ball.z + velocity.z * time - 325.0 * time * time).clamp(120.0, 550.0),
+        )
+    } else {
+        Vector::new(0.0, goal.y, 300.0)
+    }
+}
+
+/// Select a ground contact using the predicted arrival position of the car,
+/// not just its current location. Side contacts are considered when they give
+/// a materially better approach while retaining a useful outgoing angle.
+fn select_ground_contact(
+    car: CarState,
+    ball: Vector,
+    ball_velocity: Vector,
+    aim: Vector,
+    time: f32,
+) -> (Vector, Vector, f32) {
+    let shot_direction = (aim - ball).flatten().normalize();
+    if shot_direction.magnitude() < 0.001 {
+        return (ball.flatten(), Vector::ZERO, 0.0);
+    }
+
+    let lateral = Vector::new(-shot_direction.y, shot_direction.x, 0.0);
+    let projected_car = car.location + car.velocity.flatten() * time.min(0.35);
+    let car_from_ball = (projected_car - ball).flatten().normalize();
+    let velocity_direction = car.velocity.flatten().normalize();
+    let candidates = [
+        -shot_direction,
+        (-shot_direction + lateral * 0.55).normalize(),
+        (-shot_direction - lateral * 0.55).normalize(),
+    ];
+
+    let mut best = (ball - shot_direction * 300.0, shot_direction, f32::NEG_INFINITY);
+    for normal in candidates {
+        let approach_alignment = car_from_ball.dot(normal);
+        let shot_alignment = (-normal).dot(shot_direction);
+        let velocity_alignment = if velocity_direction.magnitude() > 0.001 {
+            velocity_direction.dot(normal)
+        } else {
+            approach_alignment
+        };
+        let ball_motion_alignment = ball_velocity.flatten().normalize().dot(shot_direction);
+
+        // The outgoing shot angle remains important, but a reachable flank
+        // can beat a centre-line approach that would require a large cut.
+        let score = approach_alignment * 0.48
+            + shot_alignment * 0.37
+            + velocity_alignment * 0.10
+            + ball_motion_alignment * 0.05;
+
+        if score > best.2 {
+            best = (ball + normal * 300.0, normal, score);
+        }
+    }
+
+    (best.0.flatten(), best.1, best.2)
+}
+
+/// Estimate arrival time with turn-in cost and a short forward-acceleration
+/// simulation. Boost is only credited when the target is reasonably aligned.
+fn estimate_ground_eta(car: CarState, target: Vector) -> f32 {
+    let local = car.local_location(target).flatten();
+    let distance = local.magnitude();
+    if distance < 1.0 {
+        return 0.0;
+    }
+
+    let angle = local.y.atan2(local.x).abs();
+    let speed = car.velocity.flatten().magnitude();
+    let turn_rate = (2.8 - 0.75 * (speed / MAX_SPEED).clamp(0.0, 1.0)).max(1.4);
+    let turn_time = (angle / turn_rate).min(1.4);
+    let forward_speed = car.local_velocity().x.max(0.0);
+    let distance_during_turn = forward_speed * turn_time * 0.35;
+    let mut remaining = (distance - distance_during_turn).max(0.0);
+    let mut velocity = forward_speed;
+    let can_boost = car.boost > 0.0 && angle < 0.55;
+    let mut elapsed = turn_time;
+
+    for _ in 0..360 {
+        if remaining <= 0.0 {
+            break;
+        }
+        let throttle = throttle_acceleration(velocity);
+        let boost = if can_boost && velocity < 2200.0 {
+            991.6667
+        } else {
+            0.0
+        };
+        velocity = (velocity + (throttle + boost) / 120.0).min(MAX_SPEED);
+        remaining -= velocity / 120.0;
+        elapsed += 1.0 / 120.0;
+    }
+
+    elapsed
+}
+
+/// Select the earliest useful predicted ground contact. Candidates are
+/// ranked by arrival feasibility, contact geometry and the resulting shot
+/// angle rather than simply choosing the first reachable slice.
 fn choose_ground_intercept(
     car: CarState,
-    ball: BallState,
+    _ball: BallState,
     prediction: &BallTrajectory,
     goal: Vector,
 ) -> Option<GroundIntercept> {
@@ -759,10 +887,12 @@ fn choose_ground_intercept(
     for slice in prediction.slices.iter().filter(|slice| {
         slice.time >= 0.04 && slice.time <= 3.0 && slice.location.z <= 190.0
     }) {
-        let target = select_contact_approach(car, slice.location, goal);
-        let delta = (target - car.location).flatten();
-        let distance = delta.magnitude();
-        let direction = delta.normalize();
+        let aim = predicted_goal_aim(slice.location, slice.velocity, goal);
+        let (approach, normal, contact_quality) =
+            select_ground_contact(car, slice.location, slice.velocity, aim, slice.time);
+        let distance = approach.flat_distance(car.location);
+        let local = car.local_location(approach);
+        let direction = (approach - car.location).flatten().normalize();
         let forward = car.forward().flatten().normalize();
         let facing_angle = if direction.magnitude() > 0.001 && forward.magnitude() > 0.001 {
             direction.dot(forward).clamp(-1.0, 1.0).acos()
@@ -770,25 +900,38 @@ fn choose_ground_intercept(
             0.0
         };
 
-        let speed = car.velocity.flatten().magnitude();
-        let effective_speed = (speed + 650.0).clamp(850.0, 2100.0);
-        let eta = distance / effective_speed + (1.0 - facing_angle.cos()) * 0.28;
-        if eta > slice.time + 0.10 {
+        let eta = estimate_ground_eta(car, approach);
+        if eta > slice.time + 0.08 {
             continue;
         }
 
-        // Earlier feasible contacts win; alignment breaks close ties.
-        let score = slice.time + facing_angle * 0.08 + distance / 30000.0;
+        let shot_direction = (aim - slice.location).flatten().normalize();
+        let ball_progress = slice.velocity.flatten().dot(shot_direction);
+        let urgency = (slice.time - eta).max(0.0);
+        let score = slice.time * 0.22
+            + facing_angle * 0.12
+            + distance / 40000.0
+            + (1.0 - contact_quality) * 0.24
+            - (ball_progress / 3000.0).clamp(-0.08, 0.08)
+            + urgency * 0.08
+            + (local.y.abs() / 5000.0).min(0.08);
+
+        let intercept = GroundIntercept {
+            time: slice.time,
+            ball: slice.location,
+            ball_velocity: slice.velocity,
+            approach,
+            shot_direction,
+            contact_quality,
+        };
+
         if best.is_none_or(|(best_score, _)| score < best_score) {
-            best = Some((score, GroundIntercept {
-                time: slice.time,
-                ball: slice.location,
-                approach: target,
-            }));
+            best = Some((score, intercept));
         }
+
+        let _ = normal;
     }
 
-    let _ = ball;
     best.map(|(_, intercept)| intercept)
 }
 
@@ -861,6 +1004,28 @@ mod tests {
         let ball = Vector::new(0.0, 0.0, 100.0);
         let target = select_contact_approach(car, ball, Vector::new(0.0, 5120.0, 300.0));
         assert!(target.x.abs() > 10.0);
+    }
+
+    #[test]
+    fn ground_contact_accounts_for_predicted_car_motion() {
+        let mut me = car(0, 0, Vector::new(500.0, -600.0, 0.0));
+        me.velocity = Vector::new(-500.0, 900.0, 0.0);
+        let ball = Vector::new(0.0, 0.0, 100.0);
+        let aim = Vector::new(0.0, 5120.0, 300.0);
+        let (approach, normal, quality) =
+            select_ground_contact(me, ball, Vector::ZERO, aim, 0.5);
+
+        assert!(approach.x.is_finite() && approach.y.is_finite());
+        assert!(normal.magnitude() > 0.9);
+        assert!(quality.is_finite());
+    }
+
+    #[test]
+    fn ground_eta_increases_for_a_large_heading_change() {
+        let me = car(0, 0, Vector::ZERO);
+        let straight = estimate_ground_eta(me, Vector::new(0.0, -1500.0, 0.0));
+        let turning = estimate_ground_eta(me, Vector::new(1500.0, 0.0, 0.0));
+        assert!(turning > straight);
     }
 
     #[test]
