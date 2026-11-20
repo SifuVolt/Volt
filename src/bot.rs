@@ -171,11 +171,9 @@ impl BotBrain {
         }
 
         if is_goalie && !is_challenger {
-            let own_goal = Vector::new(0.0, side * 5120.0, 0.0);
-            let goal_sign = (-side).signum();
             return Plan {
                 decision: Decision::Goalkeeper,
-                target: Vector::new(0.0, -own_goal.y - goal_sign * 150.0, 0.0),
+                target: Vector::new(0.0, side * 4970.0, 0.0),
                 target_speed: 1500.0,
             };
         }
@@ -476,7 +474,7 @@ mod tests {
     #[test]
     fn kickoff_selects_nearest_teammate_as_kicker() {
         let mut brain = BotBrain::new();
-        let me = car(0, 0, Vector::new(-2000.0, -2500.0, 0.0));
+        let me = car(0, 0, Vector::new(-3000.0, -3000.0, 0.0));
         let mate = car(1, 0, Vector::new(2000.0, -2500.0, 0.0));
         let ball = BallState::default();
         let plan = brain.choose_plan(me, &[me, mate], ball, &BallTrajectory { slices: Vec::new() }, 1.0);
