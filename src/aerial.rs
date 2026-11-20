@@ -122,7 +122,10 @@ impl AerialShot {
         }
 
         let time = time_remaining.max(0.001);
-        let (final_position, final_velocity) = if self.jumped || (car.airborne && self.elapsed > JUMP_DURATION) {
+        let double_jump_pending = self.double_jump && !car.has_double_jumped && !car.has_dodged;
+        let (final_position, final_velocity) = if self.jumped
+            || (car.airborne && self.elapsed > JUMP_DURATION && !double_jump_pending)
+        {
             (
                 car.location + car.velocity * time + gravity * (0.5 * time * time),
                 car.velocity + gravity * time,
