@@ -1845,4 +1845,44 @@ mod tests {
         assert_eq!(plan.decision, Decision::KickoffCheat);
         assert_eq!(plan.target, Vector::new(0.0, 1650.0, 0.0));
     }
+    #[test]
+    fn kickoff_uses_authoritative_match_phase_even_when_ball_is_not_at_centre() {
+        let mut brain = BotBrain::new();
+        let me = car(0, 0, Vector::new(0.0, -1000.0, 0.0));
+        let teammate = car(1, 0, Vector::new(1000.0, -2000.0, 0.0));
+        let ball = BallState {
+            location: Vector::new(300.0, 200.0, 120.0),
+            velocity: Vector::new(400.0, 0.0, 0.0),
+        };
+
+        let plan = brain.choose_plan(
+            me,
+            &[me, teammate],
+            ball,
+            &BallTrajectory { slices: Vec::new() },
+            1.0,
+            MatchState { round_active: true, kickoff: true, ..MatchState::default() },
+        );
+
+        assert_eq!(plan.decision, Decision::KickoffKicker);
+    }
+
+    #[test]
+    fn centred_slow_ball_does_not_fake_a_kickoff_outside_kickoff_phase() {
+        let mut brain = BotBrain::new();
+        let me = car(0, 0, Vector::new(0.0, -1000.0, 0.0));
+        let ball = BallState::default();
+
+        let plan = brain.choose_plan(
+            me,
+            &[me],
+            ball,
+            &BallTrajectory { slices: Vec::new() },
+            1.0,
+            MatchState { round_active: true, kickoff: false, ..MatchState::default() },
+        );
+
+        assert_ne!(plan.decision, Decision::KickoffKicker);
+    }
+
 }
