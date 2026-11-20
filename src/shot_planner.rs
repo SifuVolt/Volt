@@ -255,10 +255,10 @@ pub fn grid_max_jump_height(double:bool)->f64 {
 }
 pub fn grid_jump_time(height:f32,double:bool)->Option<f32> {
     let h=height as f64;
-    let single=solve_quad(-325.0556640625,564.9931640625,-11.6591796875,h.min(max_jump_height(false)),-1)?;
+    let single=solve_quad(-325.0556640625,564.9931640625,-11.6591796875,h.min(grid_max_jump_height(false)),-1)?;
     if single>=24.0/120.0 {
         if single>=25.0/120.0 && double {
-            return solve_quad(-325.0556640625,856.9931640625,-11.6591796875-292.0*25.0/120.0,h.min(max_jump_height(true)),-1);
+            return solve_quad(-325.0556640625,856.9931640625,-11.6591796875-292.0*25.0/120.0,h.min(grid_max_jump_height(true)),-1);
         }
         return Some(single);
     }
