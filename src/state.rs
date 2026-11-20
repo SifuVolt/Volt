@@ -175,8 +175,8 @@ pub struct MatchState {
     pub round_active: bool,
     pub kickoff: bool,
     pub match_ended: bool,
-    pub friend_score: i32,
-    pub foe_score: i32,
+    pub friend_score: u32,
+    pub foe_score: u32,
     pub gravity: Vector,
 }
 
