@@ -156,6 +156,7 @@ impl BotBrain {
                     target: ball.location,
                     target_speed: MAX_SPEED,
                     shot: None,
+                jump: None,
                 };
             }
 
@@ -165,6 +166,7 @@ impl BotBrain {
                     target: Vector::new(0.0, -side * 1650.0, 0.0),
                     target_speed: 1200.0,
                     shot: None,
+                jump: None,
                 };
             }
 
@@ -206,6 +208,7 @@ impl BotBrain {
                 target: select_contact_approach(me, ball.location, shot_aim_point(ball.location, side)),
                 target_speed: MAX_SPEED,
                 shot: None,
+                jump: None,
             };
         }
 
@@ -215,6 +218,7 @@ impl BotBrain {
                 target: Vector::new(0.0, side * 4970.0, 0.0),
                 target_speed: 1500.0,
                 shot: None,
+                jump: None,
             };
         }
 
@@ -232,6 +236,7 @@ impl BotBrain {
                 target: Vector::new(x_sign * 900.0, side * 5050.0, 0.0),
                 target_speed: 1700.0,
                 shot: None,
+                jump: None,
             };
         }
 
@@ -297,10 +302,16 @@ impl BotBrain {
             let approach_direction = local_approach.flatten().normalize();
             let eta = distance / (speed + if car.boost > 0.0 { 300.0 } else { 0.0 })
                 + (1.0 - approach_direction.x.clamp(-1.0, 1.0)) * 0.20;
+            let aligned_for_launch = local_approach.x > 0.0
+                && local_approach.x < 450.0
+                && local_approach.y.abs() < 92.75;
+            let travel_time = (t - jump_time).max(0.10);
+            let required_speed = (distance / travel_time).clamp(0.0, MAX_SPEED);
 
             if !car.airborne
                 && t <= jump_time * 1.08
                 && local_ball.x > 0.0
+                && aligned_for_launch
                 && eta <= t + 0.10
             {
                 let shot_direction = (shot_aim_point(jump.ball, team_side(car.team)) - jump.ball)
@@ -323,7 +334,7 @@ impl BotBrain {
             let output = default_drive(
                 &car,
                 DriveInput {
-                    target_speed: MAX_SPEED,
+                    target_speed: required_speed.max(900.0),
                     local_target: local_approach.flatten(),
                     upside_down: false,
                     up: None,
@@ -848,6 +859,33 @@ mod tests {
         let ball = Vector::new(0.0, 0.0, 100.0);
         let target = select_contact_approach(car, ball, Vector::new(0.0, 5120.0, 300.0));
         assert!(target.x.abs() > 10.0);
+    }
+
+    #[test]
+    fn jump_intercept_uses_single_jump_height_and_timing_window() {
+        let me = car(0, 0, Vector::new(0.0, -1000.0, 0.0));
+        let prediction = BallTrajectory {
+            slices: vec![
+                crate::prediction::BallSlice {
+                    time: 0.50,
+                    location: Vector::new(0.0, -300.0, 260.0),
+                    velocity: Vector::ZERO,
+                },
+                crate::prediction::BallSlice {
+                    time: 1.50,
+                    location: Vector::new(0.0, -200.0, 260.0),
+                    velocity: Vector::ZERO,
+                },
+            ],
+        };
+        let shot = choose_jump_intercept(
+            me,
+            &prediction,
+            Vector::new(0.0, 5120.0, 300.0),
+        ).unwrap();
+
+        assert_eq!(shot.time, 1.50);
+        assert!(shot.ball.z > 190.0);
     }
 
     #[test]
