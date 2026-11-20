@@ -1,3 +1,4 @@
+pub mod aerial;
 pub mod physics;
 pub mod prediction;
 pub mod planning;
