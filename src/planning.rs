@@ -475,7 +475,7 @@ pub fn find_wall_drive(
     foe_goal: Vector,
     max_time: f32,
 ) -> Option<WallDrivePlan> {
-    if !max_time.is_finite() {
+    if max_time.is_nan() {
         return None;
     }
     find_wall_drive_inner(car, slices, team, foe_goal, max_time)
