@@ -12,7 +12,8 @@ use crate::{
     physics::drive::{curvature, dodge_impulse, throttle_acceleration},
     prediction::BallTrajectory,
     planning::{find_wall_drive, wall_approach_geometry, WallDriveMode, WallDrivePlan},
-    shot_physics::get_jump_time,
+    shot_physics::{get_jump_time, ShotType},
+    shot_planner::{find_best_shot, ShotCandidate, ShotTargets},
     state::{BallState, BoostPadState, CarState, MatchState},
 };
 use rlbot::flat::ControllerState;
@@ -62,6 +63,7 @@ struct GroundIntercept {
     contact_quality: f32,
     contact_point: Vector,
     contact_face: &'static str,
+    shot_type: ShotType,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -182,6 +184,7 @@ impl BotBrain {
         game_time: f32,
         match_state: MatchState,
         boost_pads: &[BoostPadState],
+        shot_targets: ShotTargets,
     ) -> ControllerState {
         self.match_state = match_state;
         if let Some(state) = self.kickoff_dodge {
@@ -195,7 +198,7 @@ impl BotBrain {
         }
         self.boost_pads.clear();
         self.boost_pads.extend_from_slice(boost_pads);
-        let plan = self.choose_plan(me, cars, ball, prediction, game_time, match_state);
+        let plan = self.choose_plan(me, cars, ball, prediction, game_time, match_state, shot_targets);
 
         // VirxERLU routines are stack-prioritized: a recovery pushed by
         // grid_defense remains active until the car regains wheel contact,
@@ -458,6 +461,7 @@ impl BotBrain {
         prediction: &BallTrajectory,
         game_time: f32,
         match_state: MatchState,
+        shot_targets: ShotTargets,
     ) -> Plan {
         self.aerial_candidate = None;
         self.wall_drive_candidate = None;
