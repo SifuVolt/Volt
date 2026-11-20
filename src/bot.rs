@@ -952,8 +952,9 @@ fn choose_ground_intercept(
         slice.time >= 0.04 && slice.time <= 3.0 && slice.location.z <= 190.0
     }) {
         let aim = predicted_goal_aim(slice.location, slice.velocity, goal);
-        let (approach, normal, contact_quality) =
+        let (approach, _normal, contact_quality) =
             select_ground_contact(car, slice.location, slice.velocity, aim, slice.time);
+        let shot_direction = (aim - slice.location).flatten().normalize();
         let distance = approach.flat_distance(car.location);
         let local = car.local_location(approach);
         let direction = (approach - car.location).flatten().normalize();
@@ -964,13 +965,13 @@ fn choose_ground_intercept(
             0.0
         };
 
-        let drive_target = shot_approach_target(car, slice.location, approach, shot_direction, slice.time);
+        let drive_target =
+            shot_approach_target(car, slice.location, approach, shot_direction, slice.time);
         let eta = estimate_ground_eta(car, drive_target);
         if eta > slice.time + 0.08 {
             continue;
         }
 
-        let shot_direction = (aim - slice.location).flatten().normalize();
         let ball_progress = slice.velocity.flatten().dot(shot_direction);
         let urgency = (slice.time - eta).max(0.0);
         let score = slice.time * 0.22
@@ -994,7 +995,6 @@ fn choose_ground_intercept(
             best = Some((score, intercept));
         }
 
-        let _ = normal;
     }
 
     best.map(|(_, intercept)| intercept)
