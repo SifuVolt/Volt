@@ -251,7 +251,7 @@ impl BotBrain {
         if is_challenger {
             let aim = shot_aim_point(ball.location, side);
             let intercept = choose_ground_intercept(me, ball, prediction, aim, &opponents);
-            let jump = if urgent_save { None } else { choose_jump_intercept(me, prediction, aim) };
+            let jump = if urgent_save { None } else { choose_jump_intercept(me, prediction, aim, &opponents) };
             let use_jump = jump.filter(|candidate| {
                 intercept.is_none_or(|ground| candidate.time < ground.time)
             });
@@ -274,8 +274,8 @@ impl BotBrain {
 
         // In 1v1 there is no separate goalie: the sole player challenges.
         let aim = shot_aim_point(ball.location, side);
-        let intercept = choose_ground_intercept(me, ball, prediction, aim);
-        let jump = choose_jump_intercept(me, prediction, aim);
+        let intercept = choose_ground_intercept(me, ball, prediction, aim, &opponents);
+        let jump = choose_jump_intercept(me, prediction, aim, &opponents);
         let use_jump = jump.filter(|candidate| {
             intercept.is_none_or(|ground| candidate.time < ground.time)
         });
@@ -322,9 +322,7 @@ impl BotBrain {
                 && aligned_for_launch
                 && eta <= t + 0.10
             {
-                let shot_direction = (shot_aim_point(jump.ball, team_side(car.team)) - jump.ball)
-                    .flatten()
-                    .normalize();
+                let shot_direction = jump.shot_direction;
                 let state = JumpShotState {
                     started_at: game_time,
                     intercept_time: game_time + t,
@@ -728,6 +726,7 @@ fn choose_jump_intercept(
     car: CarState,
     prediction: &BallTrajectory,
     goal: Vector,
+    opponents: &[CarState],
 ) -> Option<GroundIntercept> {
     if car.airborne || prediction.slices.is_empty() {
         return None;
@@ -750,7 +749,8 @@ fn choose_jump_intercept(
             continue;
         }
 
-        let mut approach = select_contact_approach(car, slice.location, goal);
+        let aim = defender_adjusted_aim(slice.location, slice.velocity, goal, opponents);
+        let mut approach = select_contact_approach(car, slice.location, aim);
         // Ground steering uses the flattened projection, but the jump routine
         // must retain the predicted contact height for its launch geometry.
         approach.z = slice.location.z;
@@ -770,17 +770,31 @@ fn choose_jump_intercept(
             continue;
         }
 
-        let score = slice.time + facing_angle * 0.08 + distance / 30000.0;
+        let opponent_race = opponents
+            .iter()
+            .map(|foe| opponent_arrival_time(*foe, slice.location))
+            .fold(f32::INFINITY, f32::min);
+        let race_pressure = if opponent_race < slice.time {
+            ((slice.time - opponent_race) / slice.time.max(0.10)).clamp(0.0, 1.0) * 0.18
+        } else {
+            0.0
+        };
+        let lane_pressure = shot_lane_pressure(slice.location, aim, opponents);
+        let score = slice.time
+            + facing_angle * 0.08
+            + distance / 30000.0
+            + race_pressure
+            + lane_pressure;
         if best.is_none_or(|(best_score, _)| score < best_score) {
             best = Some((score, GroundIntercept {
                 time: slice.time,
                 ball: slice.location,
                 ball_velocity: slice.velocity,
                 approach,
-                shot_direction: (goal - slice.location).flatten().normalize(),
+                shot_direction: (aim - slice.location).flatten().normalize(),
                 contact_quality: 1.0,
                 contact_point: slice.location
-                    - (goal - slice.location).flatten().normalize() * BALL_RADIUS,
+                    - (aim - slice.location).flatten().normalize() * BALL_RADIUS,
                 contact_face: "centre",
             }));
         }
