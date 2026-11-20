@@ -850,13 +850,18 @@ fn estimate_ground_eta(car: CarState, target: Vector) -> f32 {
 
     let angle = local.y.atan2(local.x).abs();
     let speed = car.velocity.flatten().magnitude();
-    let turn_rate = (2.8 - 0.75 * (speed / MAX_SPEED).clamp(0.0, 1.0)).max(1.4);
-    let turn_time = (angle / turn_rate).min(1.4);
+    let base_turn_rate = (2.8 - 0.75 * (speed / MAX_SPEED).clamp(0.0, 1.0)).max(1.4);
+    let turn_sign = local.y.signum();
+    let current_yaw_rate = car.angular_velocity.z * turn_sign;
+    let turn_rate = (base_turn_rate + current_yaw_rate.clamp(-1.5, 1.5) * 0.45).max(0.8);
+    let turn_time = (angle / turn_rate).min(1.6);
     let forward_speed = car.local_velocity().x.max(0.0);
     let distance_during_turn = forward_speed * turn_time * 0.35;
     let mut remaining = (distance - distance_during_turn).max(0.0);
     let mut velocity = forward_speed;
-    let can_boost = car.boost > 0.0 && angle < 0.55;
+    let can_boost = angle < 0.55;
+    // Boost is finite: never let the planner spend more than the car actually has.
+    let mut boost_remaining = car.boost.max(0.0) / 33.333333;
     let mut elapsed = turn_time;
 
     for _ in 0..360 {
@@ -864,7 +869,8 @@ fn estimate_ground_eta(car: CarState, target: Vector) -> f32 {
             break;
         }
         let throttle = throttle_acceleration(velocity);
-        let boost = if can_boost && velocity < 2200.0 {
+        let boost = if can_boost && boost_remaining > 0.0 && velocity < 2200.0 {
+            boost_remaining = (boost_remaining - 1.0 / 120.0).max(0.0);
             991.6667
         } else {
             0.0
@@ -1025,6 +1031,22 @@ mod tests {
         assert!(approach.x.is_finite() && approach.y.is_finite());
         assert!(normal.magnitude() > 0.9);
         assert!(quality.is_finite());
+    }
+
+    #[test]
+    fn ground_eta_uses_finite_boost_and_existing_turn_direction() {
+        let mut no_boost = car(0, 0, Vector::ZERO);
+        no_boost.boost = 0.0;
+        let mut boosted = no_boost;
+        boosted.boost = 100.0;
+        let target = Vector::new(0.0, -2200.0, 0.0);
+        assert!(estimate_ground_eta(no_boost, target) > estimate_ground_eta(boosted, target));
+
+        let mut already_turning = no_boost;
+        already_turning.angular_velocity.z = -1.0;
+        let turning_eta = estimate_ground_eta(already_turning, Vector::new(1500.0, 0.0, 0.0));
+        let neutral_eta = estimate_ground_eta(no_boost, Vector::new(1500.0, 0.0, 0.0));
+        assert!(turning_eta < neutral_eta);
     }
 
     #[test]
