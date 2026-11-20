@@ -34,6 +34,7 @@ struct VoltRustAgent {
     boost_pads: Vec<BoostPadState>,
     match_state: MatchState,
     ball_prediction: Vec<AbsoluteBallSlice>,
+    boost_pads: Vec<BoostPadState>,
     brain: BotBrain,
 }
 
@@ -58,6 +59,7 @@ impl BotAgent for VoltRustAgent {
             }).collect(),
             match_state: MatchState::default(),
             ball_prediction: Vec::new(),
+            boost_pads: BoostPadState::from_field_info(&field_info),
             brain: BotBrain::new(),
         }
     }
@@ -92,6 +94,7 @@ impl BotAgent for VoltRustAgent {
         packet_queue: &mut PacketQueue,
     ) {
         let game_time = game_packet.match_info.seconds_elapsed;
+        BoostPadState::update_all(&mut self.boost_pads, game_packet);
         let prediction = BallTrajectory::from_absolute_slices(
             self.ball_prediction.iter().copied(),
             game_time,
