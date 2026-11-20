@@ -95,7 +95,6 @@ impl BotBrain {
             last_kickoff_time: -999.0,
             ground_flip: None,
             jump_shot: None,
-                    jump: None,
         }
     }
 
@@ -179,6 +178,7 @@ impl BotBrain {
                 target: Vector::new(x_sign * 3000.0, side * 4200.0, 0.0),
                 target_speed: MAX_SPEED,
                 shot: None,
+                jump: None,
             };
         }
 
@@ -294,8 +294,9 @@ impl BotBrain {
             let local_approach = car.local_location(jump.approach);
             let distance = jump.approach.flat_distance(car.location);
             let speed = car.velocity.flatten().magnitude().max(850.0);
+            let approach_direction = local_approach.flatten().normalize();
             let eta = distance / (speed + if car.boost > 0.0 { 300.0 } else { 0.0 })
-                + (1.0 - car.forward().flatten().normalize().dot(local_approach.flatten().normalize()).clamp(-1.0, 1.0)) * 0.20;
+                + (1.0 - approach_direction.x.clamp(-1.0, 1.0)) * 0.20;
 
             if !car.airborne
                 && t <= jump_time * 1.08
@@ -436,7 +437,7 @@ impl BotBrain {
         let elapsed = game_time - state.started_at;
         let time_remaining = state.intercept_time - game_time;
         let local_ball = car.local_location(state.ball).flatten();
-        let distance_to_contact = car.location.distance(state.ball);
+        let distance_to_contact = car.location.distance(state.approach);
         let mut controller = ControllerState::default();
 
         if time_remaining < -0.25 || (elapsed > 0.30 && !car.airborne && state.dodge_started_at.is_none()) {
