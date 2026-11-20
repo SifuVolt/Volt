@@ -903,7 +903,6 @@ impl BotBrain {
                     },
                     target_location: geometry.approach,
                     shot_direction: geometry.shot_direction,
-                contact_face: "centre",
                     double_jump: true,
                     fast: true,
                     estimated_boost: car.boost,
@@ -1423,7 +1422,7 @@ impl BotBrain {
             if let Some(normal) = wall_normal {
                 let tangent = state.shot_direction - normal * state.shot_direction.dot(normal);
                 if tangent.magnitude() > 0.001 {
-                    offset_target -= tangent.normalize() * 25.0;
+                    offset_target = offset_target - tangent.normalize() * 25.0;
                 }
                 if normal.z.abs() < 0.95 {
                     let jump_time = get_jump_time(
@@ -1433,7 +1432,7 @@ impl BotBrain {
                     ).time as f32;
                     offset_target.z = state.ball.z
                         + (offset_target.z - state.ball.z).clamp(-120.0, 120.0);
-                    offset_target -= self.match_state.gravity * (0.5 * jump_time * jump_time);
+                    offset_target = offset_target - self.match_state.gravity * (0.5 * jump_time * jump_time);
                 }
             }
             state.approach = offset_target;
