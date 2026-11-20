@@ -592,10 +592,14 @@ impl BotBrain {
         };
 
         let ball_depth = ball.location.y * side;
-        let urgent_save = (ball_depth > 4200.0 && ball.location.z < 350.0)
-            || (ball_depth > 1200.0
-                && ball.location.z < 350.0
-                && ball.velocity.y * side > 250.0);
+        let to_own_goal = (own_goal - ball.location).flatten();
+        let toward_goal_speed = if to_own_goal.magnitude() > 1.0 {
+            ball.velocity.flatten().dot(to_own_goal.normalize())
+        } else {
+            0.0
+        };
+        let urgent_save = toward_goal_speed >= 400.0
+            && (ball_depth >= 1500.0 || to_own_goal.magnitude() <= 3200.0);
 
         let is_challenger = if living_teammates.len() <= 1 {
             true
