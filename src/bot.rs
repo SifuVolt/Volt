@@ -1290,7 +1290,12 @@ impl BotBrain {
         game_time: f32,
     ) -> ControllerState {
         let t = shot.time;
-        let offset_target = shot.approach;
+        let goal_aim = relative_goal_aim_point(car, shot.ball, self.shot_targets);
+        let shot_direction = (goal_aim - shot.ball).flatten().normalize();
+        let offset_target = contact_approach_from_label(
+            shot.ball, shot_direction, shot.contact_face, 92.75,
+        ).unwrap_or(shot.ball - shot_direction * 120.0);
+
         let required_height = (offset_target.z - car.location.z).max(0.0);
         let Some(jump_time) = grid_jump_time(required_height, true) else {
             return ControllerState::default();
@@ -1299,17 +1304,17 @@ impl BotBrain {
         let mut final_target = offset_target.flatten();
         if tj > 0.0 {
             final_target = shot_approach_target(
-                car, shot.ball, final_target, shot.shot_direction, tj,
+                car, shot.ball, final_target, shot_direction, tj,
             );
         }
         final_target = cap_in_field(&car, final_target);
         let local_target = car.local_location(final_target);
         let local_offset = car.local_location(offset_target.flatten());
-        let angle = local_target.y.atan2(local_target.x).abs();
+        let angle_to_target = local_target.y.atan2(local_target.x).abs();
         let distance_remaining = final_target.flat_distance(car.location)
             - car.hitbox.length / 3.0;
         let local_ball = car.local_location(shot.ball);
-        let direction_sign = if angle >= 1.6
+        let direction_sign = if angle_to_target >= 1.6
             && car.local_velocity().x <= 1000.0
             && local_ball.x < -250.0
         { -1.0 } else { 1.0 };
@@ -1321,8 +1326,12 @@ impl BotBrain {
         let mut velocity = output.car_speed;
         if velocity == 0.0 { velocity = 1.0; }
         let local_velocity = car.local_velocity();
-        let time_to_target = distance_remaining
-            / (velocity.abs() + dodge_impulse(car.velocity.flatten(), MAX_SPEED));
+        let denominator = velocity.abs() + dodge_impulse(car.velocity.flatten(), MAX_SPEED);
+        let time_to_target = if denominator > 0.001 {
+            distance_remaining / denominator
+        } else {
+            f32::INFINITY
+        };
         let aligned = local_offset.y.abs() < 92.0
             && direction_sign * local_velocity.x
                 >= direction_sign * (local_offset.x - car.hitbox.length / 3.0)
@@ -1336,7 +1345,7 @@ impl BotBrain {
                 intercept_time: game_time + t,
                 ball: shot.ball,
                 offset_target,
-                shot_direction: shot.shot_direction,
+                shot_direction,
                 jump_time,
                 jump_frames: 0,
                 second_jump_sent: false,
@@ -1347,32 +1356,41 @@ impl BotBrain {
         }
 
         if car.airborne {
-            self.defense_recovery_target = Some(offset_target);
-            return GridDefense::recovery_controller(car, offset_target, self.match_state.gravity.z);
+            self.defense_recovery_target = Some(final_target);
+            return GridDefense::recovery_controller(car, final_target, self.match_state.gravity.z);
         }
 
         if t <= jump_time {
-            self.double_jump_shot = None;
             return ControllerState::default();
         }
 
-        if !car.airborne
-            && self.match_state.gravity.z < -450.0
+        if !self.unlimited_boost
             && car.boost < 48.0
-            && angle < 0.03
+            && angle_to_target < 0.03
             && velocity > 600.0
             && time_to_target >= jump_time * 1.15 + 1.75
-            && time_to_target < 5.0
         {
-            let mut wave = crate::mechanics::WaveDash::new(Some(local_offset));
-            let result = wave.tick(car, game_time);
-            if !result.finished {
-                self.wave_dash = Some(wave);
-                return result.controller;
+            if self.match_state.gravity.z < -450.0 && time_to_target < 5.0 {
+                let mut wave = crate::mechanics::WaveDash::new(Some(local_offset));
+                let result = wave.tick(car, game_time);
+                if !result.finished {
+                    self.wave_dash = Some(wave);
+                    return result.controller;
+                }
+            } else {
+                let flip = FlipState {
+                    started_at: game_time,
+                    direction: local_offset.flatten().normalize(),
+                    cancel: false,
+                };
+                self.ground_flip = Some(flip);
+                return self.run_ground_flip(Some(car), game_time, flip);
             }
         }
 
-        if angle >= 2.0 && velocity < 200.0
+        if !self.unlimited_boost
+            && angle_to_target >= 2.0
+            && velocity < 200.0
             && time_to_target >= jump_time * 1.15 + 2.0
             && distance_remaining > 1280.0
         {
