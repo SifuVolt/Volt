@@ -1390,21 +1390,26 @@ impl BotBrain {
     ) -> ControllerState {
         let elapsed = (game_time - state.started_at).max(0.0);
         let time_remaining = state.intercept_time - game_time;
-        let goal_aim = relative_goal_aim_point(car, state.ball, self.shot_targets);
-        let predicted_slice = BallSlice {
-            time: time_remaining.max(0.001),
-            location: state.ball,
-            velocity: state.ball_velocity,
-        };
-        let (_, predicted_shot) = party_cannon_contact_geometry(
-            car, predicted_slice, goal_aim, self.match_state.gravity,
-        );
-        let goal_shot = (goal_aim - state.ball).flatten().normalize();
-        let predicted_shot = predicted_shot.flatten().normalize();
-        let blended_shot = if goal_shot.magnitude() > 0.001 && predicted_shot.magnitude() > 0.001 {
-            (goal_shot * 0.65 + predicted_shot * 0.35).normalize()
+        let has_goal_targets = (self.shot_targets.left - self.shot_targets.right).magnitude() > 1.0;
+        let blended_shot = if has_goal_targets {
+            let goal_aim = relative_goal_aim_point(car, state.ball, self.shot_targets);
+            let predicted_slice = BallSlice {
+                time: time_remaining.max(0.001),
+                location: state.ball,
+                velocity: state.ball_velocity,
+            };
+            let (_, predicted_shot) = party_cannon_contact_geometry(
+                car, predicted_slice, goal_aim, self.match_state.gravity,
+            );
+            let goal_shot = (goal_aim - state.ball).flatten().normalize();
+            let predicted_shot = predicted_shot.flatten().normalize();
+            if goal_shot.magnitude() > 0.001 && predicted_shot.magnitude() > 0.001 {
+                (goal_shot * 0.65 + predicted_shot * 0.35).normalize()
+            } else {
+                goal_shot
+            }
         } else {
-            goal_shot
+            state.shot_direction.flatten().normalize()
         };
         let (adjusted_shot, wall_normal, _) = wall_shot_adjust_jump(state.ball, blended_shot);
         state.shot_direction = adjusted_shot;
