@@ -221,14 +221,22 @@ impl BotBrain {
                 };
             }
 
-            let x_sign = if me.location.x == 0.0 {
-                1.0
-            } else {
-                me.location.x.signum()
-            };
+            let target = kickoff_boost_target(
+                me,
+                side,
+                &self.boost_pads,
+            )
+            .unwrap_or_else(|| {
+                let x_sign = if me.location.x == 0.0 {
+                    1.0
+                } else {
+                    me.location.x.signum()
+                };
+                Vector::new(x_sign * 3000.0, side * 4200.0, 0.0)
+            });
             return Plan {
                 decision: Decision::KickoffBackBoost,
-                target: Vector::new(x_sign * 3000.0, side * 4200.0, 0.0),
+                target,
                 target_speed: MAX_SPEED,
                 shot: None,
                 jump: None,
@@ -240,7 +248,17 @@ impl BotBrain {
             .copied()
             .filter(|car| car.team == me.team && !car.demolished)
             .collect();
-        let roles = assign_roles(&living_teammates, ball, side);
+        let own_goal = Vector::new(0.0, side * 5120.0, 350.0);
+        let opponent_goal = Vector::new(0.0, -side * 5120.0, 300.0);
+        let roles = assign_roles_volt(
+            &living_teammates,
+            ball,
+            side,
+            own_goal,
+            opponent_goal,
+            prediction,
+            game_time,
+        );
 
         let ball_depth = ball.location.y * side;
         let urgent_save = (ball_depth > 4200.0 && ball.location.z < 350.0)
@@ -723,6 +741,298 @@ fn team_side(team: u32) -> f32 {
 
 fn foe_goal(side: f32) -> Vector {
     Vector::new(0.0, -side * 5120.0, 0.0)
+}
+
+/// Direct port of Volt's Noob Black role election in
+/// instructions for chatgpt on volt::get_grid_team_roles().
+///
+/// It evaluates the ball's next floor/wall/ceiling bounce, predicted goal
+/// crossing, side-wall clearance lane, and each car's dependency on that
+/// lane. Do not simplify this into nearest-car selection: the dependency
+/// result is what makes the rotating challenger/goalie/transition roles work.
+fn assign_roles_volt(
+    cars: &[CarState],
+    ball: BallState,
+    side: f32,
+    own_goal: Vector,
+    foe_goal: Vector,
+    prediction: &BallTrajectory,
+    game_time: f32,
+) -> Option<TeamRoles> {
+    let mut living: Vec<CarState> = cars
+        .iter()
+        .copied()
+        .filter(|car| !car.demolished)
+        .collect();
+    living.sort_by_key(|car| car.index);
+
+    if living.is_empty() {
+        return None;
+    }
+    if living.len() == 1 {
+        return Some(TeamRoles {
+            challenger: living[0].index,
+            goalie: living[0].index,
+            transition: None,
+        });
+    }
+
+    let mut save_deadline = -1.0_f32;
+    for slice in &prediction.slices {
+        let time_to_goal = slice.time;
+        if time_to_goal <= 0.0 {
+            continue;
+        }
+        if time_to_goal > 5.0 {
+            break;
+        }
+        if slice.location.y.abs() >= 5235.0 {
+            save_deadline = time_to_goal;
+            break;
+        }
+    }
+
+    let sidewall_clear = (ball.location.y - own_goal.y).abs() <= 1000.0
+        && ball.location.x.abs() >= 900.0
+        && save_deadline < 0.0;
+
+    let normal_bounce_time = next_bounce_time(ball.location, ball.velocity, 92.75);
+    let reverse_bounce_time = next_bounce_time(ball.location, -ball.velocity, 92.75);
+    let normal_bounce = role_air_position(ball.location, ball.velocity, normal_bounce_time);
+    let reverse_bounce = role_air_position(ball.location, -ball.velocity, reverse_bounce_time);
+
+    let mut backwall_point = None;
+    if !sidewall_clear && save_deadline < 0.0 {
+        let normal_hits_backwall =
+            (normal_bounce.y - own_goal.y).abs() <= 100.0 && normal_bounce.z > 0.0;
+        let reverse_hits_backwall =
+            (reverse_bounce.y - own_goal.y).abs() <= 100.0 && reverse_bounce.z > 0.0;
+        if normal_hits_backwall || reverse_hits_backwall {
+            backwall_point = Some(if (normal_bounce.y - foe_goal.y).abs()
+                < (reverse_bounce.y - foe_goal.y).abs()
+            {
+                normal_bounce
+            } else {
+                reverse_bounce
+            });
+        }
+    }
+
+    let mut ball_dependency = (ball.location.y - foe_goal.y).abs();
+    if let Some(backwall) = backwall_point {
+        ball_dependency = (backwall.y - foe_goal.y).abs();
+    } else {
+        let double_jump_height_time =
+            -(564.993_16 + 292.0) / (-325.055_66 * 2.0);
+        let double_jump_height = -325.055_66 * double_jump_height_time.powi(2)
+            + (564.993_16 + 292.0) * double_jump_height_time
+            - 11.659_18
+            - 292.0 * 25.0 / 120.0;
+        let bounce_time = next_bounce_time(
+            ball.location,
+            ball.velocity,
+            double_jump_height,
+        );
+        let vertical_bounce_time = next_bounce_time(
+            ball.location,
+            Vector::new(0.0, 0.0, ball.velocity.z),
+            double_jump_height,
+        );
+        if (bounce_time - vertical_bounce_time).abs() < 1.0e-6 {
+            let low_bounce =
+                role_air_position(ball.location, ball.velocity, bounce_time);
+            if low_bounce.y * foe_goal.y > ball.location.y * foe_goal.y
+                && low_bounce.z < 600.0
+            {
+                ball_dependency = (low_bounce.y - foe_goal.y).abs();
+            }
+        }
+    }
+
+    let ball_flat_velocity = ball.velocity.flatten();
+    let ball_flat_speed = ball_flat_velocity.magnitude();
+    let ball_side = if ball.location.x >= 0.0 { 1.0 } else { -1.0 };
+
+    let mut attacker: Option<CarState> = None;
+    let mut attacker_score = f32::INFINITY;
+    let mut attacker_dependency = false;
+    let mut goalie: Option<CarState> = None;
+    let mut goalie_score = f32::INFINITY;
+
+    for car in &living {
+        let location = car.location;
+        let velocity = car.velocity;
+        let forward = car.forward();
+
+        let furthest_score = location.distance(own_goal).min(900.0)
+            + (location.y - own_goal.y).abs();
+        if furthest_score < goalie_score {
+            goalie_score = furthest_score;
+            goalie = Some(*car);
+        }
+
+        let post_x = if location.x >= 0.0 { 900.0 } else { -900.0 };
+        let own_goal_post = Vector::new(post_x, side * 5050.0, 0.0);
+        let facing_badly = forward.y * side > 0.0;
+        let falling_without_jump = location.z <= 200.0
+            && car.doublejumped
+            && velocity.z < 10.0
+            && velocity.y * side > 0.0;
+        let on_goal_post = location.flatten().distance(own_goal_post) <= 100.0;
+        let facing_own_goal_from_line = location.y * side >= 5050.0
+            && location.x.abs() <= 900.0
+            && forward.y * side > 0.0;
+        let closest_score = location.distance(ball.location)
+            + if facing_badly
+                || falling_without_jump
+                || on_goal_post
+                || facing_own_goal_from_line
+            {
+                5000.0
+            } else {
+                0.0
+            };
+
+        let dependency = if sidewall_clear {
+            ball.location.x * ball_side >= location.x * ball_side
+        } else if let Some(backwall) = backwall_point {
+            (location.y - foe_goal.y).abs()
+                + (location.x - backwall.x).abs() / 5.0
+                > (backwall.y - foe_goal.y).abs()
+        } else {
+            let lane_distance = location.flatten() - ball.location.flatten();
+            let cross_track = (lane_distance.x * ball_flat_velocity.y
+                - lane_distance.y * ball_flat_velocity.x)
+                .abs();
+            let along_track = (lane_distance.x * ball_flat_velocity.x
+                + lane_distance.y * ball_flat_velocity.y)
+                .abs();
+            let path_relevant = save_deadline < 0.0
+                || (cross_track / 2300.0 - 134.85
+                    < along_track / ball_flat_speed.max(1.0));
+            (location.y - foe_goal.y).abs()
+                + (location.x - ball.location.x).abs()
+                    / 5.0
+                    * if save_deadline >= 0.0 { 1.0 } else { 0.0 }
+                > ball_dependency
+                && path_relevant
+        };
+
+        if (closest_score <= attacker_score && (dependency as u8) >= (attacker_dependency as u8))
+            || (dependency && !attacker_dependency)
+        {
+            attacker = Some(*car);
+            attacker_score = closest_score;
+            attacker_dependency = dependency;
+        }
+    }
+
+    let mut attacker = attacker?;
+    let goalie = goalie?;
+
+    // Exact defensive goalie-angle exception from Volt: only in our half,
+    // and only when the deepest player's nose has the best 3D angle to ball.
+    if goalie.index != attacker.index && ball.location.y * side > 0.0 {
+        let goalie_angle = car_ball_facing_angle(goalie, ball.location);
+        let best_other_angle = living
+            .iter()
+            .filter(|car| car.index != goalie.index)
+            .map(|car| car_ball_facing_angle(*car, ball.location))
+            .fold(f32::INFINITY, f32::min);
+        if goalie_angle + 0.001 < best_other_angle {
+            attacker = goalie;
+        }
+    }
+
+    let transition = living
+        .iter()
+        .find(|car| car.index != attacker.index && car.index != goalie.index)
+        .map(|car| car.index);
+
+    let _ = game_time; // packet-relative slices already encode time_to_goal.
+    Some(TeamRoles {
+        challenger: attacker.index,
+        goalie: goalie.index,
+        transition,
+    })
+}
+
+fn next_bounce_time(position: Vector, velocity: Vector, height: f32) -> f32 {
+    fn bounce_root(position_z: f32, velocity_z: f32, target: f32, root_sign: f32) -> Option<f32> {
+        let a = -325.0_f32;
+        let b = velocity_z;
+        let c = position_z;
+        let discriminant = (target - c) / a + b * b / (4.0 * a * a);
+        if discriminant < 0.0 {
+            return None;
+        }
+        Some(-b / (2.0 * a) + discriminant.sqrt() * root_sign)
+    }
+
+    let wall_x_time = if velocity.x.abs() > 0.001 {
+        let sx = velocity.x.signum();
+        (4096.0 - height - position.x * sx) * sx / velocity.x
+    } else {
+        f32::INFINITY
+    };
+    let wall_y_time = if velocity.y.abs() > 0.001 {
+        let sy = velocity.y.signum();
+        (5120.0 - height - position.y * sy) * sy / velocity.y
+    } else {
+        f32::INFINITY
+    };
+    let floor_time = bounce_root(position.z, velocity.z, height, 1.0).unwrap_or(0.0);
+    let ceiling_time =
+        bounce_root(position.z, velocity.z, 2044.0 - height, -1.0).unwrap_or(f32::INFINITY);
+
+    floor_time.min(wall_x_time).min(wall_y_time).min(ceiling_time)
+}
+
+fn role_air_position(position: Vector, velocity: Vector, time: f32) -> Vector {
+    position + velocity * time + Vector::new(0.0, 0.0, -325.0) * time.powi(2)
+}
+
+fn car_ball_facing_angle(car: CarState, ball: Vector) -> f32 {
+    let to_ball = ball - car.location;
+    let forward = car.forward();
+    if to_ball.magnitude() < 1.0 || forward.magnitude() < 0.001 {
+        return std::f32::consts::PI;
+    }
+    forward.normalize().dot(to_ball.normalize()).clamp(-1.0, 1.0).acos()
+}
+
+fn kickoff_boost_target(
+    car: CarState,
+    side: f32,
+    pads: &[BoostPadState],
+) -> Option<Vector> {
+    let mut candidates: Vec<BoostPadState> = pads
+        .iter()
+        .copied()
+        .filter(|pad| pad.active && pad.large && pad.location.y * side > 2500.0)
+        .collect();
+    if candidates.is_empty() {
+        candidates = pads
+            .iter()
+            .copied()
+            .filter(|pad| pad.active && pad.large)
+            .collect();
+    }
+    candidates
+        .into_iter()
+        .min_by(|a, b| {
+            let score = |pad: BoostPadState| {
+                (
+                    pad.location.distance(car.location)
+                        + 0.35 * (pad.location.x - car.location.x).abs(),
+                    pad.location.x * car.location.x < 0.0,
+                )
+            };
+            let sa = score(*a);
+            let sb = score(*b);
+            sa.0.total_cmp(&sb.0).then_with(|| sa.1.cmp(&sb.1))
+        })
+        .map(|pad| pad.location)
 }
 
 fn assign_roles(cars: &[CarState], ball: BallState, side: f32) -> Option<TeamRoles> {
