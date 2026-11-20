@@ -895,7 +895,7 @@ impl BotBrain {
         let time_remaining = plan.intercept_time;
 
         if geometry.on_wall && geometry.distance < 320.0 && time_remaining < 1.65 {
-            if matches!(plan.mode, WallDriveMode::Aerial | WallDriveMode::DoubleJump) {
+            if plan.mode == WallDriveMode::Aerial {
                 let candidate = AerialCandidate {
                     slice: crate::prediction::BallSlice {
                         time: time_remaining,
@@ -915,6 +915,22 @@ impl BotBrain {
                 }
                 self.wall_drive_candidate = None;
                 return controls;
+            }
+            if plan.mode == WallDriveMode::DoubleJump {
+                let shot = GroundIntercept {
+                    time: time_remaining,
+                    ball: geometry.ball,
+                    ball_velocity: plan.ball_slice.velocity,
+                    approach: geometry.ball - geometry.shot_direction * (92.75 + car.hitbox.length * 0.5),
+                    shot_direction: geometry.shot_direction,
+                    contact_quality: 1.0,
+                    contact_point: geometry.ball - geometry.shot_direction * 92.75,
+                    contact_face: "centre",
+                    shot_type: ShotType::DoubleJump,
+                    side_shot: None,
+                };
+                self.wall_drive_candidate = None;
+                return self.drive_double_jump(car, shot, game_time);
             }
 
             let state = JumpShotState {
