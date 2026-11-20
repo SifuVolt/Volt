@@ -205,6 +205,39 @@ pub fn find_best_shot(
                 shot_type:kind,fast:parsed.fast,score:value,parser:parsed});
         }
     }
+    // Compare Grid's independent 60 Hz double-jump reachability candidate.
+    if let Some(grid)=find_grid_jump(me,prediction,targets,horizon.min(5.0)) {
+        let remaining=grid.time-1.0/120.0;
+        let nearest=prediction.slices.iter().min_by(|a,b|
+            (a.time-grid.time).abs().total_cmp(&(b.time-grid.time).abs())
+        );
+        if let Some(slice)=nearest {
+            let boost_reserve=reserve(me,grid.ball,remaining,ShotType::DoubleJump,gravity.z);
+            let boost_ok=me.boost-boost_reserve>=0.0;
+            let no_boost_ground_block=!(me.boost<=0.0 && grid.ball.z<=105.0);
+            if remaining>0.0 && boost_ok && no_boost_ground_block
+                && useful(me,&foes,&friends,grid.ball,remaining,ShotType::DoubleJump,
+                    game_time<kickoff_contest_until,elected_challenger)
+            {
+                let mut value=if urgent_save {remaining+0.015}
+                    else {score(me,&friends,grid.ball,slice.velocity,ShotType::DoubleJump,remaining,targets,gravity.z)};
+                if me.boost>0.0 {value+=0.25;}
+                if value<best.map_or(f32::INFINITY,|b|b.score) {
+                    let direction=(center(targets)-grid.ball).normalize();
+                    let parser=ParsedShot{
+                        found:true,fast:false,shot_type:Some(ShotType::DoubleJump),
+                        targets,ball_offset:grid.contact,shot_vector:direction,
+                        approach_target:grid.contact,time:remaining,
+                    };
+                    best=Some(ShotCandidate{
+                        time:grid.time,ball:grid.ball,ball_velocity:slice.velocity,
+                        approach:grid.contact,shot_direction:direction,
+                        shot_type:ShotType::DoubleJump,fast:false,score:value,parser,
+                    });
+                }
+            }
+        }
+    }
     let _=ball_now;
     best
 }
