@@ -141,6 +141,7 @@ pub struct BotBrain {
     ground_flip: Option<FlipState>,
     jump_shot: Option<JumpShotState>,
     double_jump_shot: Option<DoubleJumpState>,
+    wave_dash: Option<crate::mechanics::WaveDash>,
     defense: GridDefense,
     defense_flip: Option<FlipState>,
     last_flip_time: f32,
@@ -168,6 +169,7 @@ impl BotBrain {
             ground_flip: None,
             jump_shot: None,
             double_jump_shot: None,
+            wave_dash: None,
             defense: GridDefense::default(),
             defense_flip: None,
             last_flip_time: -999.0,
@@ -202,6 +204,15 @@ impl BotBrain {
         shot_targets: ShotTargets,
     ) -> ControllerState {
         self.match_state = match_state;
+        if let Some(mut dash) = self.wave_dash {
+            let result = dash.tick(me, game_time);
+            if result.finished {
+                self.wave_dash = None;
+            } else {
+                self.wave_dash = Some(dash);
+            }
+            return result.controller;
+        }
         if let Some(state) = self.kickoff_dodge {
             return self.run_kickoff_dodge(state, game_time);
         }
@@ -1231,10 +1242,8 @@ impl BotBrain {
         {
             let mut wave = crate::mechanics::WaveDash::new(Some(local_offset));
             let result = wave.tick(car, game_time);
-            // The source uses wave_dash as a short launch preparation. Keep
-            // the controller for its first step; normal shot planning resumes
-            // if the mechanic has already completed.
             if !result.finished {
+                self.wave_dash = Some(wave);
                 return result.controller;
             }
         }
