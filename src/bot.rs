@@ -3352,6 +3352,38 @@ mod tests {
         assert!(!shot.contact_face.is_empty());
     }
 
+
+    #[test]
+    fn grid_double_jump_holds_first_press_releases_then_sends_second_press() {
+        let mut me = car(Vector::ZERO, Vector::ZERO, 25.0);
+        me.airborne = true;
+        me.doublejumped = false;
+        let mut brain = BotBrain::new();
+        let state = DoubleJumpState {
+            started_at: 0.0,
+            intercept_time: 1.0,
+            ball: Vector::new(0.0, 300.0, 300.0),
+            offset_target: Vector::new(0.0, 250.0, 250.0),
+            shot_direction: Vector::new(0.0, 1.0, 0.0),
+            jump_time: 0.5,
+            jump_frames: 0,
+            second_jump_sent: false,
+            prev_jump: false,
+        };
+
+        let first = brain.run_double_jump(me, state, 0.10);
+        assert!(first.jump);
+
+        let second_state = brain.double_jump_shot.unwrap();
+        let release = brain.run_double_jump(me, second_state, 0.21);
+        assert!(!release.jump);
+
+        let third_state = brain.double_jump_shot.unwrap();
+        let second_press = brain.run_double_jump(me, third_state, 0.22);
+        assert!(second_press.jump);
+        assert!(brain.double_jump_shot.unwrap().second_jump_sent);
+    }
+
     #[test]
     fn jump_shot_holds_jump_then_uses_directional_dodge() {
         let mut brain = BotBrain::new();
