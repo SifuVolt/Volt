@@ -357,6 +357,24 @@ impl BotBrain {
             };
         }
 
+        // The Python run_logic() falls through to grid_defense() whenever
+        // the elected challenger does not meet should_prioritize_ball().
+        // Until the dedicated grid_defense controller is executed, preserve
+        // its non-goalie lane target here rather than issuing a ball challenge.
+        if !is_challenger {
+            return Plan {
+                decision: Decision::Transition,
+                target: Vector::new(
+                    if me.location.x == 0.0 { 0.0 } else { me.location.x.signum() * 900.0 },
+                    side * 5050.0,
+                    0.0,
+                ),
+                target_speed: 1700.0,
+                shot: None,
+                jump: None,
+            };
+        }
+
         if is_challenger {
             let aim = shot_aim_point(ball.location, side);
             let intercept = choose_ground_intercept(me, ball, prediction, aim, &opponents);
