@@ -192,7 +192,7 @@ pub fn find_best_shot(
             if slice.location.z>105.0 {flags.0=false;flags.1=false;}
             else {flags.2=false;}
         }
-        let parsed=parse_budget(me,*slice,remaining,targets,gravity,boost_accel,flags);
+        let parsed=parse_budget(me,*slice,remaining,targets,gravity,boost_accel,flags,unlimited_boost);
         if !parsed.found {continue;}
         let Some(kind)=parsed.shot_type else{continue;};
         if kind==ShotType::Jump && me.boost<8.0 {
