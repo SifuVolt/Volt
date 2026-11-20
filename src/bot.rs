@@ -934,6 +934,9 @@ impl BotBrain {
                 quick: time_remaining <= 0.45,
                 dodge_started_at: None,
                 dodge_direction: Vector::new(1.0, 0.0, 0.0),
+                    side_mode: false,
+                    side_sign: 1.0,
+                    side_lateral_distance: 0.0,
             };
             self.jump_shot = Some(state);
             self.wall_drive_candidate = None;
