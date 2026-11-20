@@ -400,6 +400,10 @@ fn find_wall_drive_inner(
         }
 
         if aerial.is_none() {
+            if shot_offset.magnitude() <= 0.001 {
+                air_t += (2 * i + 1) as f32 / 3600.0;
+                continue;
+            }
             let contact = ball_pos - shot_offset * 92.75;
             let predicted_car = car_location
                 + car_velocity * time_value
@@ -420,7 +424,7 @@ fn find_wall_drive_inner(
     wait_for_fall[0] = 1.0;
 
     let jump_index = if single.is_some() { 0 } else { 1 };
-    let selected_ground = single.or(double)?;
+    single.or(double)?;
     let aerial_available = aerial.is_some()
         && wait_for_fall[jump_index] >= 0.0
         && car.boost / 100.0 * 3.0
