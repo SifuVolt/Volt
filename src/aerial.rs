@@ -14,9 +14,7 @@ use crate::{
 };
 use rlbot::flat::ControllerState;
 
-const BALL_RADIUS: f32 = 92.75;
 const MAX_SPEED: f32 = 2300.0;
-const BOOST_CONSUMPTION: f32 = 33.3;
 const AIR_THROTTLE_ACCEL: f32 = 66.667;
 const JUMP_VEL: f32 = 291.667;
 const JUMP_ACCEL: f32 = 1458.333;
@@ -43,7 +41,6 @@ pub struct AerialShot {
     pub shot_direction: Vector,
     pub start_boost: f32,
     pub double_jump: bool,
-    pub fast: bool,
     pub elapsed: f32,
     pub jump_release_frames: u8,
     pub second_jump_frames: u8,
@@ -65,7 +62,6 @@ impl AerialShot {
             shot_direction: candidate.shot_direction,
             start_boost: car.boost,
             double_jump: candidate.double_jump,
-            fast: candidate.fast,
             elapsed: 0.0,
             jump_release_frames: 0,
             second_jump_frames: 0,
@@ -123,7 +119,7 @@ impl AerialShot {
 
         let time = time_remaining.max(0.001);
         let double_jump_pending = self.double_jump && !car.has_double_jumped && !car.has_dodged;
-        let (final_position, final_velocity) = if self.jumped
+        let (final_position, _final_velocity) = if self.jumped
             || (car.airborne && self.elapsed > JUMP_DURATION && !double_jump_pending)
         {
             (
@@ -143,7 +139,6 @@ impl AerialShot {
         let offset = self.target_location - final_position;
         let offset_length = offset.magnitude();
         let forward = car.forward();
-        let direction_to_target = offset.normalize();
         let local_target = if self.jumped {
             car.local(self.ball - car.location)
         } else {
@@ -192,7 +187,6 @@ impl AerialShot {
             controls.roll = aligned.roll;
         }
 
-        let _ = (final_velocity, direction_to_target, BALL_RADIUS, BOOST_CONSUMPTION);
         controls
     }
 
