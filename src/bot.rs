@@ -754,6 +754,20 @@ impl BotBrain {
             // Aerials compete with ground and single-jump contacts only after
             // the same team-role gate has elected this car to challenge.
             // The CLib reachability check enforces the real boost/speed budget.
+            let max_aerial_height = if living_teammates.len() == 1 && opponents.len() == 1 {
+                1200.0
+            } else {
+                f32::INFINITY
+            };
+            let min_aerial_height = if max_aerial_height > 1200.0
+                && me.location.z >= 2044.0 - me.hitbox.height * 1.1
+            {
+                551.0
+            } else if self.unlimited_boost || me.airborne {
+                150.0
+            } else {
+                450.0
+            };
             if !urgent_save && self.jump_shot.is_none() && self.ground_flip.is_none() {
                 if let Some(candidate) = find_aerial_candidate(
                     me,
@@ -763,9 +777,12 @@ impl BotBrain {
                     match_state.gravity,
                     self.boost_accel,
                 ).filter(|candidate| {
-                    selected.is_none_or(|ground_or_jump| {
-                        candidate.score + 0.05 < ground_or_jump.time
-                    })
+                    candidate.slice.location.z > min_aerial_height
+                        && candidate.slice.location.z < max_aerial_height
+                        && (!candidate.fast || (ball.location.z > 350.0 && candidate.slice.location.z > 350.0))
+                        && selected.is_none_or(|ground_or_jump| {
+                            candidate.score + 0.05 < ground_or_jump.time
+                        })
                 }) {
                     self.aerial_candidate = Some(candidate);
                     return Plan {
