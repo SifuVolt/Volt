@@ -774,8 +774,8 @@ fn choose_jump_intercept(
             .iter()
             .map(|foe| opponent_arrival_time(*foe, slice.location))
             .fold(f32::INFINITY, f32::min);
-        let race_pressure = if opponent_race < slice.time {
-            ((slice.time - opponent_race) / slice.time.max(0.10)).clamp(0.0, 1.0) * 0.18
+        let race_pressure = if opponent_race + 0.08 < eta {
+            ((eta - opponent_race) / eta.max(0.10)).clamp(0.0, 1.0) * 0.18
         } else {
             0.0
         };
@@ -1236,8 +1236,8 @@ fn choose_ground_intercept(
             .iter()
             .map(|foe| opponent_arrival_time(*foe, slice.location))
             .fold(f32::INFINITY, f32::min);
-        let race_pressure = if opponent_race < slice.time {
-            ((slice.time - opponent_race) / slice.time.max(0.10)).clamp(0.0, 1.0) * 0.22
+        let race_pressure = if opponent_race + 0.08 < eta {
+            ((eta - opponent_race) / eta.max(0.10)).clamp(0.0, 1.0) * 0.22
         } else {
             0.0
         };
