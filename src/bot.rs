@@ -287,7 +287,12 @@ impl BotBrain {
                 {
                     state.intercept_time = candidate_time;
                     state.ball = candidate.ball;
-                    state.approach = candidate.approach;
+                    if state.side_mode {
+                        let lateral = Vector::new(-state.shot_direction.y, state.shot_direction.x, 0.0).normalize();
+                        state.approach = candidate.ball - lateral * state.side_lateral_distance * state.side_sign;
+                    } else {
+                        state.approach = candidate.approach;
+                    }
                     state.shot_direction = candidate.shot_direction;
                     self.jump_shot = Some(state);
                 }
@@ -1014,16 +1019,20 @@ impl BotBrain {
             let aligned_for_launch = local_approach.x > 0.0
                 && local_approach.x < 450.0
                 && local_approach.y.abs() < 92.75;
+            let side = jump.side_shot;
+            let side_mode = side.is_some();
+            let side_ready = side_mode && distance < 180.0 && t <= jump_time * 1.08;
             let travel_time = (t - jump_time).max(0.10);
             let required_speed = (distance / travel_time).clamp(0.0, MAX_SPEED);
 
             if !car.airborne
-                && t <= jump_time * 1.08
-                && local_ball.x > 0.0
-                && aligned_for_launch
-                && eta <= t + 0.10
+                && (side_ready || (!side_mode
+                    && t <= jump_time * 1.08
+                    && local_ball.x > 0.0
+                    && aligned_for_launch
+                    && eta <= t + 0.10))
             {
-                let shot_direction = jump.shot_direction;
+                let shot_direction = side.map_or(jump.shot_direction, |s| s.shot_direction);
                 let state = JumpShotState {
                     started_at: game_time,
                     intercept_time: game_time + t,
@@ -1033,6 +1042,9 @@ impl BotBrain {
                     quick: t <= 0.45,
                     dodge_started_at: None,
                     dodge_direction: Vector::new(1.0, 0.0, 0.0),
+                    side_mode,
+                    side_sign: side.map_or(1.0, |s| s.side_sign),
+                    side_lateral_distance: side.map_or(0.0, |s| s.lateral_distance),
                 };
                 self.jump_shot = Some(state);
                 return self.run_jump_shot(car, state, game_time);
@@ -1387,6 +1399,10 @@ impl BotBrain {
     ) -> ControllerState {
         let elapsed = (game_time - state.started_at).max(0.0);
         let time_remaining = state.intercept_time - game_time;
+        if state.side_mode {
+            let lateral = Vector::new(-state.shot_direction.y, state.shot_direction.x, 0.0).normalize();
+            state.approach = state.ball - lateral * state.side_lateral_distance * state.side_sign;
+        }
         let local_ball = car.local_location(state.ball).flatten();
         let distance_to_contact = car.location.distance(state.approach);
         let mut controller = ControllerState::default();
@@ -3193,6 +3209,9 @@ mod tests {
             quick: true,
             dodge_started_at: None,
             dodge_direction: Vector::new(1.0, 0.0, 0.0),
+                    side_mode: false,
+                    side_sign: 1.0,
+                    side_lateral_distance: 0.0,
         };
 
         let controller = brain.run_jump_shot(me, state, 1.10);
@@ -3217,6 +3236,9 @@ mod tests {
             quick: false,
             dodge_started_at: None,
             dodge_direction: Vector::new(1.0, 0.0, 0.0),
+                    side_mode: false,
+                    side_sign: 1.0,
+                    side_lateral_distance: 0.0,
         };
 
         let controller = brain.run_jump_shot(me, state, 1.10);
@@ -3237,6 +3259,9 @@ mod tests {
             quick: false,
             dodge_started_at: None,
             dodge_direction: Vector::new(1.0, 0.0, 0.0),
+                    side_mode: false,
+                    side_sign: 1.0,
+                    side_lateral_distance: 0.0,
         };
 
         let controller = brain.run_jump_shot(me, state, 1.20);
@@ -3257,6 +3282,9 @@ mod tests {
             quick: false,
             dodge_started_at: None,
             dodge_direction: Vector::new(1.0, 0.0, 0.0),
+                    side_mode: false,
+                    side_sign: 1.0,
+                    side_lateral_distance: 0.0,
         };
 
         let normal = brain.run_jump_shot(me, state, 1.01);
