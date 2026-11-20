@@ -134,6 +134,7 @@ pub struct BotBrain {
     kickoff_complete: bool,
     pub match_state: MatchState,
     pub boost_accel: f32,
+    pub unlimited_boost: bool,
     pub boost_pads: Vec<BoostPadState>,
     last_kickoff_time: f32,
     kickoff_was_active: bool,
@@ -162,6 +163,7 @@ impl BotBrain {
             kickoff_complete: false,
             match_state: MatchState::default(),
             boost_accel: BOOST_ACCEL,
+            unlimited_boost: false,
             boost_pads: Vec::new(),
             last_kickoff_time: -999.0,
             kickoff_was_active: false,
@@ -183,6 +185,10 @@ impl BotBrain {
             aerial_shot: None,
             wall_drive_candidate: None,
         }
+    }
+
+    pub fn set_unlimited_boost(&mut self, unlimited: bool) {
+        self.unlimited_boost = unlimited;
     }
 
     pub fn new_with_boost_accel(boost_accel: f32) -> Self {
@@ -720,7 +726,7 @@ impl BotBrain {
             let candidate = find_best_shot(
                 me, cars, ball.location, prediction, shot_targets,
                 match_state.gravity, self.boost_accel, game_time,
-                self.kickoff_contest_until, urgent_save, true, self.shot_search_horizon(game_time),
+                self.kickoff_contest_until, urgent_save, true, self.unlimited_boost, self.shot_search_horizon(game_time),
             );
             let selected = candidate.map(|candidate| candidate_to_intercept(me, candidate, shot_targets));
             let use_jump = selected.filter(|shot| shot.shot_type != ShotType::Ground);
