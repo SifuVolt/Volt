@@ -518,6 +518,7 @@ mod tests {
     fn wall_surface_excludes_own_back_wall_and_goal_mouth() {
         assert!(wall_surface_for_ball(Vector::new(0.0, -5000.0, 100.0), 1800.0, Some(0)).is_none());
         assert!(wall_surface_for_ball(Vector::new(0.0, 5000.0, 100.0), 1800.0, Some(1)).is_none());
+        assert!(wall_surface_for_ball(Vector::new(0.0, 5000.0, 100.0), 1800.0, Some(0)).is_none());
     }
 
     #[test]
@@ -565,6 +566,32 @@ mod tests {
         assert_eq!(v0.len(), 601);
         assert!(d1[120] > d0[120]);
         assert!(v1[120] > v0[120]);
+    }
+
+    #[test]
+    fn finder_returns_first_reachable_single_jump_wall_contact() {
+        let car = car(Vector::ZERO, Vector::ZERO, 0.0);
+        let slices: Vec<BallSlice> = (0..=600)
+            .map(|index| BallSlice {
+                time: index as f32 / 120.0,
+                location: Vector::new(4000.0, 0.0, 800.0),
+                velocity: Vector::ZERO,
+            })
+            .collect();
+
+        let plan = find_wall_drive(
+            &car,
+            &slices,
+            0,
+            Vector::new(0.0, 5120.0, 0.0),
+            5.0,
+        )
+        .unwrap();
+
+        assert_eq!(plan.mode, WallDriveMode::SingleJump);
+        assert!(plan.intercept_time > 4.0 && plan.intercept_time < 5.0);
+        assert!(plan.surface.x_axis);
+        assert!(plan.ball_slice.location.x > 3900.0);
     }
 
     #[test]
