@@ -287,13 +287,13 @@ impl BotBrain {
                 {
                     state.intercept_time = candidate_time;
                     state.ball = candidate.ball;
+                    state.shot_direction = candidate.shot_direction;
                     if state.side_mode {
                         let lateral = Vector::new(-state.shot_direction.y, state.shot_direction.x, 0.0).normalize();
                         state.approach = candidate.ball - lateral * state.side_lateral_distance * state.side_sign;
                     } else {
                         state.approach = candidate.approach;
                     }
-                    state.shot_direction = candidate.shot_direction;
                     self.jump_shot = Some(state);
                 }
             }
