@@ -5,7 +5,7 @@
 //! timed shot execution all feed the live RLBot controller.
 
 use crate::{
-    aerial::{find_aerial_candidate, AerialCandidate, AerialShot},
+    aerial::{find_aerial_candidate, wall_shot_adjust_jump, AerialCandidate, AerialShot},
     control::{default_drive, default_pd, DriveInput},
     defense::GridDefense,
     math::{utils::cap_in_field, Vector},
@@ -1383,6 +1383,25 @@ impl BotBrain {
         if state.side_mode {
             let lateral = Vector::new(-state.shot_direction.y, state.shot_direction.x, 0.0).normalize();
             state.approach = state.ball - lateral * state.side_lateral_distance * state.side_sign;
+        } else {
+            let (adjusted, wall_normal, _) = wall_shot_adjust_jump(state.ball, state.shot_direction);
+            state.shot_direction = adjusted;
+            if let Some(normal) = wall_normal {
+                let tangent = state.shot_direction - normal * state.shot_direction.dot(normal);
+                if tangent.magnitude() > 0.001 {
+                    state.approach -= tangent.normalize() * 25.0;
+                }
+                if normal.z.abs() < 0.95 {
+                    let jump_time = get_jump_time(
+                        state.ball.z - car.location.z,
+                        car.velocity.z,
+                        self.match_state.gravity.z,
+                    ).time as f32;
+                    state.approach.z = state.ball.z
+                        + (state.approach.z - state.ball.z).clamp(-120.0, 120.0);
+                    state.approach -= self.match_state.gravity * (0.5 * jump_time * jump_time);
+                }
+            }
         }
         let local_ball = car.local_location(state.ball).flatten();
         let distance_to_contact = car.location.distance(state.approach);
