@@ -419,6 +419,12 @@ fn find_wall_drive_inner(
         }
     }
 
+    // Python uses max_t both as the scan horizon and as the "not found"
+    // sentinel. A contact exactly at max_t is therefore not selectable.
+    let single = single.filter(|contact| contact.time < max_t);
+    let double = double.filter(|contact| contact.time < max_t);
+    let aerial = aerial.filter(|contact| contact.time < max_t);
+
     // Preserve the source convention: once the scan completes, the single
     // route is considered eligible for the aerial budget check.
     wait_for_fall[0] = 1.0;
