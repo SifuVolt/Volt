@@ -104,7 +104,7 @@ impl BotBrain {
         Self {
             kickoff_complete: false,
             match_state: MatchState::default(),
-            boost_accel: self.boost_accel,
+            boost_accel: BOOST_ACCEL,
             boost_pads: Vec::new(),
             last_kickoff_time: -999.0,
             ground_flip: None,
