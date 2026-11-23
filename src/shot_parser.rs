@@ -181,6 +181,27 @@ fn can_reach_target(max_time: f64, distance: f64, boost_accel: f64, velocity: f6
     -1.0
 }
 
+/// Runtime reachability check used by Python jump_shot.run. This is the
+/// CLib generic_is_viable call made before jump_shot_is_viable; it includes
+/// turn time, braking, boost, and the actual remaining approach distance.
+pub fn runtime_ground_reachability(
+    time: f32,
+    boost_accel: f32,
+    car: &CarState,
+    direction: Vector,
+    distance: f32,
+) -> Option<f32> {
+    let remaining = generic_is_viable(
+        time as f64,
+        boost_accel as f64,
+        car,
+        direction,
+        distance as f64,
+        false,
+    );
+    (remaining >= 0.0).then_some(remaining as f32)
+}
+
 fn generic_is_viable(time: f64, boost_accel: f64, car: &CarState, direction: Vector, distance: f64, safe: bool) -> f64 {
     if distance < car.hitbox.length as f64*0.05 { return time; }
     if time<=0.0 || distance/time>MAX_SPEED { return -1.0; }
