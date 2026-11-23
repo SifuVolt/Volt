@@ -2507,7 +2507,7 @@ impl BotBrain {
 
         if let Some(jump) = plan.jump {
             if jump.shot_type == ShotType::DoubleJump {
-                return self.drive_double_jump(car, jump, prediction, game_time);
+                return self.drive_double_jump(car, ball, jump, prediction, game_time);
             }
 
             // Python pushes jump_shot as soon as the parser finds a viable
@@ -2553,7 +2553,9 @@ impl BotBrain {
             }
             let t = shot.time;
             let time_remaining = t.clamp(0.000001, 6.0);
-            let goal_aim = relative_goal_aim_point(car, shot.ball, shot.targets);
+            // Python ground_shot caches its goal aim from the live ball.
+            // Keep that height/aim choice separate from the predicted contact.
+            let goal_aim = relative_goal_aim_point(car, ball.location, shot.targets);
             let shot_vector = (goal_aim - shot.ball).flatten().normalize();
             // Python's agent.best_shot_value is 92.75 for ground_shot.
             let offset_target = contact_approach_from_label(
@@ -2793,6 +2795,7 @@ impl BotBrain {
     fn drive_double_jump(
         &mut self,
         car: CarState,
+        current_ball: BallState,
         shot: GroundIntercept,
         prediction: &BallTrajectory,
         game_time: f32,
@@ -2813,7 +2816,9 @@ impl BotBrain {
         // Python double_jump uses the ball-radius standoff (best_shot_value)
         // and its goal-directed shot vector. It does not inherit the parser's
         // jump-shot front-face label.
-        let goal_aim = relative_goal_aim_point(car, ball, shot.targets);
+        // Python caches _relative_goal_aim_point on the first routine
+        // frame using the live ball's half of the field, not the future slice.
+        let goal_aim = relative_goal_aim_point(car, current_ball.location, shot.targets);
         let shot_direction = (goal_aim - ball).flatten().normalize();
         let offset_target = ball - shot_direction * 92.75;
 
