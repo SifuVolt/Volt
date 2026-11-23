@@ -136,6 +136,31 @@ fn score(me:CarState,friends:&[CarState],ball:Vector,vel:Vector,kind:ShotType,t:
     s
 }
 
+/// Python shot_candidate_score for aerial-only searches, including its
+/// post-kickoff aerial preference and teammate-aware angle penalty.
+pub fn score_aerial_candidate(
+    me: CarState,
+    cars: &[CarState],
+    ball: Vector,
+    velocity: Vector,
+    time_remaining: f32,
+    targets: ShotTargets,
+    gravity_z: f32,
+    kickoff_contest: bool,
+) -> f32 {
+    let friends: Vec<CarState> = cars.iter().copied()
+        .filter(|car| car.team == me.team && car.index != me.index && !car.demolished)
+        .collect();
+    let mut value = score(
+        me, &friends, ball, velocity, ShotType::Aerial,
+        time_remaining, targets, gravity_z,
+    );
+    if kickoff_contest {
+        value -= 0.40;
+    }
+    value
+}
+
 fn reserve(me:CarState,ball:Vector,t:f32,kind:ShotType,g:f32,unlimited:bool)->f32 {
     if unlimited || kind==ShotType::Ground {return 0.0;}
     let height=(ball.z-R-me.location.z).max(0.0);
