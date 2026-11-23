@@ -5255,6 +5255,53 @@ mod tests {
     }
 
     #[test]
+    fn jump_shot_tracks_prediction_and_accelerates_before_launch() {
+        let mut brain = BotBrain::new();
+        let me = car(0, 0, Vector::new(0.0, 0.0, 17.0));
+        let state = JumpShotState {
+            started_at: 1.0,
+            intercept_time: 2.5,
+            ball: Vector::new(400.0, 0.0, 93.0),
+            ball_velocity: Vector::ZERO,
+            approach: Vector::new(248.0, 0.0, 93.0),
+            shot_direction: Vector::new(1.0, 0.0, 0.0),
+            contact_face: "centre",
+            contact_face_label: None,
+            needed_jump_time: 0.2,
+            jumping: false,
+            jump_time: None,
+            quick: false,
+            counter: 0,
+            patience_applied: false,
+            dodge_started_at: None,
+            dodge_direction: Vector::new(1.0, 0.0, 0.0),
+            side_mode: false,
+            side_sign: 1.0,
+            side_lateral_distance: 0.0,
+            targets: ShotTargets::default(),
+        };
+        let future = BallSlice {
+            time: 1.5,
+            location: Vector::new(650.0, 0.0, 93.0),
+            velocity: Vector::ZERO,
+        };
+        let prediction = BallTrajectory { slices: vec![future; 200] };
+        let controller = brain.run_jump_shot(
+            me,
+            BallState { location: future.location, velocity: future.velocity },
+            &prediction,
+            state,
+            1.0,
+        );
+
+        assert!(controller.throttle > 0.0, "the car must accelerate toward the predicted contact");
+        assert!(!controller.jump, "the routine must drive before its launch window");
+        let committed = brain.jump_shot.expect("jump shot remains committed");
+        assert!(!committed.jumping);
+        assert!((committed.ball.x - 650.0).abs() < 0.01);
+    }
+
+    #[test]
     fn jump_shot_holds_jump_then_uses_directional_dodge() {
         let mut brain = BotBrain::new();
         let mut me = car(0, 0, Vector::ZERO);
