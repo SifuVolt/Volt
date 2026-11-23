@@ -1755,7 +1755,7 @@ impl BotBrain {
             } else if self.unlimited_boost || me.airborne {
                 150.0
             } else {
-                450.0
+                350.0
             };
             if !urgent_save && self.jump_shot.is_none() && self.ground_flip.is_none() {
                 if let Some(candidate) = find_aerial_candidate(
@@ -1938,9 +1938,9 @@ impl BotBrain {
             551.0
         } else if self.unlimited_boost || me.airborne {
             150.0
-        } else {
-            450.0
-        };
+            } else {
+                350.0
+            };
         if !urgent_save && self.ground_flip.is_none() && self.jump_shot.is_none() {
             if fast_intercept_zone && (me.airborne || game_time - self.last_landing_time > 0.5) {
                 if let Some(candidate) = find_fast_aerial_candidate(
@@ -2584,6 +2584,15 @@ impl BotBrain {
                 side_lateral_distance: side.map_or(0.0, |s| s.lateral_distance),
                 targets: jump.targets,
             };
+            println!(
+                "[JUMP SHOT SELECTED] player={} parser_type={:?} T={:.3} ball=({:.0},{:.0},{:.0}) approach=({:.0},{:.0},{:.0}) boost={:.0}",
+                car.index,
+                jump.shot_type,
+                state.intercept_time - game_time,
+                state.ball.x, state.ball.y, state.ball.z,
+                state.approach.x, state.approach.y, state.approach.z,
+                car.boost,
+            );
             self.jump_shot = Some(state);
             return self.run_jump_shot(car, ball, prediction, state, game_time);
         }
@@ -3357,6 +3366,11 @@ impl BotBrain {
 
             if side_ready || normal_ready {
                 state.quick = t <= 0.45;
+                println!(
+                    "[JUMP SHOT TYPE] player={} quick={} T={:.3} needed_jump={:.3} distance={:.1} aligned={} side_ready={}",
+                    car.index, state.quick, t, state.needed_jump_time,
+                    distance_remaining, aligned, side_ready,
+                );
                 state.jumping = true;
                 state.jump_time = None;
                 self.jump_shot = Some(state);
@@ -3390,6 +3404,11 @@ impl BotBrain {
             if t <= state.needed_jump_time
                 || (t_j > 0.0 && distance_remaining > 50.0 && !runtime_reachable)
             {
+                println!(
+                    "[JUMP SHOT ABORT] phase=approach reason={} T={:.3} Tj={:.3} distance={:.1} needed_jump={:.3} boost={:.0}",
+                    if t <= state.needed_jump_time { "time_expired" } else { "not_viable" },
+                    t, t_j, distance_remaining, state.needed_jump_time, car.boost,
+                );
                 self.jump_shot = None;
                 if car.airborne {
                     let recovery_target = if car.velocity.magnitude() > 1.0 {
