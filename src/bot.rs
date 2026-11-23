@@ -441,6 +441,16 @@ impl BotBrain {
         self.teamplay_receive = receive_plan(me, candidate.slice.location, aim);
     }
 
+    fn yield_teamplay_opportunity(&mut self) {
+        self.teamplay_status = "NO_SHOT".to_owned();
+        self.teamplay_score = 0.0;
+        self.teamplay_contact_time = 10.0;
+        self.teamplay_cover_released = false;
+        self.teamplay_cover_owner = None;
+        self.teamplay_receive = None;
+        self.aerial_candidate = None;
+    }
+
     pub fn teamplay_message(&self, now: f32) -> TeamplayMessage {
         let (receive, direction, contact) = self.teamplay_receive
             .map(|(receive, direction, contact)| (Some(receive), Some(direction), Some(contact)))
@@ -1579,14 +1589,20 @@ impl BotBrain {
                     max_height, true,
                 ) {
                     self.set_teamplay_aerial(me, ball, candidate, opponent_goal, aim, roles, urgent_save, false);
-                    self.aerial_candidate = Some(candidate);
-                    return Plan {
-                        decision: Decision::AerialChallenge,
-                        target: candidate.target_location,
-                        target_speed: MAX_SPEED,
-                        shot: None,
-                        jump: None,
-                    };
+                    if should_commit_to_shot(
+                        me, cars, ball, roles, urgent_save, self.teamplay_score,
+                        self.teamplay_contact_time, &self.teammate_comms, game_time,
+                    ) {
+                        self.aerial_candidate = Some(candidate);
+                        return Plan {
+                            decision: Decision::AerialChallenge,
+                            target: candidate.target_location,
+                            target_speed: MAX_SPEED,
+                            shot: None,
+                            jump: None,
+                        };
+                    }
+                    self.yield_teamplay_opportunity();
                 }
             }
 
@@ -1628,14 +1644,20 @@ impl BotBrain {
                     self.set_teamplay_aerial(
                         me, ball, candidate, opponent_goal, aim, roles, urgent_save, true,
                     );
-                    self.aerial_candidate = Some(candidate);
-                    return Plan {
-                        decision: Decision::AerialChallenge,
-                        target: candidate.target_location,
-                        target_speed: MAX_SPEED,
-                        shot: None,
-                        jump: None,
-                    };
+                    if should_commit_to_shot(
+                        me, cars, ball, roles, urgent_save, self.teamplay_score,
+                        self.teamplay_contact_time, &self.teammate_comms, game_time,
+                    ) {
+                        self.aerial_candidate = Some(candidate);
+                        return Plan {
+                            decision: Decision::AerialChallenge,
+                            target: candidate.target_location,
+                            target_speed: MAX_SPEED,
+                            shot: None,
+                            jump: None,
+                        };
+                    }
+                    self.yield_teamplay_opportunity();
                 }
             }
 
@@ -1774,15 +1796,21 @@ impl BotBrain {
                     0.10, self.shot_search_horizon(game_time), ball.location.z,
                     max_aerial_height, true,
                 ) {
-                    self.set_teamplay_aerial(me, ball, candidate, opponent_goal, aim, roles, urgent_save, true);
-                    self.aerial_candidate = Some(candidate);
-                    return Plan {
-                        decision: Decision::AerialChallenge,
-                        target: candidate.target_location,
-                        target_speed: MAX_SPEED,
-                        shot: None,
-                        jump: None,
-                    };
+                    self.set_teamplay_aerial(me, ball, candidate, opponent_goal, aim, roles, urgent_save, false);
+                    if should_commit_to_shot(
+                        me, cars, ball, roles, urgent_save, self.teamplay_score,
+                        self.teamplay_contact_time, &self.teammate_comms, game_time,
+                    ) {
+                        self.aerial_candidate = Some(candidate);
+                        return Plan {
+                            decision: Decision::AerialChallenge,
+                            target: candidate.target_location,
+                            target_speed: MAX_SPEED,
+                            shot: None,
+                            jump: None,
+                        };
+                    }
+                    self.yield_teamplay_opportunity();
                 }
             }
             if let Some(candidate) = find_aerial_candidate(
@@ -1802,15 +1830,21 @@ impl BotBrain {
             ).filter(|candidate| {
                 selected_score.is_none_or(|best_score| candidate.score < best_score)
             }) {
-                self.set_teamplay_aerial(me, ball, candidate, opponent_goal, aim, roles, urgent_save);
-                self.aerial_candidate = Some(candidate);
-                return Plan {
-                    decision: Decision::AerialChallenge,
-                    target: candidate.target_location,
-                    target_speed: MAX_SPEED,
-                    shot: None,
-                    jump: None,
-                };
+                self.set_teamplay_aerial(me, ball, candidate, opponent_goal, aim, roles, urgent_save, true);
+                if should_commit_to_shot(
+                    me, cars, ball, roles, urgent_save, self.teamplay_score,
+                    self.teamplay_contact_time, &self.teammate_comms, game_time,
+                ) {
+                    self.aerial_candidate = Some(candidate);
+                    return Plan {
+                        decision: Decision::AerialChallenge,
+                        target: candidate.target_location,
+                        target_speed: MAX_SPEED,
+                        shot: None,
+                        jump: None,
+                    };
+                }
+                self.yield_teamplay_opportunity();
             }
         }
         if transition_followup_active && selected.is_none() {
