@@ -4569,7 +4569,13 @@ fn party_cannon_jump_front_contact(
     } else {
         0.0
     };
-    let omega = car.angular_velocity;
+    // This Party Cannon contact prediction reads raw RLBot physics
+    // angular_velocity, which is world-space. CarState stores the VirxERLU
+    // localized value for defaultPD, so transform it back before Rodrigues'
+    // world-space orientation extrapolation.
+    let omega = car.forward() * car.angular_velocity.x
+        + car.right() * car.angular_velocity.y
+        + car.up() * car.angular_velocity.z;
     let angular_speed = omega.magnitude();
     let mut impact_forward = car_forward;
     let mut impact_up = car_up;
