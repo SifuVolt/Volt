@@ -417,12 +417,14 @@ impl BotBrain {
         if ball_in_goal_danger {
             if !self.emergency_save_zone_active {
                 self.emergency_save_zone_active = true;
-                if self.aerial_shot.is_none()
+                if self.aerial_shot.as_ref().is_none_or(|shot| !shot.aerialing)
                     && self.ground_flip.is_none()
+                    && self.defense_flip.is_none()
                     && self.defense_recovery_target.is_none()
                 {
                     self.jump_shot = None;
                     self.double_jump_shot = None;
+                    self.aerial_shot = None;
                     self.power_clear = None;
                     self.emergency_clear = Some(EmergencyClearState {
                         started_at: game_time,
@@ -447,6 +449,7 @@ impl BotBrain {
             && self.double_jump_shot.is_none()
             && self.aerial_shot.is_none()
             && self.ground_flip.is_none()
+            && self.defense_flip.is_none()
             && self.defense_recovery_target.is_none()
             && self.ball_rolling_toward_me(me, cars, ball, prediction, game_time)
         {
@@ -1146,7 +1149,8 @@ impl BotBrain {
 
             // Noob Black's unfolded wall-shot scan competes with ordinary
             // ground/jump contacts, but never displaces an urgent save.
-            if !urgent_save && self.ground_flip.is_none() && self.defense_recovery_target.is_none()
+            if !urgent_save && self.ground_flip.is_none() && self.defense_flip.is_none()
+                && self.defense_recovery_target.is_none()
                 && self.aerial_shot.as_ref().is_none_or(|shot| !shot.aerialing) {
                 if let Some(wall) = find_wall_drive(
                     &me, &prediction.slices, me.team, opponent_goal, 5.0,
@@ -1291,7 +1295,8 @@ impl BotBrain {
         let can_jump = candidate.is_some_and(|candidate| candidate.can_jump);
         let use_jump = selected.filter(|shot| shot.shot_type != ShotType::Ground || can_jump);
         let intercept = selected.filter(|shot| shot.shot_type == ShotType::Ground && !can_jump);
-        if self.ground_flip.is_none() && self.defense_recovery_target.is_none()
+        if self.ground_flip.is_none() && self.defense_flip.is_none()
+            && self.defense_recovery_target.is_none()
             && self.aerial_shot.as_ref().is_none_or(|shot| !shot.aerialing) {
             if let Some(wall) = find_wall_drive(
                 &me, &prediction.slices, me.team, opponent_goal, 5.0,
