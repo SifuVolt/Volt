@@ -1126,7 +1126,7 @@ mod tests {
 
     #[test]
     fn fast_intercept_aerial_uses_clib_slice_time_and_skips_expired_sample() {
-        let mut me = car(Vector::new(0.0, -1200.0, 17.0), 100.0);
+        let mut me = car(Vector::ZERO, 100.0);
         me.orientation = Matrix3::new(0.0, std::f32::consts::FRAC_PI_2, 0.0);
         let prediction = BallTrajectory {
             slices: vec![
@@ -1136,7 +1136,7 @@ mod tests {
                     velocity: Vector::ZERO,
                 },
                 BallSlice {
-                    time: 1.5,
+                    time: 1.8,
                     location: Vector::new(0.0, 0.0, 900.0),
                     velocity: Vector::ZERO,
                 },
@@ -1155,7 +1155,7 @@ mod tests {
             true,
         );
         assert!(candidate.is_some());
-        assert!((candidate.unwrap().slice.time - 1.5).abs() < 1.0e-5);
+        assert!((candidate.unwrap().slice.time - 1.8).abs() < 1.0e-5);
     }
 
     #[test]
