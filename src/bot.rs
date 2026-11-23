@@ -4748,7 +4748,6 @@ mod tests {
         let mut me = car(0, 0, Vector::ZERO);
         me.airborne = true;
         me.air_state = AirState::InAir;
-        me.orientation = Matrix3::new(0.0, std::f32::consts::FRAC_PI_2, 0.0);
         let state = JumpShotState {
             started_at: 1.0,
             intercept_time: 1.2,
