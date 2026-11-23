@@ -568,6 +568,50 @@ impl AerialShot {
 
 }
 
+/// Exact port of Python Aerial._party_cannon_shot_direction.
+///
+/// This deliberately returns the raw Party Cannon prediction. Wall correction
+/// belongs to jump_shot.run after it blends this prediction with the goal
+/// direction; applying wall correction here would correct the jump shot twice.
+pub fn party_cannon_shot_direction(
+    car: CarState,
+    ball: Vector,
+    ball_velocity: Vector,
+    time_remaining: f32,
+    goal: Vector,
+    gravity: Vector,
+) -> Vector {
+    let safe_time = time_remaining.max(1.0 / 120.0);
+    let raw_car_velocity = (ball - car.location) / safe_time;
+    let raw_speed = raw_car_velocity.magnitude();
+    let car_final_velocity = if raw_speed > MAX_SPEED {
+        raw_car_velocity * (MAX_SPEED / raw_speed)
+    } else {
+        raw_car_velocity
+    };
+
+    let velocity_for_power = (car_final_velocity * 6.0 + ball_velocity) / 7.0;
+    let direction_to_score = (goal - ball).flatten().normalize();
+    let velocity_difference = (car_final_velocity - ball_velocity).magnitude();
+    let score_speed = (
+        velocity_difference * shot_power_modifier(velocity_difference)
+            + velocity_for_power.dot(direction_to_score)
+    ).clamp(500.0, 6000.0);
+    let time_to_score = ball.flat_distance(goal) / score_speed;
+
+    let predicted_after_hit_velocity = (car_final_velocity + ball_velocity * 2.0) / 3.0;
+    let predicted_ball = ball
+        + predicted_after_hit_velocity * time_to_score
+        + gravity * (0.5 * time_to_score * time_to_score);
+    let shot_direction = (goal - predicted_ball).normalize();
+
+    if shot_direction.magnitude() < 0.001 {
+        direction_to_score
+    } else {
+        shot_direction
+    }
+}
+
 fn shot_power_modifier(value: f32) -> f32 {
     let value = value.clamp(0.0, 4600.0);
     if value <= 500.0 {
