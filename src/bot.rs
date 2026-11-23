@@ -1547,18 +1547,10 @@ impl BotBrain {
                 ) {
                     return plan;
                 }
+                // Python continues through the pass-shot and vulnerable-opponent
+                // fallbacks when the dedicated fast-intercept finder returns
+                // no usable routine (or the teammate comparison rejects it).
                 self.yield_teamplay_opportunity();
-                return Plan {
-                    decision: Decision::Transition,
-                    target: Vector::new(
-                        if me.location.x == 0.0 { 0.0 } else { me.location.x.signum() * 900.0 },
-                        side * 5050.0,
-                        0.0,
-                    ),
-                    target_speed: 1700.0,
-                    shot: None,
-                    jump: None,
-                };
             }
             // Match Volt's two-stage selection:
             // 1) find_teamplay_opportunity publishes a targeted shot, the
@@ -1567,11 +1559,7 @@ impl BotBrain {
             // 2) run_logic may then take an untargeted first touch as a
             //    local fallback. That fallback is NOT a teamplay claim.
             let mut candidate = if fast_intercept_zone {
-                find_fast_intercept(
-                    me, prediction, shot_targets, match_state.gravity, self.boost_accel,
-                    if transition_followup_active { 0.03 } else { 0.10 },
-                    self.shot_search_horizon(game_time), self.unlimited_boost,
-                )
+                None
             } else if ball_depth < 640.0 {
                 find_best_shot(
                     me, cars, ball.location, prediction, shot_targets,
@@ -1606,12 +1594,14 @@ impl BotBrain {
                 );
             }
 
-            if candidate.is_none() && !fast_intercept_zone && !living_teammates.is_empty() {
+            let mut pass_candidate_selected = false;
+            if candidate.is_none() && !living_teammates.is_empty() {
                 candidate = find_best_pass_shot(
                     me, cars, ball.location, prediction, match_state.gravity,
                     self.boost_accel, game_time, self.kickoff_contest_until,
                     urgent_save, true, self.unlimited_boost, self.shot_search_horizon(game_time),
                 );
+                pass_candidate_selected = candidate.is_some();
             }
             if candidate.is_none()
                 && ball_depth > 640.0
@@ -1710,7 +1700,7 @@ impl BotBrain {
                 }
             }
 
-            if fast_intercept_zone && !urgent_save
+            if fast_intercept_zone && !pass_candidate_selected && !urgent_save
                 && (me.airborne || game_time - self.last_landing_time > 0.5)
             {
                 let max_height = if living_teammates.len() == 1 && opponents.len() == 1 {
@@ -1757,7 +1747,9 @@ impl BotBrain {
             } else {
                 350.0
             };
-            if !urgent_save && self.jump_shot.is_none() && self.ground_flip.is_none() {
+            if !urgent_save && !pass_candidate_selected
+                && self.jump_shot.is_none() && self.ground_flip.is_none()
+            {
                 if let Some(candidate) = find_aerial_candidate(
                     me,
                     prediction,
