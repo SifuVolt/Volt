@@ -106,6 +106,7 @@ struct JumpShotState {
     approach: Vector,
     shot_direction: Vector,
     contact_face: &'static str,
+    contact_face_label: Option<&'static str>,
     quick: bool,
     counter: u8,
     patience_applied: bool,
@@ -2064,6 +2065,7 @@ impl BotBrain {
                 approach: geometry.approach,
                 shot_direction: geometry.shot_direction,
                 contact_face: "centre",
+                contact_face_label: None,
                 quick: time_remaining <= 0.45,
                 counter: 0,
                 patience_applied: false,
@@ -2338,6 +2340,7 @@ impl BotBrain {
                     approach: jump.approach,
                     shot_direction,
                     contact_face: jump.contact_face,
+                    contact_face_label: None,
                     quick: t <= 0.45,
                     counter: 0,
                     patience_applied: false,
@@ -4011,6 +4014,110 @@ fn relative_goal_aim_point(car:CarState,ball:Vector,targets:ShotTargets)->Vector
     center
 }
 
+fn party_cannon_jump_front_contact(
+    car: CarState,
+    ball: Vector,
+    shot_direction: Vector,
+    time_remaining: f32,
+    gravity: Vector,
+    previous_label: Option<&'static str>,
+) -> Option<(Vector, &'static str)> {
+    let shot_forward = shot_direction.flatten().normalize();
+    let car_forward = car.forward().normalize();
+    let mut car_up = car.up().normalize();
+    let car_right = car_forward.cross(car_up).normalize();
+    if shot_forward.magnitude() <= 0.001
+        || car_forward.magnitude() <= 0.001
+        || car_up.magnitude() <= 0.001
+        || car_right.magnitude() <= 0.001
+    {
+        return None;
+    }
+    car_up = car_right.cross(car_forward).normalize();
+
+    let orientation_horizon = time_remaining.max(0.0).min(0.18);
+    let omega = car.angular_velocity;
+    let angular_speed = omega.magnitude();
+    let mut impact_forward = car_forward;
+    let mut impact_up = car_up;
+    if angular_speed > 0.05 && orientation_horizon > 0.0 {
+        let axis = omega / angular_speed;
+        let angle = (angular_speed * orientation_horizon).min(0.65);
+        let cosine = angle.cos();
+        let sine = angle.sin();
+        impact_forward = (
+            car_forward * cosine
+                + axis.cross(car_forward) * sine
+                + axis * (axis.dot(car_forward) * (1.0 - cosine))
+        ).normalize();
+        impact_up = (
+            car_up * cosine
+                + axis.cross(car_up) * sine
+                + axis * (axis.dot(car_up) * (1.0 - cosine))
+        ).normalize();
+    }
+
+    let impact_right = impact_up.cross(impact_forward).normalize();
+    impact_up = impact_forward.cross(impact_right).normalize();
+    let half_length = car.hitbox.length * 0.5;
+    let half_width = car.hitbox.width * 0.5;
+    let half_height = car.hitbox.height * 0.5;
+    let world_hitbox_offset = impact_forward * car.hitbox.offset.x
+        + impact_right * car.hitbox.offset.y
+        + impact_up * car.hitbox.offset.z;
+
+    let candidates: [(&str, f32, f32); 7] = [
+        ("centre", 0.0, 0.0),
+        ("top_left", -half_width * 0.82, half_height * 0.82),
+        ("top_right", half_width * 0.82, half_height * 0.82),
+        ("left", -half_width * 0.88, 0.0),
+        ("right", half_width * 0.88, 0.0),
+        ("top", 0.0, half_height * 0.88),
+        ("bottom", 0.0, -half_height * 0.70),
+    ];
+
+    let impact_horizon = time_remaining.max(0.0).min(0.30);
+    let predicted_car = car.location
+        + car.velocity * impact_horizon
+        + gravity * (0.5 * impact_horizon * impact_horizon);
+    let mut scored: Vec<(f32, &'static str, Vector)> = Vec::with_capacity(candidates.len());
+
+    for (label, lateral_offset, vertical_offset) in candidates {
+        let front_point_offset = impact_forward * half_length
+            + impact_right * lateral_offset
+            + impact_up * vertical_offset
+            + world_hitbox_offset;
+        let predicted_contact_point = predicted_car + front_point_offset;
+        let incoming_normal = (ball - predicted_contact_point).normalize();
+        if incoming_normal.magnitude() <= 0.001 {
+            continue;
+        }
+        let shot_alignment = incoming_normal.dot(shot_forward);
+        let front_alignment = incoming_normal.dot(impact_forward);
+        let required_car_centre =
+            ball - shot_forward * 92.75 - front_point_offset;
+        let reach_cost = required_car_centre.distance(predicted_car);
+        let score = shot_alignment
+            + front_alignment.clamp(-1.0, 1.0) * 0.12
+            - reach_cost * 0.00020;
+        scored.push((score, label, required_car_centre));
+    }
+
+    if scored.is_empty() {
+        return None;
+    }
+    scored.sort_by(|a, b| b.0.total_cmp(&a.0));
+    let mut selected = scored[0];
+    if let Some(previous) = previous_label {
+        if let Some(previous_candidate) = scored.iter().copied().find(|entry| entry.1 == previous) {
+            if previous_candidate.0 >= selected.0 - 0.06 {
+                selected = previous_candidate;
+            }
+        }
+    }
+    Some((selected.2, selected.1))
+}
+
 fn contact_approach_from_label(ball:Vector,shot:Vector,label:&str,distance:f32)->Option<Vector> {
     let shot=shot.flatten().normalize();
     if shot.magnitude()<0.001 {return None;}
@@ -5060,6 +5167,7 @@ mod tests {
             approach: Vector::new(200.0, 0.0, 0.0),
             shot_direction: Vector::new(1.0, 0.0, 0.0),
             contact_face: "centre",
+            contact_face_label: None,
             quick: true,
             counter: 3,
             patience_applied: false,
@@ -5093,6 +5201,7 @@ mod tests {
             approach: Vector::new(1000.0, 0.0, 0.0),
             shot_direction: Vector::new(1.0, 0.0, 0.0),
             contact_face: "centre",
+            contact_face_label: None,
             quick: false,
             counter: 0,
             patience_applied: false,
@@ -5121,6 +5230,7 @@ mod tests {
             approach: Vector::new(200.0, 0.0, 0.0),
             shot_direction: Vector::new(1.0, 0.0, 0.0),
             contact_face: "centre",
+            contact_face_label: None,
             quick: false,
             counter: 0,
             patience_applied: false,
@@ -5149,6 +5259,7 @@ mod tests {
             approach: Vector::new(200.0, 0.0, 0.0),
             shot_direction: Vector::new(1.0, 1.0, 0.0),
             contact_face: "centre",
+            contact_face_label: None,
             quick: false,
             counter: 0,
             patience_applied: false,
@@ -5234,6 +5345,7 @@ mod tests {
             approach: Vector::new(145.0, 0.0, 100.0),
             shot_direction: Vector::new(1.0, 0.0, 0.0),
             contact_face: "centre",
+            contact_face_label: None,
             quick: true,
             counter: 0,
             patience_applied: false,
