@@ -53,6 +53,7 @@ enum Decision {
     AerialChallenge,
     WallDrive,
     TransitionBump,
+    TransitionReceive,
     Goalkeeper,
     Transition,
 }
@@ -203,6 +204,7 @@ pub struct BotBrain {
     transition_last_ball: Option<BallState>,
     transition_followup_until: f32,
     transition_last_target: Option<Vector>,
+    transition_direction: Option<Vector>,
     transition_bump_cooldown_until: f32,
     emergency_clear: Option<EmergencyClearState>,
     emergency_save_zone_active: bool,
@@ -253,6 +255,7 @@ impl BotBrain {
             transition_last_ball: None,
             transition_followup_until: -999.0,
             transition_last_target: None,
+            transition_direction: None,
             transition_bump_cooldown_until: -999.0,
             emergency_clear: None,
             emergency_save_zone_active: false,
@@ -1039,8 +1042,9 @@ impl BotBrain {
                         }
                     }
                     self.transition_last_target = Some(target);
+                    self.transition_direction = Some(direction);
                     return Plan {
-                        decision: Decision::Transition,
+                        decision: Decision::TransitionReceive,
                         target,
                         target_speed: 1700.0,
                         shot: None,
@@ -1052,9 +1056,11 @@ impl BotBrain {
                 self.transition_hit_time = None;
                 self.transition_last_ball = None;
                 self.transition_last_target = None;
+                self.transition_direction = None;
             }
 
             let x_sign = if me.location.x == 0.0 { 1.0 } else { me.location.x.signum() };
+            self.transition_direction = None;
             return Plan {
                 decision: Decision::Transition,
                 target: Vector::new(x_sign * 900.0, side * 5050.0, 0.0),
@@ -1084,11 +1090,12 @@ impl BotBrain {
 
         if is_challenger {
             let aim = shot_aim_point(ball.location, side, me.airborne);
-            let fast_intercept_zone = ball_depth > 0.0 && ball_depth <= 1280.0;
+            let fast_intercept_zone = transition_followup_active || (ball_depth > 0.0 && ball_depth <= 1280.0);
             let mut candidate = if fast_intercept_zone {
                 find_fast_intercept(
                     me, prediction, shot_targets, match_state.gravity, self.boost_accel,
-                    0.10, self.shot_search_horizon(game_time), self.unlimited_boost,
+                    if transition_followup_active { 0.03 } else { 0.10 },
+                    self.shot_search_horizon(game_time), self.unlimited_boost,
                 )
             } else {
                 find_best_shot(
@@ -1171,7 +1178,8 @@ impl BotBrain {
                 } else { f32::INFINITY };
                 if let Some(candidate) = find_fast_aerial_candidate(
                     me, prediction, aim, match_state.gravity, self.boost_accel,
-                    0.10, self.shot_search_horizon(game_time), ball.location.z,
+                    if transition_followup_active { 0.03 } else { 0.10 },
+                    self.shot_search_horizon(game_time), ball.location.z,
                     max_height, true,
                 ) {
                     self.set_teamplay_aerial(me, candidate, aim, roles, urgent_save);
@@ -1676,6 +1684,29 @@ impl BotBrain {
     }
 
     fn drive_to(&mut self, car: CarState, plan: Plan, game_time: f32, ball: BallState) -> ControllerState {
+        if plan.decision == Decision::TransitionReceive
+            && self.jump_shot.is_none()
+            && self.double_jump_shot.is_none()
+        {
+            let direction = self.transition_direction.unwrap_or_else(|| {
+                (plan.target - ball.location).flatten().normalize()
+            });
+            let face_target = plan.target + direction * 1000.0;
+            let mut drive = default_drive(
+                &car,
+                DriveInput {
+                    target_speed: 1700.0,
+                    local_target: car.local_location(plan.target),
+                    upside_down: false,
+                    up: None,
+                    handbrake: false,
+                    boost_accel: self.boost_accel,
+                },
+            );
+            let face_local = car.local_location(face_target);
+            drive.controls.steer = (face_local.y.atan2(face_local.x) * 5.0).clamp(-1.0, 1.0);
+            return controller_from_drive(drive, car);
+        }
         if plan.decision == Decision::EmergencyChallenge {
             let state = self.emergency_clear.unwrap_or(EmergencyClearState {
                 started_at: game_time,
