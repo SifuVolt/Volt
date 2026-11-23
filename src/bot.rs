@@ -1758,6 +1758,9 @@ impl BotBrain {
                 }
                 if !aerial.aerialing {
                     self.aerial_shot = Some(aerial);
+                    if aerial.side_wall_active {
+                        return controls;
+                    }
                     return controller_from_drive(drive, car);
                 }
                 self.aerial_shot = Some(aerial);

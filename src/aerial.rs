@@ -60,6 +60,7 @@ pub struct AerialShot {
     pub dodge_input: Vector,
     pub dodge_jump: bool,
     pub side_wall_launched: bool,
+    pub side_wall_active: bool,
     pub finished: bool,
 }
 
@@ -104,6 +105,7 @@ impl AerialShot {
             dodge_input: Vector::ZERO,
             dodge_jump: true,
             side_wall_launched: false,
+            side_wall_active: false,
             finished: false,
         };
         let single = aerial.boost_estimate(car, false, 0.0, candidate.slice.time, gravity, boost_accel);
@@ -121,6 +123,7 @@ impl AerialShot {
         time_remaining: f32,
         boost_accel: f32,
     ) -> Option<ControllerState> {
+        self.side_wall_active = false;
         let ball = self.ball;
         let wall_side = if ball.x >= 0.0 { 1.0 } else { -1.0 };
         let wall_gap = 4096.0 - ball.x.abs() - 92.75;
@@ -142,6 +145,7 @@ impl AerialShot {
         if attached_wall.is_some_and(|side| side != wall_side) || time_remaining <= 0.35 {
             return None;
         }
+        self.side_wall_active = true;
 
         let wall_x = wall_side * 3850.0;
         let lane_y = self.target_location.y;
@@ -201,6 +205,7 @@ impl AerialShot {
         if !launch_ready { return Some(controller); }
 
         self.side_wall_launched = true;
+        self.side_wall_active = false;
         self.jump_immediately = true;
         self.aerialing = true;
         self.elapsed = 0.0;
