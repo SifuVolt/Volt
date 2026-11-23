@@ -136,14 +136,13 @@ contact target, wrong time-to-intercept, or wrong requested speed.
 
 ### Jump-shot launch frame
 
-A source comparison found a concrete one-frame control-flow regression:
-Python sets `self.jumping = True` during the pre-launch branch, then continues
-through the same `run()` call into its flight controller. Rust previously
-returned the ground-drive controller immediately after setting
-`state.jumping`, delaying the first jump/flight controls by one 120 Hz tick.
-The Rust launch branch now records `jump_time = game_time` and falls through
-into the flight controller on that same packet. This is a source-order fix;
-it still requires the full Cargo suite and in-game verification.
+The Python source uses an `if not self.jumping: ... else: ...` split. When the
+approach branch first reaches its launch gate, it sets `self.jumping = True`
+but does not execute the `else` flight controller until the next packet.
+Rust now preserves the current packet's `defaultDrive` output, stores the
+jumping state without starting `jump_time`, and begins the first jump impulse
+on the following 120 Hz tick. A regression test checks both packets. This is
+covered by CI tests/build but still requires in-game verification.
 
 ### Runtime stalls
 
