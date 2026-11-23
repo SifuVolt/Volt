@@ -13,7 +13,7 @@ use crate::{
     shot_physics::aerial_shot_is_viable,
     state::CarState,
 };
-use rlbot::flat::{AirState, ControllerState};
+use rlbot::flat::ControllerState;
 
 const MAX_SPEED: f32 = 2300.0;
 const AIR_THROTTLE_ACCEL: f32 = 66.667;
