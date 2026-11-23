@@ -2090,7 +2090,12 @@ impl BotBrain {
             };
             self.jump_shot = Some(state);
             self.wall_drive_candidate = None;
-            return self.run_jump_shot(car, ball, state, game_time);
+            return self.run_jump_shot(
+                car,
+                BallState { location: geometry.ball, velocity: plan.ball_slice.velocity },
+                state,
+                game_time,
+            );
         }
 
         if !car.airborne
@@ -2196,7 +2201,7 @@ impl BotBrain {
             return self.run_double_jump(car, state, game_time);
         }
         if let Some(state) = self.jump_shot {
-            return self.run_jump_shot(car, state, game_time);
+            return self.run_jump_shot(car, ball, state, game_time);
         }
 
         if plan.decision == Decision::WallDrive {
@@ -5400,6 +5405,9 @@ mod tests {
             shot_direction: Vector::new(1.0, 0.0, 0.0),
             contact_face: "centre",
             contact_face_label: None,
+            needed_jump_time: 0.2,
+            jumping: true,
+            jump_time: Some(1.0),
             quick: true,
             counter: 3,
             patience_applied: false,
@@ -5411,7 +5419,7 @@ mod tests {
                     targets: ShotTargets { left: Vector::ZERO, right: Vector::ZERO },
         };
 
-        let controller = brain.run_jump_shot(me, state, 1.10);
+        let controller = brain.run_jump_shot(me, BallState { location: state.ball, velocity: state.ball_velocity }, state, 1.10);
         assert!(controller.jump);
         let committed = brain.jump_shot.unwrap();
         assert!(committed.dodge_started_at.is_some());
@@ -5434,6 +5442,9 @@ mod tests {
             shot_direction: Vector::new(1.0, 0.0, 0.0),
             contact_face: "centre",
             contact_face_label: None,
+            needed_jump_time: 0.2,
+            jumping: true,
+            jump_time: Some(1.0),
             quick: false,
             counter: 0,
             patience_applied: false,
@@ -5463,6 +5474,9 @@ mod tests {
             shot_direction: Vector::new(1.0, 0.0, 0.0),
             contact_face: "centre",
             contact_face_label: None,
+            needed_jump_time: 0.2,
+            jumping: true,
+            jump_time: Some(1.0),
             quick: false,
             counter: 0,
             patience_applied: false,
@@ -5474,7 +5488,7 @@ mod tests {
                     targets: ShotTargets { left: Vector::ZERO, right: Vector::ZERO },
         };
 
-        let controller = brain.run_jump_shot(me, state, 1.90);
+        let controller = brain.run_jump_shot(me, BallState { location: state.ball, velocity: state.ball_velocity }, state, 1.90);
         assert!(!controller.jump);
         assert!(brain.jump_shot.is_none());
     }
@@ -5492,6 +5506,9 @@ mod tests {
             shot_direction: Vector::new(1.0, 1.0, 0.0),
             contact_face: "centre",
             contact_face_label: None,
+            needed_jump_time: 0.2,
+            jumping: true,
+            jump_time: Some(1.0),
             quick: false,
             counter: 0,
             patience_applied: false,
