@@ -3106,16 +3106,18 @@ impl BotBrain {
 
             let delta_x = state.approach - xf;
             let d_direction = delta_x.normalize();
-            if car.forward().dot(d_direction) > 0.5 && t > 1.0e-6 {
+            if car.forward().dot(d_direction).abs() > 0.5 && t > 1.0e-6 {
                 let mut delta_v = delta_x.dot(car.forward()) / t;
                 if car.boost > 0.0 && delta_v >= self.boost_accel * MIN_AIR_BOOST_TIME {
                     controller.boost = true;
                     delta_v -= self.boost_accel * MIN_AIR_BOOST_TIME;
                 }
-                let throttle_accel = throttle_acceleration(car.local_velocity().x);
-                if throttle_accel.abs() > 1.0e-6
-                    && delta_v.abs() > throttle_accel * MIN_AIR_BOOST_TIME
-                {
+                // Python jump_shot uses the fixed global throttle_accel
+                // constant (66 2/3 uu/s²) for this airborne correction.
+                // throttle_acceleration() is the nonlinear ground-drive curve
+                // and must not be substituted here.
+                let throttle_accel = 66.0 + (2.0 / 3.0);
+                if delta_v.abs() > throttle_accel * MIN_AIR_BOOST_TIME {
                     controller.throttle = (delta_v
                         / (throttle_accel * MIN_AIR_BOOST_TIME)).clamp(-1.0, 1.0);
                 }
