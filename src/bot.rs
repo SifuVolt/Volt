@@ -1723,15 +1723,22 @@ impl BotBrain {
         plan: WallDrivePlan,
         game_time: f32,
     ) -> ControllerState {
+        // The source wall_approach aborts when its prediction expires or
+        // the ball no longer satisfies Noob Black's wall-shot conditions.
+        // Do not keep driving at the stale ball position after that abort;
+        // the normal planner gets the next packet to choose another routine.
+        if !(0.12..=5.2).contains(&plan.intercept_time) {
+            self.wall_drive_candidate = None;
+            return ControllerState::default();
+        }
+
         let side = team_side(car.team);
         let foe_goal = Vector::new(0.0, -side * 5120.0, 300.0);
         let Some(geometry) = wall_approach_geometry(
             &car, plan.ball_slice, car.team, foe_goal, plan.mode, plan.intercept_time,
         ) else {
-            return controller_from_drive(
-                controlled_drive(&car, plan.ball_slice.location, MAX_SPEED, self.boost_accel),
-                car,
-            );
+            self.wall_drive_candidate = None;
+            return ControllerState::default();
         };
 
         let mut output = default_drive(
