@@ -6075,9 +6075,9 @@ mod tests {
             BallState { location: state.ball, velocity: state.ball_velocity },
             &BallTrajectory { slices: Vec::new() },
             state,
-            1.0625,
+            1.21,
         );
-        assert!(!release_1.jump, "first release frame must be unpressed");
+        assert!(!release_1.jump, "first release frame after Python's 0.20s maximum hold must be unpressed");
         assert_eq!(brain.jump_shot.unwrap().counter, 1);
 
         let release_2 = brain.run_jump_shot(
@@ -6085,7 +6085,7 @@ mod tests {
             BallState { location: state.ball, velocity: state.ball_velocity },
             &BallTrajectory { slices: Vec::new() },
             state,
-            1.08,
+            1.22,
         );
         assert!(!release_2.jump, "second release frame must be unpressed");
         assert_eq!(brain.jump_shot.unwrap().counter, 2);
@@ -6095,7 +6095,7 @@ mod tests {
             BallState { location: state.ball, velocity: state.ball_velocity },
             &BallTrajectory { slices: Vec::new() },
             state,
-            1.09,
+            1.23,
         );
         assert!(!release_3.jump, "third release frame must be unpressed");
         assert_eq!(brain.jump_shot.unwrap().counter, 3);
@@ -6105,7 +6105,7 @@ mod tests {
             BallState { location: state.ball, velocity: state.ball_velocity },
             &BallTrajectory { slices: Vec::new() },
             state,
-            1.10,
+            1.24,
         );
         assert!(dodge.jump, "the forward dodge is a fresh second jump press");
         assert_eq!(brain.jump_shot.unwrap().counter, 4, "the sequence must enter the dodge phase");
