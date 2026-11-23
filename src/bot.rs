@@ -2812,7 +2812,6 @@ impl BotBrain {
                 controller.jump = true;
                 controller.pitch = -dodge_direction.x;
                 controller.yaw = dodge_direction.y;
-                controller.boost = false;
             } else if local_target.x <= 0.0
                 || (contact_distance > contact_limit + 150.0 && t < 0.12)
             {
