@@ -5172,6 +5172,52 @@ mod tests {
     }
 
     #[test]
+    fn teamplay_receive_lead_uses_car_to_contact_distance() {
+        let me = car(0, 0, Vector::ZERO);
+        let contact = Vector::new(1000.0, 0.0, 93.0);
+        let aim = Vector::new(1000.0, 5120.0, 300.0);
+        let (receive, direction, stored_contact) =
+            receive_plan(me, contact, aim).expect("valid receive lane");
+        assert_eq!(stored_contact, contact);
+        assert!((direction.y - 1.0).abs() < 1e-6);
+        assert!((receive.y - 350.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn route_boost_selects_a_pad_on_the_car_ball_lane() {
+        let mut me = car(0, 0, Vector::ZERO);
+        me.boost = 20.0;
+        let ball = BallState {
+            location: Vector::new(3000.0, 0.0, 93.0),
+            velocity: Vector::ZERO,
+        };
+        let pad = BoostPadState {
+            location: Vector::new(1000.0, 100.0, 73.0),
+            active: true,
+            large: false,
+        };
+        let selected = boost_on_route_to_ball(me, ball, &[pad], &[], 1.0);
+        assert_eq!(selected, Some(pad));
+    }
+
+    #[test]
+    fn route_boost_is_blocked_by_an_enemy_near_the_ball() {
+        let mut me = car(0, 0, Vector::ZERO);
+        me.boost = 20.0;
+        let ball = BallState {
+            location: Vector::new(3000.0, 0.0, 93.0),
+            velocity: Vector::ZERO,
+        };
+        let pad = BoostPadState {
+            location: Vector::new(1000.0, 100.0, 73.0),
+            active: true,
+            large: false,
+        };
+        let foe = car(1, 1, Vector::new(2800.0, 0.0, 17.0));
+        assert!(boost_on_route_to_ball(me, ball, &[pad], &[foe], 1.0).is_none());
+    }
+
+    #[test]
     fn shot_patience_waits_for_goal_alignment_when_the_car_can_reach_it() {
         let mut me = car(0, 0, Vector::new(1000.0, 4500.0, 17.0));
         me.velocity = Vector::new(1500.0, 0.0, 0.0);
