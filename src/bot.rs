@@ -3115,11 +3115,6 @@ impl BotBrain {
         // Recalculate the goal-directed shot vector and contact approach each
         // frame, as Python jump_shot.run does after it has committed to the
         // predicted ball slice.
-        let predicted_slice = BallSlice {
-            time: time_remaining,
-            location: state.ball,
-            velocity: state.ball_velocity,
-        };
         // Python jump_shot calls Aerial._party_cannon_shot_direction
         // directly, then applies WallShot.adjust_jump after blending. Do not
         // use party_cannon_contact_geometry here: that helper already applies
