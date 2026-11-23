@@ -84,6 +84,57 @@ struct Plan {
     jump: Option<GroundIntercept>,
 }
 
+/// Persistent equivalent of Python's ground_shot routine. The routine
+/// owns its intercept time and contact label even when the shot finder
+/// temporarily returns no replacement candidate.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct GroundShotState {
+    intercept: GroundIntercept,
+    intercept_time: f32,
+    ball_location: Option<Vector>,
+}
+
+impl GroundShotState {
+    fn new(intercept: GroundIntercept, game_time: f32) -> Self {
+        Self {
+            intercept,
+            intercept_time: game_time + intercept.time,
+            ball_location: None,
+        }
+    }
+
+    /// Python ground_shot.update() changes only intercept_time and targets.
+    /// It deliberately keeps the routine's original contact-face selection.
+    fn update(&mut self, candidate: GroundIntercept, game_time: f32) {
+        self.intercept_time = game_time + candidate.time;
+        self.intercept.targets = candidate.targets;
+    }
+
+    fn refresh_prediction(
+        &mut self,
+        prediction: &BallTrajectory,
+        game_time: f32,
+    ) -> bool {
+        let time_remaining = self.intercept_time - game_time;
+        if time_remaining > 0.0 || self.ball_location.is_none() {
+            if prediction.slices.is_empty() {
+                return false;
+            }
+            let index = ((time_remaining.max(0.0) * 120.0).round() as isize - 1)
+                .clamp(0, prediction.slices.len() as isize - 1) as usize;
+            let slice = prediction.slices[index];
+            self.ball_location = Some(slice.location);
+            self.intercept.ball_velocity = slice.velocity;
+        }
+        let Some(ball) = self.ball_location else {
+            return false;
+        };
+        self.intercept.time = time_remaining;
+        self.intercept.ball = ball;
+        true
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct PendingDoubleJump {
     shot: GroundIntercept,
@@ -197,6 +248,7 @@ pub struct BotBrain {
     jump_shot: Option<JumpShotState>,
     double_jump_shot: Option<DoubleJumpState>,
     pending_double_jump: Option<PendingDoubleJump>,
+    ground_shot: Option<GroundShotState>,
     ground_shot_patience_applied: bool,
     ground_shot_goal_aim_point: Option<Vector>,
     wave_dash: Option<crate::mechanics::WaveDash>,
@@ -322,6 +374,7 @@ impl BotBrain {
             jump_shot: None,
             double_jump_shot: None,
             pending_double_jump: None,
+            ground_shot: None,
             ground_shot_patience_applied: false,
             ground_shot_goal_aim_point: None,
             wave_dash: None,
@@ -644,28 +697,87 @@ impl BotBrain {
             return self.run_power_clear(me, cars, ball, prediction, game_time, state);
         }
 
-        if let Some(mut shot) = plan.shot {
+        // Python's ground_shot is a persistent stack routine. A transient
+        // finder miss must not discard its intercept; update() changes only
+        // the absolute intercept time and target pair.
+        if matches!(plan.decision, Decision::EmergencyChallenge | Decision::WallDrive) {
+            self.ground_shot = None;
+            self.ground_shot_patience_applied = false;
+            self.ground_shot_goal_aim_point = None;
+        }
+        if let Some(candidate) = plan.shot {
+            if let Some(state) = self.ground_shot.as_mut() {
+                state.update(candidate, game_time);
+            } else {
+                self.ground_shot = Some(GroundShotState::new(candidate, game_time));
+                self.ground_shot_patience_applied = false;
+                self.ground_shot_goal_aim_point = None;
+            }
+        }
+
+        // Match Python's ordinary-shot replacement rule: an active ground
+        // shot survives a different ordinary candidate unless a genuinely
+        // earlier touch is found in the shallow own-half fast-intercept zone.
+        if let Some(state) = self.ground_shot {
+            let ball_depth = ball.location.y * side;
+            let fast_intercept_zone = ball_depth > 0.0 && ball_depth <= 1280.0;
+            if let Some(candidate) = plan.jump {
+                let candidate_time = game_time + candidate.time;
+                if fast_intercept_zone && candidate_time < state.intercept_time - 0.05 {
+                    self.ground_shot = None;
+                    self.ground_shot_patience_applied = false;
+                    self.ground_shot_goal_aim_point = None;
+                } else {
+                    plan.jump = None;
+                }
+            }
+            if self.ground_shot.is_some() && self.aerial_candidate.is_some() {
+                let candidate_time = self.aerial_candidate.unwrap().slice.time;
+                if fast_intercept_zone && candidate_time < state.intercept_time - 0.05 {
+                    self.ground_shot = None;
+                    self.ground_shot_patience_applied = false;
+                    self.ground_shot_goal_aim_point = None;
+                } else {
+                    self.aerial_candidate = None;
+                    if plan.decision == Decision::AerialChallenge {
+                        plan.decision = Decision::GroundChallenge;
+                    }
+                }
+            }
+        }
+
+        if let Some(mut state) = self.ground_shot {
             if !self.ground_shot_patience_applied {
                 let foe_goal_y = -side * 5120.0;
-                if let Some((intercept_time, later_slice)) = shot_patience_adjustment(
-                    me,
-                    &prediction.slices,
-                    game_time,
-                    game_time + shot.time,
-                    foe_goal_y,
+                if let Some((intercept_time, _)) = shot_patience_adjustment(
+                    me, &prediction.slices, game_time, state.intercept_time, foe_goal_y,
                 ) {
-                    shot.time = intercept_time - game_time;
-                    shot.ball = later_slice.location;
-                    shot.ball_velocity = later_slice.velocity;
-                    let aim = relative_goal_aim_point(me, shot.ball, shot.targets);
-                    shot.shot_direction = (aim - shot.ball).flatten().normalize();
-                    shot.approach = contact_approach_from_label(
-                        shot.ball, shot.shot_direction, shot.contact_face, 92.75,
-                    ).unwrap_or(shot.ball - shot.shot_direction * 92.75);
-                    plan.target = shot.approach;
-                    plan.shot = Some(shot);
+                    state.intercept_time = intercept_time;
                     self.ground_shot_patience_applied = true;
                 }
+            }
+
+            if state.refresh_prediction(prediction, game_time) {
+                let mut shot = state.intercept;
+                if self.ground_shot_goal_aim_point.is_none() {
+                    self.ground_shot_goal_aim_point = Some(relative_goal_aim_point(
+                        me, ball.location, shot.targets,
+                    ));
+                }
+                let aim = self.ground_shot_goal_aim_point.unwrap();
+                shot.shot_direction = (aim - shot.ball).flatten().normalize();
+                shot.approach = contact_approach_from_label(
+                    shot.ball, shot.shot_direction, shot.contact_face, 92.75,
+                ).unwrap_or(shot.ball - shot.shot_direction * 92.75);
+                state.intercept = shot;
+                self.ground_shot = Some(state);
+                plan.target = shot.approach;
+                plan.shot = Some(shot);
+            } else {
+                self.ground_shot = None;
+                self.ground_shot_patience_applied = false;
+                self.ground_shot_goal_aim_point = None;
+                plan.shot = None;
             }
         } else {
             self.ground_shot_patience_applied = false;
@@ -2811,9 +2923,11 @@ impl BotBrain {
                 if t <= 0.0
                     || (t > 0.35 && distance_remaining > 50.0 && !runtime_reachable)
                 {
-                    // Python calls defaultDrive before its viability check.
-                    // Popping the routine does not undo the controller values
-                    // already written by defaultDrive for this frame.
+                    // Python calls defaultDrive before popping ground_shot;
+                    // retain that frame's drive output, then clear its state.
+                    self.ground_shot = None;
+                    self.ground_shot_patience_applied = false;
+                    self.ground_shot_goal_aim_point = None;
                     return controller_from_drive(output, car);
                 }
             }
