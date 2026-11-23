@@ -1578,7 +1578,7 @@ impl BotBrain {
                     self.shot_search_horizon(game_time), ball.location.z,
                     max_height, true,
                 ) {
-                    self.set_teamplay_aerial(me, ball, candidate, opponent_goal, aim, roles, urgent_save);
+                    self.set_teamplay_aerial(me, ball, candidate, opponent_goal, aim, roles, urgent_save, false);
                     self.aerial_candidate = Some(candidate);
                     return Plan {
                         decision: Decision::AerialChallenge,
@@ -1625,6 +1625,9 @@ impl BotBrain {
                 ).filter(|candidate| {
                     selected_score.is_none_or(|best_score| candidate.score < best_score)
                 }) {
+                    self.set_teamplay_aerial(
+                        me, ball, candidate, opponent_goal, aim, roles, urgent_save, true,
+                    );
                     self.aerial_candidate = Some(candidate);
                     return Plan {
                         decision: Decision::AerialChallenge,
@@ -1771,7 +1774,7 @@ impl BotBrain {
                     0.10, self.shot_search_horizon(game_time), ball.location.z,
                     max_aerial_height, true,
                 ) {
-                    self.set_teamplay_aerial(me, ball, candidate, opponent_goal, aim, roles, urgent_save);
+                    self.set_teamplay_aerial(me, ball, candidate, opponent_goal, aim, roles, urgent_save, true);
                     self.aerial_candidate = Some(candidate);
                     return Plan {
                         decision: Decision::AerialChallenge,
