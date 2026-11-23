@@ -2060,7 +2060,22 @@ impl BotBrain {
             } else {
                 speed_required
             };
-            let output = controlled_drive(&car, final_target, drive_speed, self.boost_accel);
+            // Source parity: Python jump_shot calls
+            // defaultDrive(agent, drive_speed, local_final_target) here.
+            // Do not route committed shots through controlled_drive: its
+            // extra heading-based speed caps/reverse policy are not in the
+            // Python routine and can brake a perfectly reachable forward hit.
+            let output = default_drive(
+                &car,
+                DriveInput {
+                    target_speed: drive_speed,
+                    local_target: local_final_target,
+                    upside_down: false,
+                    up: None,
+                    handbrake: false,
+                    boost_accel: self.boost_accel,
+                },
+            );
             let velocity = if output.car_speed.abs() < 0.001 { 1.0 } else { output.car_speed };
             let future_velocity = car.velocity + self.match_state.gravity * t;
             let local_future_velocity = car.local(future_velocity.flatten());
