@@ -154,7 +154,7 @@ References:
 - https://docs.rs/rlbot/0.7.1
 - https://github.com/VirxEC/VirxERLU-CLib
 - https://github.com/VirxEC/VirxERLU-RLib
-- https://docs.rs/crate/rocketsim/0.2.8
+- https://docs.rs/crate/rocketsim/0.3.7
 
 ## Required parity tests before runtime replacement
 
