@@ -1909,6 +1909,7 @@ impl BotBrain {
                 shot_direction: geometry.shot_direction,
                 contact_face: "centre",
                 quick: time_remaining <= 0.45,
+                patience_applied: false,
                 dodge_started_at: None,
                 dodge_direction: Vector::new(1.0, 0.0, 0.0),
                     side_mode: false,
@@ -2100,6 +2101,7 @@ impl BotBrain {
                     shot_direction,
                     contact_face: jump.contact_face,
                     quick: t <= 0.45,
+                    patience_applied: false,
                     dodge_started_at: None,
                     dodge_direction: Vector::new(1.0, 0.0, 0.0),
                     side_mode,
@@ -4638,6 +4640,7 @@ mod tests {
             shot_direction: Vector::new(1.0, 0.0, 0.0),
             contact_face: "centre",
             quick: true,
+            patience_applied: false,
             dodge_started_at: None,
             dodge_direction: Vector::new(1.0, 0.0, 0.0),
                     side_mode: false,
@@ -4668,6 +4671,7 @@ mod tests {
             shot_direction: Vector::new(1.0, 0.0, 0.0),
             contact_face: "centre",
             quick: false,
+            patience_applied: false,
             dodge_started_at: None,
             dodge_direction: Vector::new(1.0, 0.0, 0.0),
                     side_mode: false,
@@ -4694,6 +4698,7 @@ mod tests {
             shot_direction: Vector::new(1.0, 0.0, 0.0),
             contact_face: "centre",
             quick: false,
+            patience_applied: false,
             dodge_started_at: None,
             dodge_direction: Vector::new(1.0, 0.0, 0.0),
                     side_mode: false,
@@ -4720,6 +4725,7 @@ mod tests {
             shot_direction: Vector::new(1.0, 1.0, 0.0),
             contact_face: "centre",
             quick: false,
+            patience_applied: false,
             dodge_started_at: None,
             dodge_direction: Vector::new(1.0, 0.0, 0.0),
                     side_mode: false,
@@ -4738,6 +4744,38 @@ mod tests {
         let fast = brain.run_jump_shot(me, quick, 1.01);
         assert_ne!(fast.pitch, 1.0);
         assert_eq!(fast.roll, 0.0);
+    }
+
+    #[test]
+    fn shot_patience_waits_for_goal_alignment_when_the_car_can_reach_it() {
+        let me = car(
+            Vector::new(1000.0, 4500.0, 17.0),
+            Vector::new(1500.0, 0.0, 0.0),
+            50.0,
+        );
+        let mut slices = vec![
+            BallSlice {
+                time: i as f32 / 120.0,
+                location: Vector::ZERO,
+                velocity: Vector::ZERO,
+            };
+            100
+        ];
+        slices[59] = BallSlice {
+            time: 59.0 / 120.0,
+            location: Vector::new(1000.0, 5000.0, 200.0),
+            velocity: Vector::new(-100.0, 0.0, 0.0),
+        };
+        slices[80] = BallSlice {
+            time: 80.0 / 120.0,
+            location: Vector::new(1000.0, 4000.0, 100.0),
+            velocity: Vector::ZERO,
+        };
+
+        let adjusted = shot_patience_adjustment(me, &slices, 0.0, 0.5, 5120.0);
+        let (new_time, selected) = adjusted.expect("later aligned slice should be reachable");
+        assert!((new_time - 81.0 / 120.0).abs() < 1e-6);
+        assert_eq!(selected.location, Vector::new(1000.0, 4000.0, 100.0));
     }
 
     #[test]
