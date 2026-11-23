@@ -3538,54 +3538,71 @@ impl BotBrain {
         vf = vf + car.up() * (JUMP_ACCEL * tau);
         xf = xf + car.up() * (JUMP_ACCEL * tau * (t - 0.5 * tau));
 
-        // Orient and add forward-axis acceleration only during the first
-        // three jump-counter phases, exactly like the Python routine.
-        if state.counter < 3 && state.dodge_started_at.is_none() {
-            let local_shot_direction = car
-                .local(state.shot_direction.flatten())
-                .flatten()
-                .normalize();
-            let (_, pd) = default_pd(&car, local_shot_direction, false, None);
-            // Python defaultPD writes steer as well as pitch/yaw/roll.
+        // The jump-shot movement is a deliberate three-part input sequence:
+        // 1) hold the first jump while pitching the nose back (S),
+        // 2) release jump for one full physics tick,
+        // 3) press jump again with a forward/directional pitch to dodge.
+        //
+        // RLBot sends button state every tick; a false jump state is required
+        // between the first jump and the dodge so the second press is a new edge.
+        // Keep the existing counter and timestamps rather than introducing a
+        // second routine/state machine.
+        const TILT_JUMP_HOLD: f32 = 0.12;
+        const JUMP_RELEASE: f32 = 1.0 / 120.0;
+        const DODGE_BUTTON_HOLD: f32 = 0.08;
+
+        let local_shot_direction = car
+            .local(state.shot_direction.flatten())
+            .flatten()
+            .normalize();
+        let (_, pd) = default_pd(&car, local_shot_direction, false, None);
+
+        // Keep steering/yaw from the shot-direction PD, but force S while
+        // the jump shot is in its setup phase. This applies to quick shots too:
+        // otherwise the bot can skip the nose-up posture entirely.
+        if state.counter < 4 {
             controller.steer = pd.steer;
-            controller.pitch = pd.pitch;
+            controller.pitch = 1.0;
             controller.yaw = pd.yaw;
-            controller.roll = pd.roll;
+            controller.roll = if pd.yaw.abs() > 0.08 {
+                -0.20 * pd.yaw.signum()
+            } else {
+                0.0
+            };
+        }
 
-            let hold_s = state.ball.z > 130.0
-                && state.ball.z > car.location.z + 65.0
-                && !state.quick;
-            if hold_s {
-                controller.pitch = 1.0;
-                controller.roll = if pd.yaw.abs() > 0.08 {
-                    -0.20 * pd.yaw.signum()
-                } else {
-                    0.0
-                };
+        let delta_x = state.approach - xf;
+        let d_direction = delta_x.normalize();
+        if state.counter < 3
+            && car.forward().dot(d_direction).abs() > 0.5
+            && t > 1.0e-6
+        {
+            let mut delta_v = delta_x.dot(car.forward()) / t;
+            if car.boost > 0.0 && delta_v >= self.boost_accel * MIN_AIR_BOOST_TIME {
+                controller.boost = true;
+                delta_v -= self.boost_accel * MIN_AIR_BOOST_TIME;
             }
-
-            let delta_x = state.approach - xf;
-            let d_direction = delta_x.normalize();
-            if car.forward().dot(d_direction).abs() > 0.5 && t > 1.0e-6 {
-                let mut delta_v = delta_x.dot(car.forward()) / t;
-                if car.boost > 0.0 && delta_v >= self.boost_accel * MIN_AIR_BOOST_TIME {
-                    controller.boost = true;
-                    delta_v -= self.boost_accel * MIN_AIR_BOOST_TIME;
-                }
-                // Python jump_shot uses the fixed global throttle_accel
-                // constant (66 2/3 uu/s²) for this airborne correction.
-                // throttle_acceleration() is the nonlinear ground-drive curve
-                // and must not be substituted here.
-                let throttle_accel = 66.0 + (2.0 / 3.0);
-                if delta_v.abs() > throttle_accel * MIN_AIR_BOOST_TIME {
-                    controller.throttle = (delta_v
-                        / (throttle_accel * MIN_AIR_BOOST_TIME)).clamp(-1.0, 1.0);
-                }
+            let throttle_accel = 66.0 + (2.0 / 3.0);
+            if delta_v.abs() > throttle_accel * MIN_AIR_BOOST_TIME {
+                controller.throttle =
+                    (delta_v / (throttle_accel * MIN_AIR_BOOST_TIME)).clamp(-1.0, 1.0);
             }
         }
 
-        // Counter 3 is the exact Python dodge window. Do not delay it behind
-        // an invented 0.18s timer or require extra RLBot dodge flags.
+        // First jump: hold for a short, fixed window while pitching back.
+        // Then explicitly release for one 120 Hz tick before the dodge press.
+        if state.counter < 3 {
+            if jump_elapsed < TILT_JUMP_HOLD {
+                controller.jump = true;
+            } else if jump_elapsed < TILT_JUMP_HOLD + JUMP_RELEASE {
+                controller.jump = false;
+            } else {
+                state.counter = 3;
+            }
+        }
+
+        // Counter 3 is the single directional-dodge window. Keep the existing
+        // contact-distance gate so the bot doesn't spend its flip too early.
         if state.counter == 3 {
             if contact_distance < contact_limit
                 && (local_target.x > 0.0 || state.side_mode)
@@ -3602,14 +3619,29 @@ impl BotBrain {
                 controller.jump = true;
                 controller.pitch = -dodge_direction.x;
                 controller.yaw = dodge_direction.y;
+                controller.roll = 0.0;
             } else if local_target.x <= 0.0
                 || (contact_distance > contact_limit + 150.0 && t < 0.12)
             {
+                println!(
+                    "[JUMP SHOT NO DODGE] id={} local_target_x={:.1} distance={:.1} T={:.3} counter={}",
+                    car.index, local_target.x, contact_distance, t, state.counter,
+                );
                 state.counter = 5;
             }
         } else if state.counter == 4 {
-            // The dodge has been issued; let the original jump hold and
-            // intercept-expiry logic complete the routine.
+            // Keep the dodge button and direction held briefly, then release.
+            // Do not re-trigger jump on later frames.
+            if state.dodge_started_at
+                .is_some_and(|started| game_time - started < DODGE_BUTTON_HOLD)
+            {
+                controller.jump = true;
+                controller.pitch = -state.dodge_direction.x;
+                controller.yaw = state.dodge_direction.y;
+                controller.roll = 0.0;
+            } else {
+                controller.jump = false;
+            }
         } else if state.counter == 5 {
             self.jump_shot = None;
             return self.start_ball_recovery(car);
@@ -3618,17 +3650,6 @@ impl BotBrain {
         if state.counter == 5 {
             self.jump_shot = None;
             return self.start_ball_recovery(car);
-        }
-
-        // Python's minimum 0.06s jump hold and its original hf/height
-        // comparison are retained rather than replaced with a vertical-speed
-        // controller.
-        if jump_elapsed <= JUMP_MAX_DURATION
-            && (jump_elapsed <= 0.06 || hf <= state.approach.z)
-        {
-            controller.jump = true;
-        } else if state.counter < 3 {
-            state.counter += 1;
         }
 
         let _ = vf;
@@ -5995,7 +6016,7 @@ mod tests {
     }
 
     #[test]
-    fn normal_jump_shot_uses_s_tilt_but_quick_shot_does_not() {
+    fn jump_shot_always_uses_s_tilt_including_quick_shots() {
         let mut brain = BotBrain::new();
         let me = car(0, 0, Vector::ZERO);
         let state = JumpShotState {
@@ -6030,8 +6051,8 @@ mod tests {
 
         let quick = JumpShotState { quick: true, ..state };
         let fast = brain.run_jump_shot(me, BallState { location: quick.ball, velocity: quick.ball_velocity }, &BallTrajectory { slices: Vec::new() }, quick, 1.01);
-        assert_ne!(fast.pitch, 1.0);
-        assert_eq!(fast.roll, 0.0);
+        assert!(fast.jump, "quick shots still perform the first jump");
+        assert_eq!(fast.pitch, 1.0, "quick shots must also pitch back before flipping");
     }
 
     #[test]
