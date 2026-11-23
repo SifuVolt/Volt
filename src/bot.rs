@@ -5197,8 +5197,9 @@ mod tests {
             active: true,
             large: false,
         };
-        let selected = boost_on_route_to_ball(me, ball, &[pad], &[], 1.0);
-        assert_eq!(selected, Some(pad));
+        let selected = boost_on_route_to_ball(me, ball, &[pad], &[], 1.0)
+            .expect("active route pad should be selected");
+        assert_eq!(selected.location, pad.location);
     }
 
     #[test]
