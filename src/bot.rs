@@ -14,7 +14,7 @@ use crate::{
     planning::{find_wall_drive, wall_approach_geometry, WallDriveMode, WallDrivePlan},
     shot_physics::{double_jump_shot_is_viable, get_jump_time, ground_shot_is_viable, jump_shot_is_viable, ShotType},
     shot_parser::{runtime_ground_reachability, ShotTargets},
-    shot_planner::{find_best_any_shot, find_best_pass_shot, find_best_shot, find_fast_intercept, find_fast_intercept_candidate, grid_jump_time, opponent_reaches_before, ShotCandidate},
+    shot_planner::{find_best_any_shot, find_best_pass_shot, find_best_shot, find_fast_intercept, find_fast_intercept_candidate, grid_jump_time, opponent_reaches_before, pass_shot_targets, ShotCandidate},
     state::{BallState, BoostPadState, CarState, MatchState},
 };
 use std::collections::HashMap;
@@ -1594,8 +1594,14 @@ impl BotBrain {
                 );
             }
 
+            let pass_search_attempted = candidate.is_none() && !living_teammates.is_empty();
+            let pass_target_window = if pass_search_attempted {
+                pass_shot_targets(me, cars)
+            } else {
+                None
+            };
             let mut pass_candidate_selected = false;
-            if candidate.is_none() && !living_teammates.is_empty() {
+            if pass_search_attempted {
                 candidate = find_best_pass_shot(
                     me, cars, ball.location, prediction, match_state.gravity,
                     self.boost_accel, game_time, self.kickoff_contest_until,
@@ -1603,6 +1609,7 @@ impl BotBrain {
                 );
                 pass_candidate_selected = candidate.is_some();
             }
+            let mut vulnerable_fallback_selected = false;
             if candidate.is_none()
                 && ball_depth > 640.0
                 && opponent_is_vulnerable(me, ball, cars, own_goal)
@@ -1612,6 +1619,7 @@ impl BotBrain {
                     self.boost_accel, game_time, self.kickoff_contest_until,
                     self.unlimited_boost, self.shot_search_horizon(game_time),
                 );
+                vulnerable_fallback_selected = candidate.is_some();
             }
             if let Some(candidate) = candidate {
                 if teamplay_opportunity {
@@ -1666,8 +1674,12 @@ impl BotBrain {
             }
         let selected_score = candidate.map(|shot| shot.score);
         let teamplay_targeted = candidate.is_some_and(|shot| shot.targeted);
-        let aerial_targets = if pass_candidate_selected {
-            candidate.map(|shot| shot.parser.targets).unwrap_or(self.shot_targets)
+        let aerial_targets = if pass_candidate_selected
+            || (pass_search_attempted && !vulnerable_fallback_selected)
+        {
+            candidate.map(|shot| shot.parser.targets)
+                .or(pass_target_window)
+                .unwrap_or(self.shot_targets)
         } else {
             self.shot_targets
         };
