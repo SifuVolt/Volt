@@ -1745,8 +1745,14 @@ impl BotBrain {
             }
         }
 
-        let max_aerial_height = 1200.0;
-        let min_aerial_height = if me.location.z >= 2044.0 - me.hitbox.height * 1.1 {
+        let max_aerial_height = if living_teammates.len() == 1 && opponents.len() == 1 {
+            1200.0
+        } else {
+            f32::INFINITY
+        };
+        let min_aerial_height = if max_aerial_height > 1200.0
+            && me.location.z >= 2044.0 - me.hitbox.height * 1.1
+        {
             551.0
         } else if self.unlimited_boost || me.airborne {
             150.0
