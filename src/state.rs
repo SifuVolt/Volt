@@ -468,5 +468,36 @@ mod frame_tests {
         assert_eq!(pad.index, 0);
         assert_eq!(pad.location, Vector::ZERO);
     }
+
+    #[test]
+    fn local_angular_velocity_can_be_restored_to_world_space() {
+        let car = CarState {
+            index: 0,
+            team: 0,
+            location: Vector::ZERO,
+            velocity: Vector::ZERO,
+            orientation: Matrix3::new(0.0, std::f32::consts::FRAC_PI_2, 0.0),
+            angular_velocity: Vector::new(1.0, 2.0, 3.0),
+            demolished: false,
+            airborne: true,
+            supersonic: false,
+            jumped: true,
+            doublejumped: false,
+            air_state: AirState::InAir,
+            has_jumped: true,
+            has_double_jumped: false,
+            has_dodged: false,
+            dodge_timeout: 0.0,
+            dodge_elapsed: 0.0,
+            dodge_dir: Vector::ZERO,
+            flip_reset_available: false,
+            boost: 0.0,
+            hitbox: Hitbox::default(),
+        };
+        let world = car.world_angular_velocity();
+        assert!((world.x + 2.0).abs() < 1e-5);
+        assert!((world.y - 1.0).abs() < 1e-5);
+        assert!((world.z - 3.0).abs() < 1e-5);
+    }
 }
 
