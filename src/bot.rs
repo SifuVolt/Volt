@@ -5,7 +5,7 @@
 //! timed shot execution all feed the live RLBot controller.
 
 use crate::{
-    aerial::{find_aerial_candidate, find_fast_aerial_candidate, party_cannon_contact_geometry, wall_shot_adjust_jump, AerialCandidate, AerialShot},
+    aerial::{find_aerial_candidate, find_fast_aerial_candidate, party_cannon_contact_geometry, party_cannon_shot_direction, wall_shot_adjust_jump, AerialCandidate, AerialShot},
     control::{default_drive, default_pd, DriveInput},
     defense::GridDefense,
     math::{utils::cap_in_field, Vector},
@@ -3112,8 +3112,17 @@ impl BotBrain {
             location: state.ball,
             velocity: state.ball_velocity,
         };
-        let (_, predicted_shot) = party_cannon_contact_geometry(
-            car, predicted_slice, goal_aim, self.match_state.gravity,
+        // Python jump_shot calls Aerial._party_cannon_shot_direction
+        // directly, then applies WallShot.adjust_jump after blending. Do not
+        // use party_cannon_contact_geometry here: that helper already applies
+        // the aerial wall correction and would double-correct this shot.
+        let predicted_shot = party_cannon_shot_direction(
+            car,
+            state.ball,
+            state.ball_velocity,
+            time_remaining,
+            goal_aim,
+            self.match_state.gravity,
         );
         let goal_shot = (goal_aim - state.ball).flatten().normalize();
         let predicted_shot = predicted_shot.flatten().normalize();
