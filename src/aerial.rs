@@ -772,7 +772,7 @@ pub fn find_fast_aerial_candidate(
             shot_direction,
             double_jump: parsed.fast,
             fast: parsed.fast,
-            estimated_boost: parsed.time.max(0.0) * BOOST_CONSUMPTION,
+            estimated_boost: 0.0,
             score: slice.time + if parsed.fast { 0.025 } else { 0.0 },
         };
         if !parsed.fast {
