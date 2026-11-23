@@ -84,6 +84,12 @@ struct Plan {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
+struct PendingDoubleJump {
+    shot: GroundIntercept,
+    intercept_time: f32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
 struct FlipState {
     started_at: f32,
     direction: Vector,
@@ -187,6 +193,7 @@ pub struct BotBrain {
     ground_flip: Option<FlipState>,
     jump_shot: Option<JumpShotState>,
     double_jump_shot: Option<DoubleJumpState>,
+    pending_double_jump: Option<PendingDoubleJump>,
     ground_shot_patience_applied: bool,
     wave_dash: Option<crate::mechanics::WaveDash>,
     defense: GridDefense,
@@ -308,6 +315,7 @@ impl BotBrain {
             ground_flip: None,
             jump_shot: None,
             double_jump_shot: None,
+            pending_double_jump: None,
             ground_shot_patience_applied: false,
             wave_dash: None,
             defense: GridDefense::default(),
@@ -549,6 +557,7 @@ impl BotBrain {
         if plan.decision != Decision::Boost
             && self.jump_shot.is_none()
             && self.double_jump_shot.is_none()
+            && self.pending_double_jump.is_none()
             && self.aerial_shot.is_none()
             && self.ground_flip.is_none()
             && self.defense_flip.is_none()
@@ -637,6 +646,27 @@ impl BotBrain {
         // A launched aerial is a committed, uninterruptible mechanic. Keep
         // executing its own prediction/boost controller until contact or a
         // physically impossible recovery, just like the source routine stack.
+        if let Some(mut pending) = self.pending_double_jump {
+            let time_remaining = pending.intercept_time - game_time;
+            if time_remaining <= 0.0 || prediction.slices.is_empty() {
+                self.pending_double_jump = None;
+            } else {
+                let slice_index = ((time_remaining * 120.0).round() as isize - 1)
+                    .clamp(0, prediction.slices.len() as isize - 1) as usize;
+                let slice = prediction.slices[slice_index];
+                pending.shot.time = time_remaining;
+                pending.shot.ball = slice.location;
+                pending.shot.ball_velocity = slice.velocity;
+                let controller = self.drive_double_jump(me, pending.shot, game_time);
+                if self.double_jump_shot.is_some() {
+                    self.pending_double_jump = None;
+                } else {
+                    self.pending_double_jump = Some(pending);
+                }
+                return controller;
+            }
+        }
+
         if let Some(state) = self.double_jump_shot {
             return self.run_double_jump(me, state, game_time);
         }
@@ -961,6 +991,7 @@ impl BotBrain {
     ) -> Plan {
         let committed_nonwall_shot_active = self.jump_shot.is_some()
             || self.double_jump_shot.is_some()
+            || self.pending_double_jump.is_some()
             || self.aerial_shot.is_some();
         let committed_shot_active =
             committed_nonwall_shot_active || self.wall_drive_candidate.is_some();
@@ -2068,8 +2099,15 @@ impl BotBrain {
                     side_shot: None,
                     targets: self.shot_targets,
                 };
+                // Python pops wall_approach and pushes double_jump here.
+                // Keep the intercept as its own routine until the double
+                // jump launch phase commits, even if the ball leaves the wall.
+                self.pending_double_jump = Some(PendingDoubleJump {
+                    shot,
+                    intercept_time: game_time + time_remaining,
+                });
                 self.wall_drive_candidate = None;
-                return self.drive_double_jump(car, shot, game_time);
+                return controller;
             }
 
             let state = JumpShotState {
