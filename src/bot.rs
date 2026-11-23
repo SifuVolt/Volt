@@ -26,7 +26,7 @@ const MAX_SPEED: f32 = 2300.0;
 const BOOST_ACCEL: f32 = 991.6667;
 const JUMP_SPEED: f32 = 291.6667;
 const JUMP_ACCEL: f32 = 1458.3333;
-const JUMP_SHOT_TILT_HOLD: f32 = 0.12;
+const JUMP_SHOT_TILT_HOLD: f32 = 0.06;
 const MIN_AIR_BOOST_TIME: f32 = 1.0 / 30.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -6067,7 +6067,7 @@ mod tests {
             BallState { location: state.ball, velocity: state.ball_velocity },
             &BallTrajectory { slices: Vec::new() },
             state,
-            1.125,
+            1.0625,
         );
         assert!(!release.jump, "the first jump must be released before the dodge");
         assert_eq!(release.pitch, 1.0, "keep the nose tilted back during the release frame");
@@ -6077,7 +6077,7 @@ mod tests {
             BallState { location: state.ball, velocity: state.ball_velocity },
             &BallTrajectory { slices: Vec::new() },
             state,
-            1.14,
+            1.08,
         );
         assert!(dodge.jump, "the forward dodge is a fresh second jump press");
         assert_eq!(brain.jump_shot.unwrap().counter, 4, "the sequence must enter the dodge phase");
