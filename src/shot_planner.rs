@@ -580,23 +580,7 @@ pub fn find_fast_intercept(
 }
 
 
-/// Last-resort pass candidate from tools.find_pass_shot. Choose the teammate
-/// with the strongest forward-position/separation value, lead their movement,
-/// and reuse the exact targeted CLib shot parser for the pass window.
-pub fn find_best_pass_shot(
-    me: CarState,
-    cars: &[CarState],
-    ball_now: Vector,
-    prediction: &BallTrajectory,
-    gravity: Vector,
-    boost_accel: f32,
-    game_time: f32,
-    kickoff_contest_until: f32,
-    urgent_save: bool,
-    elected_challenger: bool,
-    unlimited_boost: bool,
-    horizon: f32,
-) -> Option<ShotCandidate> {
+fn pass_targets(me: CarState, cars: &[CarState]) -> Option<ShotTargets> {
     let side = team_side(me.team);
     let friend = cars.iter().copied()
         .filter(|car| car.team == me.team && car.index != me.index && !car.demolished)
@@ -616,10 +600,28 @@ pub fn find_best_pass_shot(
     }
     lead_x = lead_x.clamp(-3500.0, 3500.0);
     lead_y = lead_y.clamp(-4600.0, 4600.0);
-    let targets = ShotTargets {
+    Some(ShotTargets {
         left: Vector::new(lead_x - 350.0, lead_y, 120.0),
         right: Vector::new(lead_x + 350.0, lead_y, 120.0),
-    };
+    })
+}
+
+/// Last-resort pass candidate from tools.find_pass_shot.
+pub fn find_best_pass_shot(
+    me: CarState,
+    cars: &[CarState],
+    ball_now: Vector,
+    prediction: &BallTrajectory,
+    gravity: Vector,
+    boost_accel: f32,
+    game_time: f32,
+    kickoff_contest_until: f32,
+    urgent_save: bool,
+    elected_challenger: bool,
+    unlimited_boost: bool,
+    horizon: f32,
+) -> Option<ShotCandidate> {
+    let targets = pass_targets(me, cars)?;
     let mut candidate = find_best_shot(
         me, cars, ball_now, prediction, targets, gravity, boost_accel,
         game_time, kickoff_contest_until, urgent_save, elected_challenger,
@@ -724,6 +726,44 @@ mod tests {
         );
         assert!(candidate.is_some());
         assert!(candidate.unwrap().score.is_finite());
+    }
+
+    #[test]
+    fn fast_intercept_returns_the_first_reachable_prediction_slice() {
+        let car = test_car();
+        let targets = ShotTargets {
+            left: Vector::new(-700.0, 5120.0, 350.0),
+            right: Vector::new(700.0, 5120.0, 350.0),
+        };
+        let prediction = BallTrajectory {
+            slices: (0..360).map(|i| BallSlice {
+                time: i as f32 / 120.0,
+                location: Vector::new(0.0, 0.0, 150.0),
+                velocity: Vector::ZERO,
+            }).collect(),
+        };
+        let fast = find_fast_intercept(
+            car, &prediction, targets, Vector::new(0.0, 0.0, -650.0),
+            991.6667, 0.10, 3.0, false,
+        ).unwrap();
+        assert!(fast.time >= 0.10);
+        assert!(fast.time < 3.0);
+        assert!(!fast.targeted);
+    }
+
+    #[test]
+    fn pass_target_leads_the_best_forward_teammate() {
+        let mut me = test_car();
+        me.location = Vector::new(0.0, -1000.0, 17.0);
+        let mut friend = test_car();
+        friend.index = 1;
+        friend.location = Vector::new(100.0, 1000.0, 17.0);
+        friend.velocity = Vector::new(300.0, 400.0, 0.0);
+        let targets = pass_targets(me, &[me, friend]).unwrap();
+        let center = (targets.left + targets.right) * 0.5;
+        assert!((center.x - 310.0).abs() < 0.1);
+        assert!((center.y - 1850.0).abs() < 0.1);
+        assert_eq!(center.z, 120.0);
     }
 
     #[test]fn candidate_scan_only_returns_finite_source_scored_candidates(){
