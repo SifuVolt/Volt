@@ -11,7 +11,7 @@ use crate::{
     math::Vector,
     prediction::{BallSlice, BallTrajectory},
     shot_physics::{aerial_shot_is_viable, ShotType},
-    shot_parser::{parse_slice_for_shot_with_target, ShotTargets},
+    shot_parser::{parse_slice_for_shot, parse_slice_for_shot_with_target, ShotTargets},
     shot_planner::score_aerial_candidate,
     state::CarState,
 };
@@ -744,22 +744,38 @@ pub fn find_fast_aerial_candidate(
         // not at the slice timestamp itself.
         let time_remaining = slice.time - 1.0 / 120.0;
         if time_remaining <= 0.0 { continue; }
-        let (target_location, shot_direction) = contact_geometry(car, slice, goal, gravity);
-        let validation = aerial_shot_is_viable(
-            &car, target_location, time_remaining, gravity, boost_accel, true,
+        // The Python fast_intercept_finder validates this candidate with
+        // CLib parse_slice_for_shot(False, False, False, True, T, ...).
+        // Do not validate the later Party Cannon nose target here: that
+        // geometry belongs to the Aerial routine after candidate selection.
+        let parsed = parse_slice_for_shot(
+            &car,
+            slice.location,
+            time_remaining,
+            91.25,
+            boost_accel,
+            gravity,
+            false,
+            false,
+            false,
+            true,
+            true,
         );
-        if !validation.valid { continue; }
+        if !parsed.found || parsed.shot_type != Some(ShotType::Aerial) {
+            continue;
+        }
+        let (target_location, shot_direction) = contact_geometry(car, slice, goal, gravity);
         let candidate = AerialCandidate {
             slice,
             shot_target: goal,
             target_location,
             shot_direction,
-            double_jump: validation.fast,
-            fast: validation.fast,
-            estimated_boost: validation.validation.boost_estimate as f32,
-            score: slice.time + if validation.fast { 0.025 } else { 0.0 },
+            double_jump: parsed.fast,
+            fast: parsed.fast,
+            estimated_boost: parsed.time.max(0.0) * BOOST_CONSUMPTION,
+            score: slice.time + if parsed.fast { 0.025 } else { 0.0 },
         };
-        if !validation.fast {
+        if !parsed.fast {
             return Some(candidate);
         }
         if slice.location.z > 350.0 && live_ball_height > 350.0 && first_fast.is_none() {
