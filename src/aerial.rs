@@ -746,13 +746,14 @@ mod tests {
             location: Vector::new(0.0, 0.0, 900.0),
             velocity: Vector::ZERO,
         };
+        let car_state = car(Vector::new(0.0, -1500.0, 17.0), 100.0);
         let (target, direction) = contact_geometry(
-            car(Vector::new(0.0, -1500.0, 17.0), 100.0),
+            car_state,
             slice,
             Vector::new(0.0, 5120.0, 300.0),
             Vector::new(0.0, 0.0, -650.0),
         );
-        assert!((target.distance(slice.location) - (92.75 + car.hitbox.length * 0.5)).abs() < 0.01);
+        assert!((target.distance(slice.location) - (92.75 + car_state.hitbox.length * 0.5)).abs() < 0.01);
         assert!(direction.magnitude() > 0.99);
     }
 

@@ -208,7 +208,6 @@ pub struct BotBrain {
     emergency_save_zone_active: bool,
     power_clear: Option<PowerClearState>,
     last_goalie_role_time: f32,
-    last_emergency_clear_time: f32,
 }
 
 impl BotBrain {
@@ -257,7 +256,6 @@ impl BotBrain {
             emergency_save_zone_active: false,
             power_clear: None,
             last_goalie_role_time: -999.0,
-            last_emergency_clear_time: -999.0,
         }
     }
 
@@ -3119,10 +3117,10 @@ fn candidate_to_intercept(car:CarState,candidate:ShotCandidate,targets:ShotTarge
     let targets = if (candidate.parser.targets.left - candidate.parser.targets.right).magnitude() > 1.0 {
         candidate.parser.targets
     } else { targets };
-    let (mut contact_point,mut approach,mut contact_face,contact_quality)=select_ball_contact(car,candidate.ball,targets);
+    let (mut contact_point,_,mut contact_face,contact_quality)=select_ball_contact(car,candidate.ball,targets);
     let contact_normal=(contact_point-candidate.ball).normalize();
     let contact_standoff=BALL_RADIUS+car.hitbox.length*0.5;
-    approach=candidate.ball+contact_normal*contact_standoff;
+    let mut approach=candidate.ball+contact_normal*contact_standoff;
     let side_shot=select_side_shot(car,candidate,targets);
     let shot_direction=side_shot.map_or(candidate.shot_direction,|s|s.shot_direction);
     if let Some(side)=side_shot {

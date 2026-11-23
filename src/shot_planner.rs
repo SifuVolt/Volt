@@ -73,7 +73,7 @@ fn foe_eta(foe:CarState,ball:Vector)->f32 {
     let jump=if !foe.airborne && ball.z>180.0 && ball.z<650.0 {-0.08}else{0.0};
     (turn+bt+drive+jump).max(0.0)
 }
-fn useful(me:CarState,foes:&[CarState],friends:&[CarState],ball:Vector,t:f32,kind:ShotType,kickoff:bool,challenger:bool)->bool {
+fn useful(_me:CarState,foes:&[CarState],friends:&[CarState],ball:Vector,t:f32,kind:ShotType,kickoff:bool,challenger:bool)->bool {
     if kind==ShotType::Aerial || t<=0.0 || foes.is_empty() || kickoff || (!friends.is_empty()&&challenger) {return true;}
     let Some(foe)=foes.iter().min_by(|a,b|a.location.flat_distance(ball).total_cmp(&b.location.flat_distance(ball))) else {return true;};
     let margin=if kind==ShotType::Jump {0.5}else{0.35};
@@ -532,7 +532,7 @@ pub fn find_fast_intercept(
     }
     let in_own_net = me.location.y * team_side(me.team) >= 5120.0
         && me.location.x.abs() <= 900.0;
-    let mut flags = (true, !in_own_net, true);
+    let mut flags: (bool, bool, bool);
     for slice in &prediction.slices {
         let time = slice.time;
         if time < earliest_time.max(0.0) { continue; }
