@@ -4122,6 +4122,7 @@ mod tests {
             approach: Vector::ZERO,
             shot_direction: Vector::new(0.0, 1.0, 0.0),
             shot_type: ShotType::Ground,
+            targeted: true,
             can_jump: true,
             fast: false,
             score: 0.0,
