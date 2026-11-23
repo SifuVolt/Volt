@@ -150,6 +150,11 @@ fn noob_wall_get_dist(position: Vector) -> f32 {
     (4096.0 - position.x.abs()).min(5120.0 - position.y.abs())
 }
 
+#[inline]
+fn noob_wall_side(value: f32) -> f32 {
+    if value >= 0.0 { 1.0 } else { -1.0 }
+}
+
 /// Build Noob Black's 120 Hz floor-to-wall unfolding transform for the ball.
 fn ball_from_ground(position: Vector) -> Vector {
     let dx = 4096.0 - position.x.abs();
@@ -157,14 +162,14 @@ fn ball_from_ground(position: Vector) -> Vector {
 
     if dx < dy {
         Vector::new(
-            position.x.signum() * (4096.0 + position.z),
+            noob_wall_side(position.x) * (4096.0 + position.z),
             position.y,
             0.0,
         )
     } else {
         Vector::new(
             position.x,
-            position.y.signum() * (5120.0 + position.z),
+            noob_wall_side(position.y) * (5120.0 + position.z),
             0.0,
         )
     }
@@ -637,6 +642,26 @@ mod tests {
         assert!(high_single.0 > 1.0);
         assert!(high_double.0 > 0.0);
         assert!(high_double.0 < high_single.0);
+    }
+
+    #[test]
+    fn wall_unfolding_uses_positive_side_for_zero_axis_coordinates() {
+        let ground = ball_from_ground(Vector::new(0.0, 0.0, 300.0));
+        assert_eq!(ground, Vector::new(4396.0, 0.0, 0.0));
+
+        let xwall = ball_x_to_y(
+            Vector::new(4000.0, 0.0, 500.0),
+            Vector::new(0.0, 0.0, 300.0),
+        );
+        assert_eq!(xwall, Vector::new(4096.0, 0.0, 300.0));
+
+        let ywall = ball_y_to_x(
+            Vector::new(0.0, 5000.0, 500.0),
+            Vector::new(0.0, 0.0, 300.0),
+        );
+        assert_eq!(ywall, Vector::new(0.0, 5120.0, 300.0));
+        assert_eq!(car_on_x_wall(Vector::ZERO), Vector::new(4096.0, 0.0, 0.0));
+        assert_eq!(car_on_y_wall(Vector::ZERO), Vector::new(0.0, 5120.0, 0.0));
     }
 
     #[test]
