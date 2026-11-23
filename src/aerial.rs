@@ -734,14 +734,19 @@ pub fn find_fast_aerial_candidate(
     }
     let mut first_fast = None;
     for slice in prediction.slices.iter().copied() {
-        if slice.time < earliest_time.max(0.0) { continue; }
+        if slice.time < earliest_time.max(1.0 / 120.0) { continue; }
         if slice.time > horizon.min(6.0) { break; }
+        if slice.location.y.abs() > 5212.75 { break; }
         // Python fast_intercept_finder has no aerial-height ceiling; its
         // only special height gate is the >350 uu fast-aerial rule below.
         let _ = max_height;
+        // Python validates each prediction slice at T = intercept - now - 1/120,
+        // not at the slice timestamp itself.
+        let time_remaining = slice.time - 1.0 / 120.0;
+        if time_remaining <= 0.0 { continue; }
         let (target_location, shot_direction) = contact_geometry(car, slice, goal, gravity);
         let validation = aerial_shot_is_viable(
-            &car, target_location, slice.time, gravity, boost_accel, true,
+            &car, target_location, time_remaining, gravity, boost_accel, true,
         );
         if !validation.valid { continue; }
         let candidate = AerialCandidate {
