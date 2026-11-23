@@ -5337,6 +5337,7 @@ mod tests {
             velocity: Vector::ZERO,
         };
         let pad = BoostPadState {
+            index: 0,
             location: Vector::new(1000.0, 100.0, 73.0),
             active: true,
             large: false,
