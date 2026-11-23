@@ -2697,6 +2697,24 @@ impl BotBrain {
                 },
             );
             let velocity = if output.car_speed.abs() < 0.001 { 1.0 } else { output.car_speed };
+            if ((game_time * 4.0).round() as i32)
+                != (((game_time - 1.0 / 120.0) * 4.0).round() as i32)
+            {
+                println!(
+                    "[GROUND SHOT APPROACH TRACE] player={} T={:.3} close={} dist={:.1} requested={:.1} turn_limited={:.1} forward={:.1} angle={:.3} local_target=({:.1},{:.1}) boost={:.1}",
+                    car.index,
+                    t,
+                    close_contact,
+                    distance_remaining,
+                    speed_required,
+                    output.target_speed,
+                    velocity,
+                    angle_to_target,
+                    local_final_target.x,
+                    local_final_target.y,
+                    car.boost,
+                );
+            }
             let impulse = dodge_impulse(car.velocity, MAX_SPEED);
             let denominator = velocity + impulse;
             let time_to_target = if denominator.abs() > 0.001 {
