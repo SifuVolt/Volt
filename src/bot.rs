@@ -6026,7 +6026,9 @@ mod tests {
     #[test]
     fn jump_shot_always_uses_s_tilt_including_quick_shots() {
         let mut brain = BotBrain::new();
-        let me = car(0, 0, Vector::ZERO);
+        // Put the car inside the calculated front-contact window so this test
+        // exercises the second jump press, rather than the runtime distance gate.
+        let me = car(0, 0, Vector::new(100.0, -65.0, 0.0));
         let state = JumpShotState {
             started_at: 1.0,
             intercept_time: 1.5,
