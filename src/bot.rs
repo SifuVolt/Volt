@@ -2642,7 +2642,6 @@ impl BotBrain {
                 return self.run_ground_flip(Some(car), game_time, flip);
             }
             let t = shot.time;
-            let time_remaining = t.clamp(0.000001, 6.0);
             // Python ground_shot caches its goal aim from the live ball.
             // Keep that height/aim choice separate from the predicted contact.
             let goal_aim = relative_goal_aim_point(car, ball.location, shot.targets);
@@ -2651,46 +2650,23 @@ impl BotBrain {
             let offset_target = contact_approach_from_label(
                 shot.ball, shot_vector, shot.contact_face, 92.75,
             ).unwrap_or(shot.ball - shot_vector * 92.75);
-
-            // Python ground_shot uses Agent.local(world_ball_position)
-            // here, not local_location(). Keep this world-origin transform
-            // for its close-contact branch; the later approach checks do use
-            // local_location() because those are relative targets.
-            let local_ball = car.local(ball.location);
-            let close_contact = local_ball.y.abs() < 92.75 + car.hitbox.width * 0.5
-                && local_ball.z.abs() < 92.75 + car.hitbox.height * 0.5;
-            let mut final_target = if close_contact {
-                ball.location - shot_vector * 92.75
-            } else {
-                let target = shot_approach_target(
-                    car, shot.ball, offset_target.flatten(), shot_vector, t,
-                );
-                target
-            };
-            let distance_remaining = final_target.flat_distance(car.location)
-                - car.hitbox.length / 3.0;
-            let mut speed_required = if close_contact {
-                MAX_SPEED
-            } else {
-                distance_remaining / time_remaining
-            };
-            let ball_speed_toward_shot = ball.velocity.dot(shot_vector);
-            if !close_contact
-                && speed_required < 1900.0
-                && car.boost > 50.0
-                && t > 2.0
-                && distance_remaining > 2560.0
-                && ball_speed_toward_shot > 1000.0
-            {
-                speed_required *= 0.75;
-            }
+            let approach_target = shot_approach_target(
+                car, shot.ball, offset_target.flatten(), shot_vector, t,
+            );
+            let ground_plan = crate::brain::ground_shot::calculate_ground_drive_plan(
+                car, ball, shot_vector, approach_target, t,
+            );
+            let close_contact = ground_plan.close_contact;
+            let mut final_target = cap_in_field(&car, ground_plan.final_target);
+            let distance_remaining = ground_plan.distance_remaining;
+            let speed_required = ground_plan.speed_required;
 
             // Python ground_shot measures arrival distance before field
             // clamping, then drives with defaultDrive at the required speed.
-            // controlled_drive adds non-source heading caps and can brake
-            // even when the planned contact is straight ahead.
-            final_target = cap_in_field(&car, final_target);
-            let local_final_target = car.local_location(final_target);
+            // Do not add a separate heading cap or let ball speed directly
+            // lower the requested car speed. The source calculation above is
+            // distance / intercept-time, with only its explicit speed-build
+            // exception.
             let local_offset_target = car.local_location(offset_target.flatten());
             let angle_to_target = local_final_target.y.atan2(local_final_target.x).abs();
             let output = default_drive(
