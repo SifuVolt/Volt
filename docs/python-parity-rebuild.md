@@ -108,14 +108,28 @@ packet/phase holds from a routine that has stopped producing useful controls.
 
 ## Rust ecosystem boundary
 
-The `rlbot` crate is the RLBot v5 Rust interface: packet, agent, and
-controller transport/types. It is not a Rocket League steering or shot-planning
-library. Use it for the live agent boundary. RocketSim provides game physics
-for offline simulation and can be evaluated as a test harness, but it does not
-replace Volt's Python calculations or the live RLBot controller. See the
-official crate documentation and RocketSim description:
+The `rlbot` crate is the RLBot v5 interface: packet, agent, and controller
+transport/types. It is not a Rocket League steering or shot-planning library.
 
+There is also an existing Rust project, **VirxERLU-RLib**, with 120 Hz ball
+prediction analysis, acceleration simulation, Dubins-path ground planning,
+post correction, and ground/jump/double-jump/aerial candidate analysis. It is
+a valuable Rust implementation to study and cross-check. It is not a blind
+drop-in replacement: the Python Volt branch currently calls
+`VirxERLU-CLib/virxrlcu.c`, while RLib has its own Rust API and uses
+`rl_ball_sym` for its game/prediction model. The parity port must compare the
+specific algorithms and data conventions before adopting any RLib module.
+
+The most reliable source for exact Python parity is therefore the actual
+`virxrlcu.c` implementation behind Volt's Python calls. Port those functions
+and test them against source fixtures. Use the RLBot crate for the live agent
+boundary. RocketSim can be evaluated as an offline physics test harness, but
+it does not replace Volt's Python calculations or the live RLBot controller.
+
+References:
 - https://docs.rs/rlbot/0.7.1
+- https://github.com/VirxEC/VirxERLU-CLib
+- https://github.com/VirxEC/VirxERLU-RLib
 - https://docs.rs/crate/rocketsim/0.2.8
 
 ## Required parity tests before runtime replacement
