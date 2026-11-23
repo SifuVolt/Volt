@@ -1674,16 +1674,16 @@ impl BotBrain {
             }
         let selected_score = candidate.map(|shot| shot.score);
         let teamplay_targeted = candidate.is_some_and(|shot| shot.targeted);
-        let aerial_targets = if pass_candidate_selected
-            || (pass_search_attempted && !vulnerable_fallback_selected)
-        {
+        let use_pass_aerial_target = pass_candidate_selected
+            || (pass_search_attempted && !vulnerable_fallback_selected);
+        let aerial_targets = if use_pass_aerial_target {
             candidate.map(|shot| shot.parser.targets)
                 .or(pass_target_window)
                 .unwrap_or(self.shot_targets)
         } else {
             self.shot_targets
         };
-        let aerial_aim = if pass_candidate_selected {
+        let aerial_aim = if use_pass_aerial_target {
             (aerial_targets.left + aerial_targets.right) * 0.5
         } else {
             aim
