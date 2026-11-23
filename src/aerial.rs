@@ -1028,9 +1028,19 @@ mod tests {
             car,
             &prediction,
             Vector::new(0.0, 5120.0, 300.0),
+            ShotTargets {
+                left: Vector::new(-893.0, 5120.0, 300.0),
+                right: Vector::new(893.0, 5120.0, 300.0),
+            },
             &[],
             Vector::new(0.0, 0.0, -650.0),
             991.6667,
+            1.0,
+            -999.0,
+            350.0,
+            f32::INFINITY,
+            6.0,
+            false,
         );
         assert!(result.is_some());
         assert!(result.unwrap().estimated_boost >= 0.0);
