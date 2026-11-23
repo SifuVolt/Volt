@@ -272,8 +272,17 @@ pub fn find_fast_intercept_candidate(
                 first_normal = Some(FastInterceptCandidate { slice, parsed });
             }
         }
-        if first_normal.is_some() { return first_normal; }
-        if first_fast.is_some() { return first_fast; }
+        // Do not prefer a later normal aerial over an earlier fast aerial.
+        // Both candidates passed the same CLib reachability parser; commit to
+        // whichever valid contact arrives first.
+        match (first_normal, first_fast) {
+            (Some(normal), Some(fast)) => {
+                return Some(if fast.slice.time < normal.slice.time { fast } else { normal });
+            }
+            (Some(normal), None) => return Some(normal),
+            (None, Some(fast)) => return Some(fast),
+            (None, None) => {}
+        }
     }
 
     // Python's kickoff fallback repeats the aerial-only parser when a kickoff
