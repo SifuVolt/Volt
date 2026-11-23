@@ -399,6 +399,15 @@ impl BotBrain {
             let result = dash.tick(me, game_time);
             if result.finished {
                 self.wave_dash = None;
+                if result.recover {
+                    let target = result.recovery_target.unwrap_or_else(|| {
+                        me.location + me.velocity.normalize()
+                    });
+                    self.defense_recovery_target = Some(target);
+                    return GridDefense::recovery_controller(
+                        me, target, match_state.gravity.z,
+                    );
+                }
             } else {
                 self.wave_dash = Some(dash);
             }
