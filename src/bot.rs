@@ -27,6 +27,7 @@ const BOOST_ACCEL: f32 = 991.6667;
 const JUMP_SPEED: f32 = 291.6667;
 const JUMP_ACCEL: f32 = 1458.3333;
 const JUMP_MAX_DURATION: f32 = 0.20;
+const JUMP_SHOT_TILT_HOLD: f32 = 0.12;
 const MIN_AIR_BOOST_TIME: f32 = 1.0 / 30.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -3533,8 +3534,9 @@ impl BotBrain {
             vf = vf + car.up() * JUMP_SPEED;
             xf = xf + car.up() * (JUMP_SPEED * t);
         }
-        let hf = vf.z;
-        let tau = (JUMP_MAX_DURATION - jump_elapsed).max(0.0);
+        // The simulated held-jump acceleration must match the actual input
+        // duration used by the explicit jump-shot sequence below.
+        let tau = (JUMP_SHOT_TILT_HOLD - jump_elapsed).max(0.0);
         vf = vf + car.up() * (JUMP_ACCEL * tau);
         xf = xf + car.up() * (JUMP_ACCEL * tau * (t - 0.5 * tau));
 
@@ -3547,7 +3549,6 @@ impl BotBrain {
         // between the first jump and the dodge so the second press is a new edge.
         // Keep the existing counter and timestamps rather than introducing a
         // second routine/state machine.
-        const TILT_JUMP_HOLD: f32 = 0.12;
         const JUMP_RELEASE: f32 = 1.0 / 120.0;
         const DODGE_BUTTON_HOLD: f32 = 0.08;
 
@@ -3592,12 +3593,16 @@ impl BotBrain {
         // First jump: hold for a short, fixed window while pitching back.
         // Then explicitly release for one 120 Hz tick before the dodge press.
         if state.counter < 3 {
-            if jump_elapsed < TILT_JUMP_HOLD {
+            if jump_elapsed < JUMP_SHOT_TILT_HOLD {
                 controller.jump = true;
-            } else if jump_elapsed < TILT_JUMP_HOLD + JUMP_RELEASE {
+            } else if jump_elapsed < JUMP_SHOT_TILT_HOLD + JUMP_RELEASE {
                 controller.jump = false;
             } else {
                 state.counter = 3;
+                println!(
+                    "[JUMP SHOT PHASE] player={} phase=tilt_complete elapsed={:.3} T={:.3}",
+                    car.index, jump_elapsed, t,
+                );
             }
         }
 
@@ -3616,6 +3621,10 @@ impl BotBrain {
                 state.dodge_started_at = Some(game_time);
                 state.counter = 4;
                 self.last_flip_time = game_time;
+                println!(
+                    "[JUMP SHOT PHASE] player={} phase=forward_dodge elapsed={:.3} distance={:.1} T={:.3}",
+                    car.index, jump_elapsed, contact_distance, t,
+                );
                 controller.jump = true;
                 controller.pitch = -dodge_direction.x;
                 controller.yaw = dodge_direction.y;
@@ -6053,6 +6062,26 @@ mod tests {
         let fast = brain.run_jump_shot(me, BallState { location: quick.ball, velocity: quick.ball_velocity }, &BallTrajectory { slices: Vec::new() }, quick, 1.01);
         assert!(fast.jump, "quick shots still perform the first jump");
         assert_eq!(fast.pitch, 1.0, "quick shots must also pitch back before flipping");
+
+        let release = brain.run_jump_shot(
+            me,
+            BallState { location: state.ball, velocity: state.ball_velocity },
+            &BallTrajectory { slices: Vec::new() },
+            state,
+            1.125,
+        );
+        assert!(!release.jump, "the first jump must be released before the dodge");
+        assert_eq!(release.pitch, 1.0, "keep the nose tilted back during the release frame");
+
+        let dodge = brain.run_jump_shot(
+            me,
+            BallState { location: state.ball, velocity: state.ball_velocity },
+            &BallTrajectory { slices: Vec::new() },
+            state,
+            1.14,
+        );
+        assert!(dodge.jump, "the forward dodge is a fresh second jump press");
+        assert_eq!(brain.jump_shot.unwrap().counter, 4, "the sequence must enter the dodge phase");
     }
 
     #[test]
