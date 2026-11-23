@@ -2861,10 +2861,24 @@ impl BotBrain {
             // exception.
             let local_offset_target = car.local_location(offset_target.flatten());
             let angle_to_target = local_final_target.y.atan2(local_final_target.x).abs();
+            // Preserve forward momentum in the final ground-contact window.
+            // The distance/ETA speed remains the normal request; this floor
+            // only prevents defaultDrive from braking a fast, correctly-laned
+            // car just before it reaches the ball.
+            let current_forward_speed = car.local_velocity().x;
+            let power_contact_window = t < 0.35
+                && t > 0.10
+                && local_ball.x > 0.0
+                && current_forward_speed > 700.0;
+            let drive_speed = if power_contact_window {
+                speed_required.max(current_forward_speed.min(1200.0))
+            } else {
+                speed_required
+            };
             let output = default_drive(
                 &car,
                 DriveInput {
-                    target_speed: speed_required,
+                    target_speed: drive_speed,
                     local_target: local_final_target,
                     upside_down: false,
                     up: None,
@@ -3623,13 +3637,31 @@ impl BotBrain {
             let normal_ready = (close_enough || aligned)
                 && t <= state.needed_jump_time * 1.08;
 
-            if (side_ready || normal_ready) && runtime_reachable {
-                state.quick = t <= 0.45;
+            // A short-ETA / empty-boost shot cannot spend another packet
+            // waiting for perfect alignment. Permit the quick jump only when
+            // the car is already in the front contact lane and close enough
+            // that the jump+dodge can finish the touch.
+            let quick_eta_pressure = t <= 0.45
+                || (car.boost <= 5.0 && t <= state.needed_jump_time * 1.15);
+            let quick_contact_ready = local_ball.x > 0.0
+                && local_target.x > 0.0
+                && local_target.y.abs() <= 180.0
+                && contact_distance <= contact_limit + 100.0
+                && time_to_contact <= t.max(0.0) + 0.08;
+            let quick_ready = quick_eta_pressure
+                && quick_contact_ready
+                && t > 0.04
+                && state.ball.z <= car.location.z + 260.0;
+
+            if (side_ready || normal_ready || quick_ready)
+                && (runtime_reachable || quick_ready)
+            {
+                state.quick = quick_ready || t <= 0.45 || car.boost <= 5.0;
                 println!(
-                    "[JUMP SHOT TYPE] player={} quick={} T={:.3} needed_jump={:.3} distance={:.1} speed={:.1} target_speed={:.1} aligned={} side_ready={} reachable={}",
+                    "[JUMP SHOT TYPE] player={} quick={} T={:.3} needed_jump={:.3} distance={:.1} speed={:.1} target_speed={:.1} aligned={} side_ready={} quick_ready={} reachable={}",
                     car.index, state.quick, t, state.needed_jump_time,
                     distance_remaining, velocity, drive.target_speed,
-                    aligned, side_ready, runtime_reachable,
+                    aligned, side_ready, quick_ready, runtime_reachable,
                 );
                 // Python sets jumping in the approach branch, but its
                 // flight controller is the matching else branch. Preserve
