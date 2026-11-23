@@ -1697,7 +1697,7 @@ impl BotBrain {
                 self.teamplay_score = self.teamplay_score.max(78.0);
                 self.teamplay_contact_time = wall.intercept_time.clamp(0.0, 10.0);
                 self.teamplay_cover_released = true;
-                self.teamplay_receive = receive_plan(wall.ball_slice.location, opponent_goal);
+                self.teamplay_receive = receive_plan(me, wall.ball_slice.location, opponent_goal);
                 return Plan {
                     decision: Decision::WallDrive,
                     target: wall.ball_slice.location,
@@ -2443,7 +2443,7 @@ impl BotBrain {
                 );
                 target
             };
-            let mut distance_remaining = final_target.flat_distance(car.location)
+            let distance_remaining = final_target.flat_distance(car.location)
                 - car.hitbox.length / 3.0;
             let mut speed_required = if close_contact {
                 MAX_SPEED
@@ -5318,6 +5318,7 @@ mod tests {
             velocity: Vector::ZERO,
         };
         let pad = BoostPadState {
+            index: 0,
             location: Vector::new(1000.0, 100.0, 73.0),
             active: true,
             large: false,
