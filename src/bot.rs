@@ -5653,7 +5653,7 @@ mod tests {
     }
 
     #[test]
-    fn teamplay_receive_lead_uses_car_to_contact_distance() {
+    fn teamplay_receive_lead_uses_contact_to_goal_distance() {
         let me = car(0, 0, Vector::ZERO);
         let contact = Vector::new(1000.0, 0.0, 93.0);
         let aim = Vector::new(1000.0, 5120.0, 300.0);
