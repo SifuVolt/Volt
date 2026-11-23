@@ -271,7 +271,7 @@ impl AerialShot {
         if self.finished {
             return controls;
         }
-        if !self.aerialing && !self.side_wall_launched {
+        if !self.side_wall_launched && !self.jumped && !self.dodging {
             if let Some(wall_controls) = self.run_side_wall_takeoff(car, time_remaining, boost_accel) {
                 return wall_controls;
             }
