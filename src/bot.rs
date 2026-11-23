@@ -3175,8 +3175,30 @@ impl BotBrain {
                 return ControllerState::default();
             }
 
-            let _ = angle_to_target;
-            let _ = time_to_contact;
+            if !self.unlimited_boost
+                && car.boost < 48.0
+                && angle_to_target < 0.03
+                && velocity > 600.0
+                && time_to_contact >= state.needed_jump_time * 1.15 + 1.5
+            {
+                if self.match_state.gravity.z < -450.0 && time_to_contact < 5.0 {
+                    let mut wave = crate::mechanics::WaveDash::new(Some(local_offset_target));
+                    let result = wave.tick(car, game_time);
+                    if !result.finished {
+                        self.wave_dash = Some(wave);
+                        return result.controller;
+                    }
+                } else {
+                    let flip = FlipState {
+                        started_at: game_time,
+                        direction: local_offset_target.flatten().normalize(),
+                        cancel: false,
+                    };
+                    self.ground_flip = Some(flip);
+                    return self.run_ground_flip(Some(car), game_time, flip);
+                }
+            }
+
             self.jump_shot = Some(state);
             return controller_from_drive(drive, car);
         }
