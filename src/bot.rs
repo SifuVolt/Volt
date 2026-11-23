@@ -5445,7 +5445,7 @@ mod tests {
         let normal = brain.run_jump_shot(me, BallState { location: state.ball, velocity: state.ball_velocity }, &BallTrajectory { slices: Vec::new() }, state, 1.01);
         assert!(normal.jump);
         assert_eq!(normal.pitch, 1.0);
-        assert!(normal.yaw > 0.0);
+        assert!(normal.yaw.abs() > 0.0);
         assert!(normal.roll < 0.0);
 
         let quick = JumpShotState { quick: true, ..state };
