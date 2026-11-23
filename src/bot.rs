@@ -661,7 +661,7 @@ impl BotBrain {
                 pending.shot.ball = slice.location;
                 pending.shot.ball_velocity = slice.velocity;
                 let controller = self.drive_double_jump(me, ball, pending.shot, prediction, game_time);
-                if self.double_jump_shot.is_some() {
+                if self.double_jump_shot.is_some() || self.pending_double_jump.is_none() {
                     self.pending_double_jump = None;
                 } else {
                     self.pending_double_jump = Some(pending);
@@ -2826,6 +2826,9 @@ impl BotBrain {
 
         let required_height = (offset_target.z - car.location.z).max(0.0);
         let Some(jump_time) = grid_jump_time(required_height, true) else {
+            // Python double_jump._finish() pops this pending routine when
+            // the Grid jump model cannot produce a valid launch time.
+            self.pending_double_jump = None;
             return ControllerState::default();
         };
         let tj = t - jump_time * 1.15;
@@ -2894,10 +2897,13 @@ impl BotBrain {
                 targets: shot.targets,
             };
             self.double_jump_shot = Some(state);
-            return self.run_double_jump(car, state, game_time);
+            // Python sets jumping/jump_time and returns from the approach
+            // branch on this frame. The first jump press is emitted next tick.
+            return controller_from_drive(output, car);
         }
 
         if car.airborne {
+            self.pending_double_jump = None;
             self.defense_recovery_target = Some(final_target);
             return GridDefense::recovery_controller(car, final_target, self.match_state.gravity.z);
         }
@@ -2924,8 +2930,10 @@ impl BotBrain {
             )
         });
         if t <= jump_time || (tj > 0.0 && distance_remaining > 50.0 && !runtime_reachable) {
-            // Python double_jump.run executes defaultDrive before its
-            // reachability/timeout exit. Preserve that frame's drive controls.
+            // Python _finish() pops the pending routine on this frame.
+            // Preserve defaultDrive's already-written controls, but do not
+            // keep retrying this expired/unreachable intercept every tick.
+            self.pending_double_jump = None;
             return controller_from_drive(output, car);
         }
 
