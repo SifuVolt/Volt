@@ -6032,9 +6032,11 @@ mod tests {
     #[test]
     fn jump_shot_uses_python_s_tilt_and_three_release_frames() {
         let mut brain = BotBrain::new();
-        // Put the car inside the calculated front-contact window so this test
-        // exercises the second jump press, rather than the runtime distance gate.
-        let me = car(0, 0, Vector::new(100.0, -65.0, 0.0));
+        // Put the car airborne and inside the calculated front-contact
+        // window so the test reaches the three-frame release and dodge phases.
+        let mut me = car(0, 0, Vector::new(100.0, -65.0, 0.0));
+        me.airborne = true;
+        me.air_state = AirState::InAir;
         let state = JumpShotState {
             started_at: 1.0,
             intercept_time: 1.5,
