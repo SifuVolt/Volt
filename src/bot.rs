@@ -2480,6 +2480,15 @@ impl BotBrain {
         controller_from_drive(output, car)
     }
 
+    /// Start the Python ball_recovery routine after a committed shot
+    /// finishes or aborts. Unlike ordinary recovery, this may boost toward
+    /// a predicted floor landing.
+    fn start_ball_recovery(&mut self, car: CarState) -> ControllerState {
+        self.defense_recovery_target = None;
+        self.ball_recovery = car.airborne;
+        GridDefense::ball_recovery_controller(car, self.match_state.gravity.z)
+    }
+
     fn run_double_jump(
         &mut self,
         car: CarState,
@@ -2491,8 +2500,7 @@ impl BotBrain {
         state.jump_frames = (elapsed * 120.0).round().max(0.0) as u32;
         if time_remaining <= -0.4 || (!car.airborne && state.jump_frames >= 30) {
             self.double_jump_shot = None;
-            self.defense_recovery_target = if car.airborne { Some(state.offset_target) } else { None };
-            return ControllerState::default();
+            return self.start_ball_recovery(car);
         }
 
         let local_contact = car.local_location(state.offset_target);
@@ -2608,7 +2616,7 @@ impl BotBrain {
             || (elapsed > 0.30 && !car.airborne && state.dodge_started_at.is_none())
         {
             self.jump_shot = None;
-            return controller;
+            return self.start_ball_recovery(car);
         }
 
         // Keep the nose aimed along the planned outgoing shot vector. The
@@ -2647,6 +2655,7 @@ impl BotBrain {
             controller.roll = 0.0;
             if dodge_elapsed > 0.12 || car.has_dodged {
                 self.jump_shot = None;
+                return self.start_ball_recovery(car);
             } else {
                 self.jump_shot = Some(state);
             }
