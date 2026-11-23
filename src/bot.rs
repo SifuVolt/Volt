@@ -1306,10 +1306,9 @@ impl BotBrain {
             self.kickoff_complete = false;
             self.kickoff_ball_start = Some(ball.location);
             self.kickoff_contest_until = -999.0;
-            self.kickoff_speedflip = Some(crate::kickoff::SpeedFlipKickoff::default());
-        } else if !kickoff_active {
-            self.kickoff_complete = true;
-            self.kickoff_speedflip = None;
+            // Do not create a kickoff routine for every teammate. The
+            // routine is created only after the live kickoff role election
+            // confirms that this car is the kicker.
         }
         self.kickoff_was_active = kickoff_active;
 
@@ -1319,6 +1318,21 @@ impl BotBrain {
             if resolved && self.kickoff_contest_until < -900.0 {
                 self.kickoff_contest_until = game_time + 10.0;
             }
+        }
+
+        // Once this bot has been elected kicker, Python's
+        // speedflip_kickoff routine remains on the stack until its own
+        // ball-contact/timeout condition completes. RLBot may clear the
+        // kickoff flag on the very frame the ball is touched; that match
+        // phase change must not pop the still-running kickoff routine.
+        if !kickoff_active && !self.kickoff_complete && self.kickoff_speedflip.is_some() {
+            return Plan {
+                decision: Decision::KickoffKicker,
+                target: ball.location,
+                target_speed: MAX_SPEED,
+                shot: None,
+                jump: None,
+            };
         }
 
         if kickoff_active && !self.kickoff_complete {
@@ -1338,6 +1352,10 @@ impl BotBrain {
             let cheater = teammates.get(1).map(|car| car.index);
 
             if kicker == Some(me.index) {
+                if self.kickoff_speedflip.is_none() {
+                    self.kickoff_speedflip =
+                        Some(crate::kickoff::SpeedFlipKickoff::default());
+                }
                 return Plan {
                     decision: Decision::KickoffKicker,
                     target: ball.location,
