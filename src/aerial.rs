@@ -719,9 +719,9 @@ fn opponent_eta(opponent: CarState, target: Vector) -> f32 {
 }
 
 
-/// Fast-zone aerial scan from routines.fast_intercept_finder. It keeps the
-/// first normal aerial if one exists; otherwise it falls back to the first
-/// fast aerial whose live and predicted ball heights both clear 350 units.
+/// Fast-zone aerial scan from routines.fast_intercept_finder. It compares the
+/// earliest reachable normal aerial with the earliest valid high-ball fast
+/// aerial, choosing the one with the earlier contact time.
 pub fn find_fast_aerial_candidate(
     car: CarState,
     prediction: &BallTrajectory,
