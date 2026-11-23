@@ -2073,17 +2073,15 @@ impl BotBrain {
                     estimated_boost: car.boost,
                     score: time_remaining,
                 };
-                let mut aerial = AerialShot::new(
+                let aerial = AerialShot::new(
                     car, candidate, game_time, self.match_state.gravity, self.boost_accel,
                 );
-                let controls = aerial.run(
-                    car, game_time, self.match_state.gravity, self.boost_accel, controller.steer,
-                );
-                if !aerial.finished {
-                    self.aerial_shot = Some(aerial);
-                }
+                // Python wall_approach pushes Aerial and returns. The aerial
+                // owns the next packet; do not execute its jump on the handoff
+                // frame.
+                self.aerial_shot = Some(aerial);
                 self.wall_drive_candidate = None;
-                return if aerial.aerialing { controls } else { controller };
+                return controller;
             }
             if plan.mode == WallDriveMode::DoubleJump {
                 let shot = GroundIntercept {
@@ -2139,13 +2137,9 @@ impl BotBrain {
             };
             self.jump_shot = Some(state);
             self.wall_drive_candidate = None;
-            return self.run_jump_shot(
-                car,
-                current_ball,
-                prediction,
-                state,
-                game_time,
-            );
+            // Match the Python routine stack: the wall approach frame only
+            // pushes jump_shot; its drive/launch phase begins next packet.
+            return controller;
         }
 
         if !car.airborne
