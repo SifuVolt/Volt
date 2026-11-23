@@ -612,6 +612,12 @@ impl BotBrain {
                     boost_accel: self.boost_accel,
                 },
             );
+            if aerial.fast_aerial
+                && (aerial.ball.z <= 350.0 || ball.location.z <= 350.0)
+            {
+                aerial.fast_aerial = false;
+                aerial.double_jump = false;
+            }
             let controls = aerial.run(
                 me, game_time, match_state.gravity, self.boost_accel,
                 drive.controls.steer,
@@ -629,7 +635,7 @@ impl BotBrain {
                 return controller_from_drive(drive, me);
             }
             self.aerial_shot = Some(aerial);
-            if !aerial.aerialing {
+            if !aerial.aerialing && !aerial.side_wall_active {
                 return controller_from_drive(drive, me);
             }
             return controls;
