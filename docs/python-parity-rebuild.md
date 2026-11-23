@@ -95,11 +95,14 @@ Python's selector deliberately maps a low-ball `GROUND_SHOT` candidate to
 routine only when jumping is disabled. The Rust planner similarly routes most
 ground candidates through `JumpShotState`, but it hardcodes the allowed shot
 types instead of receiving the caller's `can_ground/can_jump/can_double_jump/
-can_aerial` settings. Its no-jump ground fallback has no persistent
-`GroundShotState` and is sent through generic `drive_to` at the plan's 2300
-speed. The full Python ground routine and the full jump routine therefore
-need to be ported as separate explicit states, with the same selection flags
-and handoff rules as Python.
+can_aerial` settings.
+
+The Rust live path now extracts the exact Python close-contact,
+distance-over-time, and speed-building calculation into
+`src/brain/ground_shot.rs`, with focused tests, and calls it from the live
+ground-shot path. This is not yet the complete persistent Python routine:
+intercept refresh, cached aim, patience state, stack ownership, and
+recovery/flip transitions still need to be ported around this calculation.
 
 ### Selector and routine ownership
 
