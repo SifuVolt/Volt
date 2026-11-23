@@ -2095,7 +2095,7 @@ impl BotBrain {
         game_time: f32,
     ) -> ControllerState {
         let t = shot.time;
-        let goal_aim = relative_goal_aim_point(car, shot.ball, self.shot_targets);
+        let goal_aim = relative_goal_aim_point(car, shot.ball, shot.targets);
         let shot_direction = (goal_aim - shot.ball).flatten().normalize();
         let offset_target = contact_approach_from_label(
             shot.ball, shot_direction, shot.contact_face, 92.75,
