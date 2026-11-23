@@ -3385,35 +3385,11 @@ impl BotBrain {
             let time_to_contact =
                 distance_remaining / (velocity + dodge_impulse(car.velocity, MAX_SPEED));
 
-            let side_ready = state.side_mode
-                && distance_remaining < 180.0
-                && t <= state.needed_jump_time * 1.08;
-            let close_enough = velocity.abs() < 100.0
-                && distance_remaining < car.hitbox.length * 0.5;
-            let aligned = local_offset_target.y.abs() < 92.0
-                && local_vf.x >= local_offset_target.x - car.hitbox.length / 3.0
-                && local_offset_target.x > 0.0;
-            let normal_ready = (close_enough || aligned)
-                && t <= state.needed_jump_time * 1.08;
-
-            if side_ready || normal_ready {
-                state.quick = t <= 0.45;
-                println!(
-                    "[JUMP SHOT TYPE] player={} quick={} T={:.3} needed_jump={:.3} distance={:.1} aligned={} side_ready={}",
-                    car.index, state.quick, t, state.needed_jump_time,
-                    distance_remaining, aligned, side_ready,
-                );
-                state.jumping = true;
-                state.jump_time = None;
-                self.jump_shot = Some(state);
-                return controller_from_drive(drive, car);
-            }
-
-            // Python calls VirxERLU-CLib jump_shot_is_viable with the
-            // live car, boost, heading, approach direction and distance.
-            // That wrapper first runs generic_is_viable, then checks the
-            // jump/dodge vertical window. The vertical-only helper by itself
-            // is not an equivalent reachability test.
+            // Validate the live contact geometry before either launch trigger.
+            // The parser validated its candidate, but contact-face/flank
+            // adjustments can move the approach target after selection.
+            // Match the Python CLib wrapper: generic reachability and
+            // jump_shot_is_viable both run with safe=false here.
             let runtime_reachable = runtime_ground_reachability(
                 t,
                 self.boost_accel,
@@ -3433,6 +3409,36 @@ impl BotBrain {
                 )
             });
 
+            let side_ready = state.side_mode
+                && distance_remaining < 180.0
+                && t <= state.needed_jump_time * 1.08;
+            let close_enough = velocity.abs() < 100.0
+                && distance_remaining < car.hitbox.length * 0.5;
+            let aligned = local_offset_target.y.abs() < 92.0
+                && local_vf.x >= local_offset_target.x - car.hitbox.length / 3.0
+                && local_offset_target.x > 0.0;
+            let normal_ready = (close_enough || aligned)
+                && t <= state.needed_jump_time * 1.08;
+
+            if (side_ready || normal_ready) && runtime_reachable {
+                state.quick = t <= 0.45;
+                println!(
+                    "[JUMP SHOT TYPE] player={} quick={} T={:.3} needed_jump={:.3} distance={:.1} speed={:.1} target_speed={:.1} aligned={} side_ready={} reachable={}",
+                    car.index, state.quick, t, state.needed_jump_time,
+                    distance_remaining, velocity, drive.target_speed,
+                    aligned, side_ready, runtime_reachable,
+                );
+                state.jumping = true;
+                state.jump_time = None;
+                self.jump_shot = Some(state);
+                return controller_from_drive(drive, car);
+            } else if (side_ready || normal_ready) && !runtime_reachable {
+                println!(
+                    "[JUMP SHOT LAUNCH BLOCKED] player={} T={:.3} needed_jump={:.3} distance={:.1} speed={:.1} target_speed={:.1} aligned={} side_ready={} boost={:.1}",
+                    car.index, t, state.needed_jump_time, distance_remaining,
+                    velocity, drive.target_speed, aligned, side_ready, car.boost,
+                );
+            }
             if t <= state.needed_jump_time
                 || (t_j > 0.0 && distance_remaining > 50.0 && !runtime_reachable)
             {
