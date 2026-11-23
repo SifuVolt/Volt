@@ -1966,6 +1966,7 @@ impl BotBrain {
     fn run_wall_approach(
         &mut self,
         car: CarState,
+        current_ball: BallState,
         plan: WallDrivePlan,
         prediction: &BallTrajectory,
         game_time: f32,
@@ -2093,7 +2094,7 @@ impl BotBrain {
             self.wall_drive_candidate = None;
             return self.run_jump_shot(
                 car,
-                BallState { location: geometry.ball, velocity: plan.ball_slice.velocity },
+                current_ball,
                 prediction,
                 state,
                 game_time,
@@ -2208,7 +2209,7 @@ impl BotBrain {
 
         if plan.decision == Decision::WallDrive {
             if let Some(wall) = self.wall_drive_candidate {
-                return self.run_wall_approach(car, wall, prediction, game_time);
+                return self.run_wall_approach(car, ball, wall, prediction, game_time);
             }
         }
 
