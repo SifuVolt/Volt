@@ -2603,7 +2603,11 @@ impl BotBrain {
                 shot.ball, shot_vector, shot.contact_face, 92.75,
             ).unwrap_or(shot.ball - shot_vector * 92.75);
 
-            let local_ball = car.local_location(ball.location);
+            // Python ground_shot uses Agent.local(world_ball_position)
+            // here, not local_location(). Keep this world-origin transform
+            // for its close-contact branch; the later approach checks do use
+            // local_location() because those are relative targets.
+            let local_ball = car.local(ball.location);
             let close_contact = local_ball.y.abs() < 92.75 + car.hitbox.width * 0.5
                 && local_ball.z.abs() < 92.75 + car.hitbox.height * 0.5;
             let mut final_target = if close_contact {
@@ -3758,6 +3762,12 @@ fn foe_goal(side: f32) -> Vector {
     Vector::new(0.0, -side * 5120.0, 0.0)
 }
 
+/// Volt's ball-lane relevance test compares travel times, not
+/// distance-speed products. Keep the units identical to the Python source.
+fn role_path_relevant(cross_track: f32, along_track: f32, ball_flat_speed: f32) -> bool {
+    cross_track / 2300.0 - 134.85 < along_track / ball_flat_speed.max(1.0)
+}
+
 /// Direct port of Volt's Noob Black role election in
 /// instructions for chatgpt on volt::get_grid_team_roles().
 ///
@@ -3929,8 +3939,7 @@ fn assign_roles_volt(
             // compared with along-track travel time. Multiplying by speed
             // here changes the units and can elect the wrong challenger.
             let path_relevant = save_deadline < 0.0
-                || (cross_track / 2300.0 - 134.85
-                    < along_track / ball_flat_speed.max(1.0));
+                || role_path_relevant(cross_track, along_track, ball_flat_speed);
             (location.y - foe_goal.y).abs()
                 + (location.x - ball.location.x).abs()
                     / 5.0
@@ -6245,6 +6254,20 @@ mod tests {
         let cancel = brain.run_speed_flip(me, cancel_state, 0.09);
         assert_eq!(cancel.pitch, 1.0);
         assert!(cancel.boost);
+    }
+
+    #[test]
+    fn role_path_relevance_matches_volt_travel_time_comparison() {
+        let cross_track = 100_000.0;
+        let along_track = 10_000.0;
+        let ball_speed = 2_000.0;
+        let expected = cross_track / 2300.0 - 134.85
+            < along_track / ball_speed.max(1.0);
+        let old_distance_product = cross_track * ball_speed / 2300.0 - 134.85
+            < along_track;
+        assert!(role_path_relevant(cross_track, along_track, ball_speed));
+        assert!(expected);
+        assert!(!old_distance_product);
     }
 
     #[test]
