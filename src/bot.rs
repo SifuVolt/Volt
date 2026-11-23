@@ -1152,6 +1152,16 @@ impl BotBrain {
                     urgent_save, true, self.unlimited_boost, self.shot_search_horizon(game_time),
                 );
             }
+            if candidate.is_none()
+                && ball_depth > 640.0
+                && opponent_is_vulnerable(me, ball, cars, own_goal)
+            {
+                candidate = find_best_any_shot(
+                    me, cars, prediction, shot_targets, match_state.gravity,
+                    self.boost_accel, game_time, self.kickoff_contest_until,
+                    self.unlimited_boost, self.shot_search_horizon(game_time),
+                );
+            }
             if let Some(candidate) = candidate {
                 self.set_teamplay_shot(me, ball, candidate, opponent_goal, roles, urgent_save);
                 if !should_commit_to_shot(
@@ -1316,6 +1326,16 @@ impl BotBrain {
                 me, cars, ball.location, prediction, match_state.gravity,
                 self.boost_accel, game_time, self.kickoff_contest_until,
                 urgent_save, true, self.unlimited_boost, self.shot_search_horizon(game_time),
+            );
+        }
+        if candidate.is_none()
+            && ball_depth > 640.0
+            && opponent_is_vulnerable(me, ball, cars, own_goal)
+        {
+            candidate = find_best_any_shot(
+                me, cars, prediction, shot_targets, match_state.gravity,
+                self.boost_accel, game_time, self.kickoff_contest_until,
+                self.unlimited_boost, self.shot_search_horizon(game_time),
             );
         }
         if let Some(candidate) = candidate {
@@ -2561,6 +2581,30 @@ fn receive_plan(contact: Vector, aim: Vector) -> Option<(Vector, Vector, Vector)
     lane = lane.normalize();
     let lane_distance = (contact.flat_distance(aim) * 0.28).clamp(350.0, 1050.0);
     Some((contact + lane * lane_distance, lane, contact))
+}
+
+
+fn opponent_is_vulnerable(
+    me: CarState,
+    ball: BallState,
+    cars: &[CarState],
+    own_goal: Vector,
+) -> bool {
+    if me.location.distance(ball.location) > 1800.0 {
+        return false;
+    }
+    cars.iter()
+        .filter(|foe| foe.team != me.team && !foe.demolished)
+        .any(|foe| {
+            if foe.location.distance(ball.location) > 900.0 {
+                return false;
+            }
+            let toward_our_goal = (own_goal - foe.location).flatten().normalize();
+            let foe_forward = foe.forward().flatten().normalize();
+            let goal_alignment = foe_forward.dot(toward_our_goal);
+            let ball_behind_foe = foe.local_location(ball.location).x < -150.0;
+            goal_alignment < -0.25 || ball_behind_foe
+        })
 }
 
 fn should_commit_to_shot(
