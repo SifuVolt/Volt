@@ -2882,7 +2882,13 @@ impl BotBrain {
         mut state: JumpShotState,
         game_time: f32,
     ) -> ControllerState {
-        let jump_elapsed = state.jump_time.map_or(0.0, |started| (game_time - started).max(0.0));
+        let mut jump_elapsed = state.jump_time.map_or(0.0, |started| (game_time - started).max(0.0));
+        if state.jumping && state.jump_time.is_none() {
+            // Python starts its jump timer on the first frame of the jumping
+            // branch, so that frame receives the initial jump impulse.
+            state.jump_time = Some(game_time);
+            jump_elapsed = 0.0;
+        }
         let t = state.intercept_time - game_time;
         let time_remaining = t.clamp(0.000001, 6.0);
 
@@ -2967,7 +2973,7 @@ impl BotBrain {
                     state.shot_direction,
                     time_remaining,
                     self.match_state.gravity,
-                    jump_elapsed > 1.0e-6,
+                    state.jumping,
                     state.contact_face_label,
                 ) {
                     offset_target = selected_target;
@@ -3064,7 +3070,7 @@ impl BotBrain {
             if side_ready || normal_ready {
                 state.quick = t <= 0.45;
                 state.jumping = true;
-                state.jump_time = Some(game_time);
+                state.jump_time = None;
                 self.jump_shot = Some(state);
                 return controller_from_drive(drive, car);
             }
@@ -3164,7 +3170,7 @@ impl BotBrain {
 
             let delta_x = state.approach - xf;
             let d_direction = delta_x.normalize();
-            if car.forward().dot(d_direction).abs() > 0.5 && t > 1.0e-6 {
+            if car.forward().dot(d_direction) > 0.5 && t > 1.0e-6 {
                 let mut delta_v = delta_x.dot(car.forward()) / t;
                 if car.boost > 0.0 && delta_v >= self.boost_accel * MIN_AIR_BOOST_TIME {
                     controller.boost = true;
