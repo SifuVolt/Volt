@@ -1967,6 +1967,7 @@ impl BotBrain {
         &mut self,
         car: CarState,
         plan: WallDrivePlan,
+        prediction: &BallTrajectory,
         game_time: f32,
     ) -> ControllerState {
         // The source wall_approach aborts when its prediction expires or
@@ -2093,6 +2094,7 @@ impl BotBrain {
             return self.run_jump_shot(
                 car,
                 BallState { location: geometry.ball, velocity: plan.ball_slice.velocity },
+                prediction,
                 state,
                 game_time,
             );
@@ -2201,12 +2203,12 @@ impl BotBrain {
             return self.run_double_jump(car, state, game_time);
         }
         if let Some(state) = self.jump_shot {
-            return self.run_jump_shot(car, ball, state, game_time);
+            return self.run_jump_shot(car, ball, prediction, state, game_time);
         }
 
         if plan.decision == Decision::WallDrive {
             if let Some(wall) = self.wall_drive_candidate {
-                return self.run_wall_approach(car, wall, game_time);
+                return self.run_wall_approach(car, wall, prediction, game_time);
             }
         }
 
@@ -2951,6 +2953,7 @@ impl BotBrain {
         &mut self,
         car: CarState,
         current_ball: BallState,
+        prediction: &BallTrajectory,
         mut state: JumpShotState,
         game_time: f32,
     ) -> ControllerState {
@@ -2963,6 +2966,26 @@ impl BotBrain {
         }
         let t = state.intercept_time - game_time;
         let time_remaining = t.clamp(0.000001, 6.0);
+
+        // Python refreshes its predicted ball slice every packet until the
+        // jump begins. A committed shot must follow the moving intercept,
+        // not keep steering toward the stale slice from selection time.
+        if !state.jumping {
+            if prediction.slices.is_empty() {
+                self.jump_shot = None;
+                return ControllerState::default();
+            }
+            let slice_index = ((t * 120.0).round() as isize - 1)
+                .clamp(0, prediction.slices.len() as isize - 1) as usize;
+            let slice = prediction.slices[slice_index];
+            state.ball = slice.location;
+            state.ball_velocity = slice.velocity;
+            state.needed_jump_time = get_jump_time(
+                state.ball.z - car.location.z,
+                car.velocity.z,
+                self.match_state.gravity.z,
+            ).time as f32;
+        }
 
         // Recalculate the goal-directed shot vector and contact approach each
         // frame, as Python jump_shot.run does after it has committed to the
