@@ -184,6 +184,7 @@ pub struct BotBrain {
     defense_flip: Option<FlipState>,
     last_flip_time: f32,
     defense_recovery_target: Option<Vector>,
+    ball_recovery: bool,
     half_flip: Option<HalfFlipState>,
     speed_flip: Option<SpeedFlipState>,
     navigation_speedflip_used: bool,
@@ -236,6 +237,7 @@ impl BotBrain {
             defense_flip: None,
             last_flip_time: -999.0,
             defense_recovery_target: None,
+            ball_recovery: false,
             half_flip: None,
             speed_flip: None,
             navigation_speedflip_used: false,
@@ -484,6 +486,19 @@ impl BotBrain {
             }
         }
 
+        // Aerial aborts in the Python routine stack push ball_recovery,
+        // which is distinct from ordinary recovery because it may boost
+        // downward toward a predicted floor landing.
+        if self.ball_recovery {
+            let controller = GridDefense::ball_recovery_controller(
+                me, match_state.gravity.z,
+            );
+            if !me.airborne {
+                self.ball_recovery = false;
+            }
+            return controller;
+        }
+
         // VirxERLU routines are stack-prioritized: a recovery pushed by
         // grid_defense remains active until the car regains wheel contact,
         // even if the strategic role changes during flight.
@@ -523,6 +538,13 @@ impl BotBrain {
             );
             if aerial.finished {
                 self.aerial_shot = None;
+                if me.airborne {
+                    self.ball_recovery = true;
+                    return GridDefense::ball_recovery_controller(
+                        me, match_state.gravity.z,
+                    );
+                }
+                self.ball_recovery = false;
                 return controller_from_drive(drive, me);
             }
             self.aerial_shot = Some(aerial);
