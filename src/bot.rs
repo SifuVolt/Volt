@@ -6301,7 +6301,7 @@ mod tests {
     fn role_path_relevance_matches_volt_travel_time_comparison() {
         let cross_track = 100_000.0;
         let along_track = 10_000.0;
-        let ball_speed = 2_000.0;
+        let ball_speed: f32 = 2_000.0;
         let expected = cross_track / 2300.0 - 134.85
             < along_track / ball_speed.max(1.0);
         let old_distance_product = cross_track * ball_speed / 2300.0 - 134.85
