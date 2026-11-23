@@ -1589,7 +1589,7 @@ impl BotBrain {
                     0.10, self.shot_search_horizon(game_time), ball.location.z,
                     max_aerial_height, true,
                 ) {
-                    self.set_teamplay_aerial(me, candidate, aim, roles, urgent_save);
+                    self.set_teamplay_aerial(me, ball, candidate, opponent_goal, aim, roles, urgent_save);
                     self.aerial_candidate = Some(candidate);
                     return Plan {
                         decision: Decision::AerialChallenge,
