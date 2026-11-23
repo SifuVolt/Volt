@@ -20,7 +20,7 @@ const AIR_THROTTLE_ACCEL: f32 = 66.667;
 const JUMP_VEL: f32 = 291.667;
 const JUMP_ACCEL: f32 = 1458.333;
 const JUMP_DURATION: f32 = 0.2;
-const BOOST_CONSUMPTION: f32 = 33.3;
+const BOOST_CONSUMPTION: f32 = 33.333_333;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct AerialCandidate {
@@ -122,6 +122,7 @@ impl AerialShot {
         game_time: f32,
         goal: Vector,
         gravity: Vector,
+        live_ball_height: f32,
     ) {
         let time_remaining = self.intercept_time - game_time;
         if prediction.slices.is_empty() || time_remaining <= 0.0 {
@@ -137,6 +138,11 @@ impl AerialShot {
         self.slice_velocity = slice.velocity;
         self.slice_time = slice.time;
         self.shot_target = goal;
+        // Python disables the fast sequence if either the live ball or the
+        // committed prediction has fallen to 350 uu or lower.
+        if self.fast_aerial && (self.ball.z <= 350.0 || live_ball_height <= 350.0) {
+            self.fast_aerial = false;
+        }
         self.ceiling = car.location.z > 2044.0 - car.hitbox.height * 2.0 && !car.jumped;
 
         let foe_goal_y = if car.team == 0 { 5120.0 } else { -5120.0 };
@@ -341,9 +347,7 @@ impl AerialShot {
         boost_accel: f32,
         _steer: f32,
     ) -> ControllerState {
-        let delta_time = (game_time - self.last_update).max(0.0);
         self.last_update = game_time;
-        let frame_dt = delta_time.max(1.0 / 120.0);
         let mut controls = ControllerState::default();
         let time_remaining = self.intercept_time - game_time;
         if self.finished {
@@ -517,11 +521,11 @@ impl AerialShot {
                 .clamp(-1.0, 1.0)
                 .acos();
             controls.boost = forward_need
-                >= (boost_accel + AIR_THROTTLE_ACCEL) * frame_dt.max(13.0 / 120.0)
+                >= (boost_accel + AIR_THROTTLE_ACCEL) * (13.0 / 120.0)
                 && forward_angle < 0.4
                 && car.boost > 0.0;
             controls.throttle = (forward_need
-                / (AIR_THROTTLE_ACCEL * frame_dt.max(1.0 / 120.0)))
+                / (AIR_THROTTLE_ACCEL * (1.0 / 120.0)))
                 .clamp(-1.0, 1.0);
         } else {
             controls.boost = false;
@@ -1106,7 +1110,7 @@ mod tests {
     }
 
     #[test]
-    fn aerial_throttle_uses_frame_dt_not_the_longer_boost_window() {
+    fn aerial_throttle_uses_python_fixed_dt_and_separate_boost_window() {
         let mut me = car(Vector::ZERO, 100.0);
         me.airborne = true;
         me.air_state = AirState::InAir;
