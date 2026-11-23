@@ -1056,6 +1056,85 @@ mod tests {
     }
 
     #[test]
+    fn party_cannon_shot_power_uses_the_2300_speed_band() {
+        assert!((shot_power_modifier(3450.0) - 0.425).abs() < 1e-6);
+        assert!((shot_power_modifier(2300.0) - 0.55).abs() < 1e-6);
+    }
+
+    #[test]
+    fn fast_aerial_releases_three_frames_then_holds_second_jump_three_frames() {
+        let me = car(Vector::ZERO, 100.0);
+        let candidate = AerialCandidate {
+            slice: BallSlice {
+                time: 3.0,
+                location: Vector::new(0.0, 0.0, 900.0),
+                velocity: Vector::ZERO,
+            },
+            shot_target: Vector::new(0.0, 5120.0, 300.0),
+            target_location: Vector::new(0.0, 0.0, 745.0),
+            shot_direction: Vector::new(0.0, 1.0, 0.0),
+            double_jump: true,
+            fast: true,
+            estimated_boost: 20.0,
+            score: 1.0,
+        };
+        let mut shot = AerialShot::new(
+            me, candidate, 1.0, Vector::new(0.0, 0.0, -650.0), 991.6667,
+        );
+
+        assert!(shot.run(me, 1.0, Vector::new(0.0, 0.0, -650.0), 991.6667, 0.0).jump);
+        for frame in 1..=3 {
+            let controls = shot.run(
+                me, 1.20 + frame as f32 / 120.0,
+                Vector::new(0.0, 0.0, -650.0), 991.6667, 0.0,
+            );
+            assert!(!controls.jump, "release frame {frame} must be unpressed");
+        }
+        for frame in 1..=3 {
+            let controls = shot.run(
+                me, 1.23 + frame as f32 / 120.0,
+                Vector::new(0.0, 0.0, -650.0), 991.6667, 0.0,
+            );
+            assert!(controls.jump, "second-jump hold frame {frame} must be pressed");
+            assert!(shot.dodging);
+        }
+        let finished = shot.run(
+            me, 1.27, Vector::new(0.0, 0.0, -650.0), 991.6667, 0.0,
+        );
+        assert!(!finished.jump);
+        assert!(!shot.dodging);
+        assert!(shot.jumped);
+    }
+
+    #[test]
+    fn aerial_throttle_uses_frame_dt_not_the_longer_boost_window() {
+        let mut me = car(Vector::ZERO, 100.0);
+        me.airborne = true;
+        me.air_state = AirState::InAir;
+        let candidate = AerialCandidate {
+            slice: BallSlice {
+                time: 2.0,
+                location: Vector::new(156.75, 0.0, 0.0),
+                velocity: Vector::ZERO,
+            },
+            shot_target: Vector::new(0.0, 5120.0, 300.0),
+            target_location: Vector::new(1.0, 0.0, 0.0),
+            shot_direction: Vector::new(1.0, 0.0, 0.0),
+            double_jump: false,
+            fast: false,
+            estimated_boost: 10.0,
+            score: 1.0,
+        };
+        let mut shot = AerialShot::new(
+            me, candidate, 1.0, Vector::new(0.0, 0.0, -650.0), 991.6667,
+        );
+        let controls = shot.run(
+            me, 1.0, Vector::new(0.0, 0.0, -650.0), 991.6667, 0.0,
+        );
+        assert!((controls.throttle - 0.9).abs() < 0.02);
+    }
+
+    #[test]
     fn aerial_state_emits_jump_and_boost_controls() {
         let car = car(Vector::ZERO, 100.0);
         let candidate = AerialCandidate {
