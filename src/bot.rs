@@ -2088,8 +2088,13 @@ impl BotBrain {
                 let perpendicular = car_to_target
                     .cross(Vector::new(0.0, 0.0, side_of_vector))
                     .normalize();
-                let adjustment = car_to_target.angle2d(vector) * distance_remaining
-                    / std::f32::consts::PI;
+                let flat_to_target = car_to_target.flatten();
+                let flat_vector = vector.flatten();
+                let signed_angle = flat_to_target
+                    .cross(flat_vector)
+                    .z
+                    .atan2(flat_to_target.dot(flat_vector));
+                let adjustment = signed_angle * distance_remaining / std::f32::consts::PI;
                 final_target = final_target + perpendicular * adjustment;
             }
             final_target = cap_in_field(&car, final_target);
