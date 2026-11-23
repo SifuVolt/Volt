@@ -383,8 +383,6 @@ impl AerialShot {
             (game_time - self.started_at).max(0.0)
         };
         let jump_elapsed = self.elapsed;
-        let time = time_remaining.max(0.000001);
-
         // Python begins with the live ballistic state. Only the impulses that
         // have not yet appeared in the live packet are added to the forecast.
         let mut final_velocity = car.velocity + gravity * time_remaining;
