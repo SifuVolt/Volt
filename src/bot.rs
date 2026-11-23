@@ -288,7 +288,10 @@ impl BotBrain {
         let local_ball = me.local_location(candidate.ball);
         let facing_angle = local_ball.y.atan2(local_ball.x).abs();
         let approach = (candidate.ball - me.location).flatten().normalize();
-        let goal_direction = (goal - candidate.ball).flatten().normalize();
+        let receive_aim = if (candidate.parser.targets.left - candidate.parser.targets.right).magnitude() > 1.0 {
+            (candidate.parser.targets.left + candidate.parser.targets.right) * 0.5
+        } else { goal };
+        let goal_direction = (receive_aim - candidate.ball).flatten().normalize();
         let alignment = if approach.magnitude() > 0.001 && goal_direction.magnitude() > 0.001 {
             approach.dot(goal_direction).clamp(-1.0, 1.0)
         } else { 1.0 };
@@ -307,9 +310,6 @@ impl BotBrain {
         self.teamplay_cover_released = true;
         self.teamplay_cover_owner = roles.and_then(|r| if r.goalie != r.challenger { Some(r.goalie) } else { None });
         let _ = ball;
-        let receive_aim = if (candidate.parser.targets.left - candidate.parser.targets.right).magnitude() > 1.0 {
-            (candidate.parser.targets.left + candidate.parser.targets.right) * 0.5
-        } else { goal };
         self.teamplay_receive = receive_plan(candidate.ball, receive_aim);
     }
 
