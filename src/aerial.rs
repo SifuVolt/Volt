@@ -992,7 +992,7 @@ mod tests {
         shot.refresh_prediction(
             car, &prediction, 1.5, Vector::new(0.0, 5120.0, 300.0),
             Vector::new(0.0, 0.0, -650.0),
-            950,
+            950.0,
 );
         assert_eq!(shot.ball, Vector::new(200.0, 100.0, 950.0));
         assert_eq!(shot.slice_velocity, Vector::new(0.0, 100.0, 0.0));
@@ -1026,7 +1026,7 @@ mod tests {
         shot.refresh_prediction(
             me, &prediction, 1.0, Vector::new(0.0, 5120.0, 300.0),
             Vector::new(0.0, 0.0, -650.0),
-            900,
+            900.0,
 );
         assert!(shot.backboard_mode);
     }
@@ -1055,7 +1055,7 @@ mod tests {
         shot.refresh_prediction(
             me, &prediction, 1.0, Vector::new(0.0, 5120.0, 300.0),
             Vector::new(0.0, 0.0, -650.0),
-            600,
+            600.0,
 );
         assert!(shot.shot_direction.x > 0.4);
         assert!(shot.shot_direction.y > 0.4);
