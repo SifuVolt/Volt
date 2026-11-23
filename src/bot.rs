@@ -646,7 +646,7 @@ impl BotBrain {
         if let Some(mut aerial) = self.aerial_shot {
             let aerial_goal = relative_goal_aim_point(me, aerial.ball, self.shot_targets);
             aerial.refresh_prediction(
-                me, prediction, game_time, aerial_goal, match_state.gravity,
+                me, prediction, game_time, aerial_goal, match_state.gravity, ball.location.z,
             );
             let drive = default_drive(
                 &me,
