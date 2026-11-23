@@ -5479,7 +5479,7 @@ mod tests {
                     targets: ShotTargets { left: Vector::ZERO, right: Vector::ZERO },
         };
 
-        let controller = brain.run_jump_shot(me, BallState { location: state.ball, velocity: state.ball_velocity }, state, 1.10);
+        let controller = brain.run_jump_shot(me, BallState { location: state.ball, velocity: state.ball_velocity }, &BallTrajectory { slices: Vec::new() }, state, 1.10);
         assert!(controller.jump);
         let committed = brain.jump_shot.unwrap();
         assert!(committed.dodge_started_at.is_some());
@@ -5548,7 +5548,7 @@ mod tests {
                     targets: ShotTargets { left: Vector::ZERO, right: Vector::ZERO },
         };
 
-        let controller = brain.run_jump_shot(me, BallState { location: state.ball, velocity: state.ball_velocity }, state, 1.90);
+        let controller = brain.run_jump_shot(me, BallState { location: state.ball, velocity: state.ball_velocity }, &BallTrajectory { slices: Vec::new() }, state, 1.90);
         assert!(!controller.jump);
         assert!(brain.jump_shot.is_none());
     }
@@ -5580,14 +5580,14 @@ mod tests {
                     targets: ShotTargets { left: Vector::ZERO, right: Vector::ZERO },
         };
 
-        let normal = brain.run_jump_shot(me, BallState { location: state.ball, velocity: state.ball_velocity }, state, 1.01);
+        let normal = brain.run_jump_shot(me, BallState { location: state.ball, velocity: state.ball_velocity }, &BallTrajectory { slices: Vec::new() }, state, 1.01);
         assert!(normal.jump);
         assert_eq!(normal.pitch, 1.0);
         assert!(normal.yaw > 0.0);
         assert!(normal.roll < 0.0);
 
         let quick = JumpShotState { quick: true, ..state };
-        let fast = brain.run_jump_shot(me, BallState { location: quick.ball, velocity: quick.ball_velocity }, quick, 1.01);
+        let fast = brain.run_jump_shot(me, BallState { location: quick.ball, velocity: quick.ball_velocity }, &BallTrajectory { slices: Vec::new() }, quick, 1.01);
         assert_ne!(fast.pitch, 1.0);
         assert_eq!(fast.roll, 0.0);
     }
