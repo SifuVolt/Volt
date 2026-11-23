@@ -5527,7 +5527,7 @@ mod tests {
         let first = cached_ground_goal_aim_point(
             &mut cached, me, Vector::new(0.0, -1000.0, 100.0), targets,
         );
-        assert_eq!(first.z, 470.0);
+        assert_eq!(first.z, 310.0);
         let after_ball_crosses_midfield = cached_ground_goal_aim_point(
             &mut cached, me, Vector::new(0.0, 1000.0, 100.0), targets,
         );
@@ -5537,7 +5537,7 @@ mod tests {
         let next = cached_ground_goal_aim_point(
             &mut next_routine, me, Vector::new(0.0, 1000.0, 100.0), targets,
         );
-        assert_eq!(next.z, 310.0);
+        assert_eq!(next.z, 470.0);
     }
 
     #[test]
