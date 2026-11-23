@@ -6122,15 +6122,20 @@ mod tests {
         let mut me = car(0, 0, Vector::ZERO);
         me.velocity = Vector::new(1500.0, 0.0, 0.0);
         let ball = Vector::new(400.0, 0.0, 93.0);
+        let needed_jump_time = get_jump_time(
+            ball.z - me.location.z, me.velocity.z, brain.match_state.gravity.z,
+        ).time as f32;
+        let intercept_time = 1.0 + needed_jump_time * 1.04;
+        let time_remaining = intercept_time - 1.0;
         let slice = BallSlice {
-            time: 0.2,
+            time: time_remaining,
             location: ball,
             velocity: Vector::ZERO,
         };
         let prediction = BallTrajectory { slices: vec![slice; 80] };
         let state = JumpShotState {
             started_at: 1.0,
-            intercept_time: 1.2,
+            intercept_time,
             ball,
             ball_velocity: Vector::ZERO,
             approach: Vector::new(248.0, 0.0, 93.0),
@@ -6138,7 +6143,7 @@ mod tests {
             contact_face: "centre",
             contact_face_label: None,
             goal_aim_point: Some(Vector::new(5120.0, 0.0, 300.0)),
-            needed_jump_time: 0.2,
+            needed_jump_time,
             jumping: false,
             dodging: false,
             jump_time: None,
