@@ -182,6 +182,7 @@ pub struct BotBrain {
     ground_flip: Option<FlipState>,
     jump_shot: Option<JumpShotState>,
     double_jump_shot: Option<DoubleJumpState>,
+    ground_shot_patience_applied: bool,
     wave_dash: Option<crate::mechanics::WaveDash>,
     defense: GridDefense,
     defense_flip: Option<FlipState>,
