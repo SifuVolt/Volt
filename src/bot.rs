@@ -2813,14 +2813,16 @@ impl BotBrain {
         )
         .map_or((shot.time, shot.ball), |(time, location)| (time, location));
 
-        // Python double_jump uses the ball-radius standoff (best_shot_value)
-        // and its goal-directed shot vector. It does not inherit the parser's
-        // jump-shot front-face label.
         // Python caches _relative_goal_aim_point on the first routine
         // frame using the live ball's half of the field, not the future slice.
         let goal_aim = relative_goal_aim_point(car, current_ball.location, shot.targets);
         let shot_direction = (goal_aim - ball).flatten().normalize();
-        let offset_target = ball - shot_direction * 92.75;
+        // Keep the contact label selected by tools.select_ball_contact.
+        // Rebuild its surface normal against the refreshed ball and shot
+        // direction, using Python's best_shot_value standoff (min 120 uu).
+        let offset_target = contact_approach_from_label(
+            ball, shot_direction, shot.contact_face, 92.75,
+        ).unwrap_or(ball - shot_direction * 92.75);
 
         let required_height = (offset_target.z - car.location.z).max(0.0);
         let Some(jump_time) = grid_jump_time(required_height, true) else {
