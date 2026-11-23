@@ -234,6 +234,7 @@ pub struct BotBrain {
     last_goalie_role_time: f32,
     was_airborne: bool,
     last_landing_time: f32,
+    last_neutral_log_time: f32,
 }
 
 fn shot_patience_adjustment(
@@ -487,6 +488,54 @@ impl BotBrain {
     /// Produce the active controller for this tick. The car list must contain
     /// all players from the current packet, including this bot.
     pub fn tick(
+        &mut self,
+        me: CarState,
+        cars: &[CarState],
+        ball: BallState,
+        prediction: &BallTrajectory,
+        game_time: f32,
+        match_state: MatchState,
+        boost_pads: &[BoostPadState],
+        shot_targets: ShotTargets,
+    ) -> ControllerState {
+        let controller = self.tick_inner(
+            me, cars, ball, prediction, game_time, match_state, boost_pads, shot_targets,
+        );
+        let neutral = controller.throttle.abs() < 1.0e-5
+            && controller.steer.abs() < 1.0e-5
+            && controller.pitch.abs() < 1.0e-5
+            && controller.yaw.abs() < 1.0e-5
+            && controller.roll.abs() < 1.0e-5
+            && !controller.jump
+            && !controller.boost
+            && !controller.handbrake;
+        if neutral && game_time - self.last_neutral_log_time >= 0.25 {
+            let reason = if self.power_clear.is_some_and(|state| state.phase == 2) {
+                "power_clear_waiting_for_pop"
+            } else if self.jump_shot.is_some() {
+                "jump_shot_neutral_output"
+            } else if self.aerial_shot.is_some() {
+                "aerial_neutral_output"
+            } else if self.double_jump_shot.is_some() || self.pending_double_jump.is_some() {
+                "double_jump_neutral_output"
+            } else if self.kickoff_speedflip.is_some() {
+                "kickoff_routine_neutral_output"
+            } else if self.emergency_clear.is_some() {
+                "emergency_clear_neutral_output"
+            } else {
+                "no_active_controller_action"
+            };
+            println!(
+                "[BOT NEUTRAL] player={} reason={} t={:.3} airborne={} boost={:.1} ball=({:.0},{:.0},{:.0})",
+                me.index, reason, game_time, me.airborne, me.boost,
+                ball.location.x, ball.location.y, ball.location.z,
+            );
+            self.last_neutral_log_time = game_time;
+        }
+        controller
+    }
+
+    fn tick_inner(
         &mut self,
         me: CarState,
         cars: &[CarState],
