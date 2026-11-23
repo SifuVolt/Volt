@@ -53,7 +53,13 @@ architecture. Replace it with independent, testable modules:
 6. **Steering and throttle** — pure functions porting `defaultPD`,
    `defaultThrottle`, and `defaultDrive`; callers must pass the same target
    and target speed the Python routine passes.
-7. **Routine lifecycle** — explicit priority/ownership rules so a committed
+7. **Routine stack** — replace the collection of unrelated optional state
+   fields with a typed Rust routine stack. Python Volt's `push`, `pop`,
+   `clear`, same-class `update`, protected-routine rules, and
+   `is_clear()/odd_tick` search cadence must have explicit Rust equivalents.
+   A routine returns a controller plus a transition (`Keep`, `Pop`,
+   `Push`, or `Replace`); it must never silently lose ownership.
+8. **Routine lifecycle** — explicit priority/ownership rules so a committed
    routine cannot be silently replaced, restarted, or left returning neutral
    controls.
 
@@ -84,10 +90,28 @@ adjustment), runs `defaultDrive`, predicts arrival using dodge impulse, tests
 the source flip window, calls `ground_shot_is_viable`, and pops to recovery
 when the shot is no longer possible.
 
-The current Rust selector returns a `GroundIntercept`, but the live path does
-not have an equivalent persistent ground-shot executor. It passes the
-approach target through generic `drive_to` with a plan speed of 2300. That is
-not the Python ground-shot routine and must be replaced, not tuned.
+Python's selector deliberately maps a low-ball `GROUND_SHOT` candidate to
+`jump_shot` when jumping is enabled; it uses the standalone `ground_shot`
+routine only when jumping is disabled. The Rust planner similarly routes most
+ground candidates through `JumpShotState`, but it hardcodes the allowed shot
+types instead of receiving the caller's `can_ground/can_jump/can_double_jump/
+can_aerial` settings. Its no-jump ground fallback has no persistent
+`GroundShotState` and is sent through generic `drive_to` at the plan's 2300
+speed. The full Python ground routine and the full jump routine therefore
+need to be ported as separate explicit states, with the same selection flags
+and handoff rules as Python.
+
+### Selector and routine ownership
+
+Python `tools.find_shot` accepts explicit `can_ground`, `can_jump`,
+`can_double_jump`, and `can_aerial` flags, scans the samples returned by
+`get_slices`, and scores candidates with `shot_candidate_score`. It also
+keeps an active routine alive: the selector updates the same routine class,
+and ordinary shots are protected from arbitrary replacement. The Rust
+planner currently hardcodes much of the shot-type availability and its
+`BotBrain` uses separate optional state fields rather than the Python
+routine stack. The rewrite must port the call order and ownership semantics,
+not just the parser equations.
 
 ### Steering
 
