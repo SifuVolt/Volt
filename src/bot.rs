@@ -5631,6 +5631,57 @@ mod tests {
     }
 
     #[test]
+    fn persistent_ground_shot_update_preserves_contact_face_and_refreshes_prediction() {
+        let targets = ShotTargets {
+            left: Vector::new(-700.0, 5120.0, 300.0),
+            right: Vector::new(700.0, 5120.0, 300.0),
+        };
+        let replacement_targets = ShotTargets {
+            left: Vector::new(-800.0, 5120.0, 300.0),
+            right: Vector::new(800.0, 5120.0, 300.0),
+        };
+        let original = GroundIntercept {
+            time: 1.0,
+            ball: Vector::new(0.0, 0.0, 180.0),
+            ball_velocity: Vector::ZERO,
+            approach: Vector::new(0.0, -100.0, 0.0),
+            shot_direction: Vector::new(0.0, 1.0, 0.0),
+            contact_quality: 0.8,
+            contact_point: Vector::new(0.0, -92.75, 180.0),
+            contact_face: "left",
+            shot_type: ShotType::Ground,
+            side_shot: None,
+            targets,
+        };
+        let replacement = GroundIntercept {
+            time: 1.4,
+            contact_face: "right",
+            targets: replacement_targets,
+            ..original
+        };
+        let mut state = GroundShotState::new(original, 10.0);
+        state.update(replacement, 10.1);
+
+        assert!((state.intercept_time - 11.5).abs() < 1.0e-5);
+        assert_eq!(state.intercept.contact_face, "left");
+        assert_eq!(state.intercept.targets, replacement_targets);
+
+        let prediction = BallTrajectory {
+            slices: (0..240).map(|i| BallSlice {
+                time: i as f32 / 120.0,
+                location: Vector::new(i as f32, 100.0, 200.0),
+                velocity: Vector::new(0.0, 300.0, 0.0),
+            }).collect(),
+        };
+        assert!(state.refresh_prediction(&prediction, 10.2));
+        let expected_index = (((11.5_f32 - 10.2) * 120.0).round() as usize - 1)
+            .min(prediction.slices.len() - 1);
+        assert_eq!(state.intercept.ball, prediction.slices[expected_index].location);
+        assert_eq!(state.intercept.ball_velocity, prediction.slices[expected_index].velocity);
+        assert!((state.intercept.time - 1.3).abs() < 1.0e-5);
+    }
+
+    #[test]
     fn ground_shot_keeps_python_goal_aim_across_live_ball_half_changes() {
         let me = car(0, 0, Vector::new(0.0, -2500.0, 17.0));
         let targets = ShotTargets {
