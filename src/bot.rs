@@ -358,6 +358,7 @@ impl BotBrain {
             last_goalie_role_time: -999.0,
             was_airborne: false,
             last_landing_time: -999.0,
+            last_neutral_log_time: -999.0,
         }
     }
 
@@ -2706,7 +2707,7 @@ impl BotBrain {
                 car, ball, shot_vector, approach_target, t,
             );
             let close_contact = ground_plan.close_contact;
-            let mut final_target = cap_in_field(&car, ground_plan.final_target);
+            let final_target = cap_in_field(&car, ground_plan.final_target);
             let local_final_target = car.local_location(final_target);
             let distance_remaining = ground_plan.distance_remaining;
             let speed_required = ground_plan.speed_required;
