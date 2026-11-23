@@ -14,7 +14,7 @@ use crate::{
     planning::{find_wall_drive, wall_approach_geometry, WallDriveMode, WallDrivePlan},
     shot_physics::{double_jump_shot_is_viable, get_jump_time, ground_shot_is_viable, jump_shot_is_viable, ShotType},
     shot_parser::ShotTargets,
-    shot_planner::{find_best_any_shot, find_best_pass_shot, find_best_shot, find_fast_intercept, grid_jump_time, ShotCandidate},
+    shot_planner::{find_best_any_shot, find_best_pass_shot, find_best_shot, find_fast_intercept, grid_jump_time, opponent_reaches_before, ShotCandidate},
     state::{BallState, BoostPadState, CarState, MatchState},
 };
 use std::collections::HashMap;
@@ -1182,7 +1182,54 @@ impl BotBrain {
                     };
                 }
             }
-            let selected = candidate.map(|candidate| candidate_to_intercept(me, candidate, shot_targets));
+            if candidate.is_none() && !urgent_save && self.ground_flip.is_none()
+                && self.defense_flip.is_none() && self.defense_recovery_target.is_none()
+            {
+                let kickoff = game_time < self.kickoff_contest_until;
+                let rejected_jump = self.jump_shot.is_some_and(|shot| {
+                    opponent_reaches_before(
+                        &opponents, shot.ball, shot.intercept_time - game_time,
+                        ShotType::Jump, kickoff,
+                    )
+                });
+                let rejected_double = self.double_jump_shot.is_some_and(|shot| {
+                    opponent_reaches_before(
+                        &opponents, shot.ball, shot.intercept_time - game_time,
+                        ShotType::DoubleJump, kickoff,
+                    )
+                });
+                if rejected_jump || rejected_double {
+                    self.jump_shot = None;
+                    self.double_jump_shot = None;
+                    self.teamplay_status = "SHOT_ABANDONED".to_owned();
+                    self.teamplay_score = 0.0;
+                    self.teamplay_contact_time = 10.0;
+                    self.teamplay_cover_released = false;
+                    self.teamplay_receive = None;
+                }
+            }
+            if candidate.is_none() && !urgent_save && self.ground_flip.is_none()
+            && self.defense_flip.is_none() && self.defense_recovery_target.is_none()
+        {
+            let kickoff = game_time < self.kickoff_contest_until;
+            let rejected_jump = self.jump_shot.is_some_and(|shot| {
+                opponent_reaches_before(
+                    &opponents, shot.ball, shot.intercept_time - game_time,
+                    ShotType::Jump, kickoff,
+                )
+            });
+            let rejected_double = self.double_jump_shot.is_some_and(|shot| {
+                opponent_reaches_before(
+                    &opponents, shot.ball, shot.intercept_time - game_time,
+                    ShotType::DoubleJump, kickoff,
+                )
+            });
+            if rejected_jump || rejected_double {
+                self.jump_shot = None;
+                self.double_jump_shot = None;
+            }
+        }
+        let selected = candidate.map(|candidate| candidate_to_intercept(me, candidate, shot_targets));
             let can_jump = candidate.is_some_and(|candidate| candidate.can_jump);
             let use_jump = selected.filter(|shot| shot.shot_type != ShotType::Ground || can_jump);
             let intercept = selected.filter(|shot| shot.shot_type == ShotType::Ground && !can_jump);

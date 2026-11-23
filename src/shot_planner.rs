@@ -73,11 +73,28 @@ fn foe_eta(foe:CarState,ball:Vector)->f32 {
     let jump=if !foe.airborne && ball.z>180.0 && ball.z<650.0 {-0.08}else{0.0};
     (turn+bt+drive+jump).max(0.0)
 }
+pub fn opponent_reaches_before(
+    foes: &[CarState],
+    ball: Vector,
+    time_remaining: f32,
+    kind: ShotType,
+    kickoff: bool,
+) -> bool {
+    if kind == ShotType::Aerial || time_remaining <= 0.0 || foes.is_empty() || kickoff {
+        return false;
+    }
+    let Some(foe) = foes.iter().min_by(|a, b| {
+        a.location.flat_distance(ball).total_cmp(&b.location.flat_distance(ball))
+    }) else {
+        return false;
+    };
+    let margin = if kind == ShotType::Jump { 0.5 } else { 0.35 };
+    foe_eta(*foe, ball) + margin < time_remaining
+}
+
 fn useful(_me:CarState,foes:&[CarState],friends:&[CarState],ball:Vector,t:f32,kind:ShotType,kickoff:bool,challenger:bool)->bool {
     if kind==ShotType::Aerial || t<=0.0 || foes.is_empty() || kickoff || (!friends.is_empty()&&challenger) {return true;}
-    let Some(foe)=foes.iter().min_by(|a,b|a.location.flat_distance(ball).total_cmp(&b.location.flat_distance(ball))) else {return true;};
-    let margin=if kind==ShotType::Jump {0.5}else{0.35};
-    foe_eta(*foe,ball)+margin>=t
+    !opponent_reaches_before(foes, ball, t, kind, kickoff)
 }
 fn score(me:CarState,friends:&[CarState],ball:Vector,vel:Vector,kind:ShotType,t:f32,targets:ShotTargets,g:f32)->f32 {
     if unrealistic(ball,targets,me.team) {return f32::INFINITY;}
