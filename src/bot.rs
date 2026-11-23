@@ -2463,7 +2463,7 @@ impl BotBrain {
                     car.hitbox.height,
                     car.airborne,
                     jump.approach.z,
-                    false,
+                    true,
                 )
             });
 
