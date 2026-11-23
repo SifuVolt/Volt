@@ -701,7 +701,9 @@ pub fn find_fast_aerial_candidate(
     for slice in prediction.slices.iter().copied() {
         if slice.time < earliest_time.max(0.0) { continue; }
         if slice.time > horizon.min(6.0) { break; }
-        if slice.location.z > max_height { continue; }
+        // Python fast_intercept_finder has no aerial-height ceiling; its
+        // only special height gate is the >350 uu fast-aerial rule below.
+        let _ = max_height;
         let (target_location, shot_direction) = contact_geometry(car, slice, goal, gravity);
         let validation = aerial_shot_is_viable(
             &car, target_location, slice.time, gravity, boost_accel, true,
