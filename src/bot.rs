@@ -5345,42 +5345,29 @@ mod tests {
     }
 
     #[test]
-    fn jump_shot_contact_target_includes_world_hitbox_offset() {
+    fn jump_shot_front_face_target_includes_world_hitbox_offset() {
         let mut me = car(0, 0, Vector::ZERO);
-        me.airborne = true;
-        me.air_state = AirState::InAir;
         me.hitbox.offset = Vector::new(10.0, 5.0, 3.0);
-        let ball = Vector::new(300.0, 0.0, 100.0);
-        let state = JumpShotState {
-            started_at: 1.0,
-            intercept_time: 2.0,
+        let ball = Vector::new(500.0, 0.0, 0.0);
+        let (target, label) = party_cannon_jump_front_contact(
+            me,
             ball,
-            ball_velocity: Vector::ZERO,
-            approach: Vector::new(145.0, 0.0, 100.0),
-            shot_direction: Vector::new(1.0, 0.0, 0.0),
-            contact_face: "centre",
-            contact_face_label: None,
-            quick: true,
-            counter: 0,
-            patience_applied: false,
-            dodge_started_at: None,
-            dodge_direction: Vector::new(1.0, 0.0, 0.0),
-            side_mode: false,
-            side_sign: 1.0,
-            side_lateral_distance: 0.0,
-            targets: ShotTargets::default(),
-        };
-        let mut brain = BotBrain::new();
-        brain.match_state.gravity = Vector::new(0.0, 0.0, -650.0);
-        brain.jump_shot = Some(state);
-        brain.run_jump_shot(me, state, 1.0);
+            Vector::new(1.0, 0.0, 0.0),
+            1.0,
+            Vector::ZERO,
+            None,
+        ).expect("front-face contact candidates");
+        assert_eq!(label, "centre");
 
-        let actual = brain.jump_shot.expect("jump remains committed").approach;
-        let standoff = 92.75 + me.hitbox.length * 0.5;
-        let expected = ball
-            - Vector::new(1.0, 0.0, 0.0) * standoff
-            - Vector::new(10.0, 5.0, 3.0);
-        assert!((actual - expected).magnitude() < 1e-3);
+        let forward = me.forward().normalize();
+        let up = me.up().normalize();
+        let right = up.cross(forward).normalize();
+        let front_point_offset = forward * (me.hitbox.length * 0.5)
+            + forward * 10.0
+            + right * 5.0
+            + up * 3.0;
+        let expected = ball - forward * 92.75 - front_point_offset;
+        assert!((target - expected).magnitude() < 1e-3);
     }
 
     #[test]
