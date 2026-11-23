@@ -1515,7 +1515,7 @@ impl BotBrain {
                     self.teamplay_contact_time = wall.intercept_time.clamp(0.0, 10.0);
                     self.teamplay_cover_released = true;
                     self.teamplay_receive = receive_plan(
-                        wall.ball_slice.location, opponent_goal,
+                        me, wall.ball_slice.location, opponent_goal,
                     );
                     return Plan {
                         decision: Decision::WallDrive,
