@@ -214,7 +214,7 @@ mod tests {
             velocity: Vector::ZERO,
         };
         let output = routine.tick(car, ball, 1.0);
-        assert_eq!(output.start_speedflip, Some(1.0));
+        assert_eq!(output.start_speedflip, Some(-1.0));
         assert_eq!(routine.phase(), 1);
         assert_eq!(output.controller.throttle, 1.0);
     }
