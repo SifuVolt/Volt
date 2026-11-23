@@ -2748,7 +2748,7 @@ impl BotBrain {
                     (final_target - car.location).normalize(),
                     distance_remaining,
                 ).is_some_and(|_| {
-                    ground_shot_is_viable(car.hitbox.height, car.airborne, offset_target.z)
+                    ground_shot_is_viable(car.hitbox.height, car.airborne, offset_target.z - 10.0)
                 });
                 if t <= 0.0
                     || (t > 0.35 && distance_remaining > 50.0 && !runtime_reachable)
@@ -3012,7 +3012,7 @@ impl BotBrain {
                 car.hitbox.height * 0.5,
                 car.airborne,
                 offset_target.z,
-                true,
+                false,
             )
         });
         if t <= jump_time || (tj > 0.0 && distance_remaining > 50.0 && !runtime_reachable) {
@@ -3429,7 +3429,7 @@ impl BotBrain {
                     car.hitbox.height,
                     car.airborne,
                     state.approach.z,
-                    true,
+                    false,
                 )
             });
 
@@ -3522,6 +3522,8 @@ impl BotBrain {
                 .flatten()
                 .normalize();
             let (_, pd) = default_pd(&car, local_shot_direction, false, None);
+            // Python defaultPD writes steer as well as pitch/yaw/roll.
+            controller.steer = pd.steer;
             controller.pitch = pd.pitch;
             controller.yaw = pd.yaw;
             controller.roll = pd.roll;
