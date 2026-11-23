@@ -1269,13 +1269,13 @@ impl BotBrain {
         match_state: MatchState,
         shot_targets: ShotTargets,
     ) -> Plan {
-        let committed_nonwall_shot_active = self.ground_shot.is_some()
-            || self.jump_shot.is_some()
+        let committed_nonwall_shot_active = self.jump_shot.is_some()
             || self.double_jump_shot.is_some()
             || self.pending_double_jump.is_some()
             || self.aerial_shot.is_some();
-        let committed_shot_active =
-            committed_nonwall_shot_active || self.wall_drive_candidate.is_some();
+        let committed_shot_active = self.ground_shot.is_some()
+            || committed_nonwall_shot_active
+            || self.wall_drive_candidate.is_some();
         self.aerial_candidate = None;
         self.wall_drive_candidate = None;
         self.boost_target = None;
