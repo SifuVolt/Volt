@@ -1608,7 +1608,7 @@ impl BotBrain {
                     && (!candidate.fast || (ball.location.z > 350.0 && candidate.slice.location.z > 350.0))
                     && selected.is_none_or(|ground_or_jump| candidate.score + 0.05 < ground_or_jump.time)
             }) {
-                self.set_teamplay_aerial(me, candidate, aim, roles, urgent_save);
+                self.set_teamplay_aerial(me, ball, candidate, opponent_goal, aim, roles, urgent_save);
                 self.aerial_candidate = Some(candidate);
                 return Plan {
                     decision: Decision::AerialChallenge,
