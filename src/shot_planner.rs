@@ -9,6 +9,12 @@ use crate::{
 
 const R: f32 = 92.75;
 
+#[derive(Debug, Clone, Copy)]
+pub struct FastInterceptCandidate {
+    pub slice: BallSlice,
+    pub parsed: ParsedShot,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ShotCandidate {
     pub time: f32,
@@ -206,6 +212,110 @@ fn parse_budget(me:CarState,slice:BallSlice,t:f32,targets:ShotTargets,g:Vector,b
         shot=next;
     }
     ParsedShot::default()
+}
+
+/// Source-faithful port of routines.fast_intercept_finder.find().
+/// It searches every prediction slice, gives a reachable normal aerial
+/// priority over a high-ball fast aerial, then falls back to the earliest
+/// reachable ground/jump/double/aerial touch without a goal target.
+pub fn find_fast_intercept_candidate(
+    car: CarState,
+    prediction: &BallTrajectory,
+    live_ball_location: Vector,
+    gravity: Vector,
+    boost_accel: f32,
+    earliest_time: f32,
+    horizon: f32,
+    unlimited_boost: bool,
+    kickoff_aerial_window: bool,
+    can_aerial: bool,
+) -> Option<FastInterceptCandidate> {
+    if prediction.slices.is_empty() {
+        return None;
+    }
+    let first_time = earliest_time.max(1.0 / 120.0);
+    let end_time = horizon.min(6.0);
+    let can_ground = !car.airborne;
+    let can_jump = !car.airborne;
+    let can_double_jump = !car.airborne;
+
+    let parse_aerial = |slice: BallSlice| {
+        let time_remaining = slice.time - 1.0 / 120.0;
+        if time_remaining <= 0.0 {
+            return ParsedShot::default();
+        }
+        parse_slice_for_shot(
+            &car, slice.location, time_remaining, 91.25, boost_accel, gravity,
+            false, false, false, true, true,
+        )
+    };
+
+    if can_aerial && (unlimited_boost || car.boost > 0.0) {
+        let mut first_fast: Option<FastInterceptCandidate> = None;
+        let mut first_normal: Option<FastInterceptCandidate> = None;
+        for slice in prediction.slices.iter().copied() {
+            if slice.time < first_time { continue; }
+            if slice.time > end_time { break; }
+            if slice.location.y.abs() > 5212.75 { break; }
+            let parsed = parse_aerial(slice);
+            if !parsed.found || parsed.shot_type != Some(ShotType::Aerial) {
+                continue;
+            }
+            if parsed.fast {
+                if slice.location.z > 350.0
+                    && live_ball_location.z > 350.0
+                    && first_fast.is_none()
+                {
+                    first_fast = Some(FastInterceptCandidate { slice, parsed });
+                }
+            } else if first_normal.is_none() {
+                first_normal = Some(FastInterceptCandidate { slice, parsed });
+            }
+        }
+        if first_normal.is_some() { return first_normal; }
+        if first_fast.is_some() { return first_fast; }
+    }
+
+    // Python's kickoff fallback repeats the aerial-only parser when a kickoff
+    // contest is active, even if the ordinary fast-aerial boost gate failed.
+    if can_aerial && kickoff_aerial_window {
+        for slice in prediction.slices.iter().copied() {
+            if slice.time < first_time { continue; }
+            if slice.time > end_time { break; }
+            if slice.location.y.abs() > 5212.75 { break; }
+            let parsed = parse_aerial(slice);
+            if parsed.found
+                && parsed.shot_type == Some(ShotType::Aerial)
+                && (!parsed.fast
+                    || (slice.location.z > 350.0 && live_ball_location.z > 350.0))
+            {
+                return Some(FastInterceptCandidate { slice, parsed });
+            }
+        }
+    }
+
+    // General earliest-touch fallback. This is deliberately not score-ranked:
+    // Python returns the first reachable slice from this loop.
+    for slice in prediction.slices.iter().copied() {
+        if slice.time < first_time { continue; }
+        if slice.time > end_time { break; }
+        if slice.location.y.abs() > 5212.75 { break; }
+        let time_remaining = slice.time - 1.0 / 120.0;
+        if time_remaining <= 0.0 { continue; }
+        let parsed = parse_slice_for_shot(
+            &car, slice.location, time_remaining, 91.25, boost_accel, gravity,
+            can_ground, can_jump, can_double_jump, can_aerial, true,
+        );
+        if !parsed.found { continue; }
+        if parsed.shot_type == Some(ShotType::Aerial)
+            && parsed.fast
+            && (slice.location.z <= 350.0 || live_ball_location.z <= 350.0)
+        {
+            continue;
+        }
+        return Some(FastInterceptCandidate { slice, parsed });
+    }
+    None
 }
 
 pub fn find_best_shot(
