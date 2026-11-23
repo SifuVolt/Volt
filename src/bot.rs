@@ -1560,28 +1560,53 @@ impl BotBrain {
                     jump: None,
                 };
             }
+            // Match Volt's two-stage selection:
+            // 1) find_teamplay_opportunity publishes a targeted shot, the
+            //    shallow-zone fast intercept, or an untargeted shot only
+            //    when the ball is behind this car;
+            // 2) run_logic may then take an untargeted first touch as a
+            //    local fallback. That fallback is NOT a teamplay claim.
             let mut candidate = if fast_intercept_zone {
                 find_fast_intercept(
                     me, prediction, shot_targets, match_state.gravity, self.boost_accel,
                     if transition_followup_active { 0.03 } else { 0.10 },
                     self.shot_search_horizon(game_time), self.unlimited_boost,
                 )
-            } else {
+            } else if ball_depth < 640.0 {
                 find_best_shot(
                     me, cars, ball.location, prediction, shot_targets,
                     match_state.gravity, self.boost_accel, game_time,
-                    self.kickoff_contest_until, urgent_save, true, self.unlimited_boost, self.shot_search_horizon(game_time),
-                ).or_else(|| {
-                    if ball_depth < me.location.y * side {
-                        find_best_any_shot(
-                            me, cars, prediction, shot_targets, match_state.gravity,
-                            self.boost_accel, game_time, self.kickoff_contest_until,
-                            self.unlimited_boost, self.shot_search_horizon(game_time),
-                        )
-                    } else { None }
-                })
+                    self.kickoff_contest_until, urgent_save, true, self.unlimited_boost,
+                    self.shot_search_horizon(game_time),
+                )
+            } else {
+                None
             };
+            let mut teamplay_opportunity = candidate.is_some();
+
+            if candidate.is_none()
+                && !fast_intercept_zone
+                && ball_depth < me.location.y * side
+            {
+                candidate = find_best_any_shot(
+                    me, cars, prediction, shot_targets, match_state.gravity,
+                    self.boost_accel, game_time, self.kickoff_contest_until,
+                    self.unlimited_boost, self.shot_search_horizon(game_time),
+                );
+                teamplay_opportunity = candidate.is_some();
+            }
+
+            // This is the run_logic fallback after teamplay_shot was empty.
+            // It may challenge, but it must not announce a team-owned shot.
             if candidate.is_none() && !fast_intercept_zone {
+                candidate = find_best_any_shot(
+                    me, cars, prediction, shot_targets, match_state.gravity,
+                    self.boost_accel, game_time, self.kickoff_contest_until,
+                    self.unlimited_boost, self.shot_search_horizon(game_time),
+                );
+            }
+
+            if candidate.is_none() && !fast_intercept_zone && !living_teammates.is_empty() {
                 candidate = find_best_pass_shot(
                     me, cars, ball.location, prediction, match_state.gravity,
                     self.boost_accel, game_time, self.kickoff_contest_until,
@@ -1599,23 +1624,21 @@ impl BotBrain {
                 );
             }
             if let Some(candidate) = candidate {
-                self.set_teamplay_shot(me, ball, candidate, opponent_goal, roles, urgent_save);
-                if !should_commit_to_shot(
-                    me, cars, ball, roles, urgent_save, self.teamplay_score,
-                    candidate.time, &self.teammate_comms, game_time,
-                ) {
-                    self.teamplay_status = if me.boost < 18.0 { "LOW_BOOST" } else { "NO_SHOT" }.to_owned();
-                    self.teamplay_score = 0.0;
-                    self.teamplay_contact_time = 10.0;
-                    self.teamplay_cover_released = false;
-                    self.teamplay_receive = None;
-                    return Plan {
-                        decision: Decision::Transition,
-                        target: Vector::new(me.location.x.signum() * 900.0, side * 5050.0, 0.0),
-                        target_speed: 1700.0,
-                        shot: None,
-                        jump: None,
-                    };
+                if teamplay_opportunity {
+                    self.set_teamplay_shot(me, ball, candidate, opponent_goal, roles, urgent_save);
+                    if !should_commit_to_shot(
+                        me, cars, ball, roles, urgent_save, self.teamplay_score,
+                        candidate.time, &self.teammate_comms, game_time,
+                    ) {
+                        self.yield_teamplay_opportunity();
+                        return Plan {
+                            decision: Decision::Transition,
+                            target: Vector::new(me.location.x.signum() * 900.0, side * 5050.0, 0.0),
+                            target_speed: 1700.0,
+                            shot: None,
+                            jump: None,
+                        };
+                    }
                 }
             }
             if candidate.is_none() && !urgent_save && self.ground_flip.is_none()
@@ -1791,31 +1814,45 @@ impl BotBrain {
         // In 1v1 there is no separate goalie: the sole player challenges.
         let aim = shot_aim_point(ball.location, side, me.airborne);
         let fast_intercept_zone = ball_depth > 0.0 && ball_depth <= 1280.0;
+        // Volt searches for a goal-directed shot only while the ball is
+        // in or beyond the attacking half-line. In other areas it first
+        // tries the dedicated fast-intercept path, then the same untargeted
+        // fallback used by run_logic when no teamplay shot was found.
         let mut candidate = if fast_intercept_zone {
             find_fast_intercept(
                 me, prediction, shot_targets, match_state.gravity, self.boost_accel,
                 0.10, self.shot_search_horizon(game_time), self.unlimited_boost,
             )
-        } else {
+        } else if ball_depth < 640.0 {
             find_best_shot(
                 me, cars, ball.location, prediction, shot_targets,
                 match_state.gravity, self.boost_accel, game_time,
-                self.kickoff_contest_until, urgent_save, true, self.unlimited_boost, self.shot_search_horizon(game_time),
-            ).or_else(|| {
-                if ball_depth < me.location.y * side {
-                    find_best_any_shot(
-                        me, cars, prediction, shot_targets, match_state.gravity,
-                        self.boost_accel, game_time, self.kickoff_contest_until,
-                        self.unlimited_boost, self.shot_search_horizon(game_time),
-                    )
-                } else { None }
-            })
+                self.kickoff_contest_until, urgent_save, true, self.unlimited_boost,
+                self.shot_search_horizon(game_time),
+            )
+        } else {
+            None
         };
-        if candidate.is_none() && !fast_intercept_zone {
-            candidate = find_best_pass_shot(
-                me, cars, ball.location, prediction, match_state.gravity,
+        let mut teamplay_opportunity = candidate.is_some();
+
+        if candidate.is_none()
+            && !fast_intercept_zone
+            && ball_depth < me.location.y * side
+        {
+            candidate = find_best_any_shot(
+                me, cars, prediction, shot_targets, match_state.gravity,
                 self.boost_accel, game_time, self.kickoff_contest_until,
-                urgent_save, true, self.unlimited_boost, self.shot_search_horizon(game_time),
+                self.unlimited_boost, self.shot_search_horizon(game_time),
+            );
+            teamplay_opportunity = candidate.is_some();
+        }
+
+        // The Python run_logic fallback is not announced as a team-owned shot.
+        if candidate.is_none() && !fast_intercept_zone {
+            candidate = find_best_any_shot(
+                me, cars, prediction, shot_targets, match_state.gravity,
+                self.boost_accel, game_time, self.kickoff_contest_until,
+                self.unlimited_boost, self.shot_search_horizon(game_time),
             );
         }
         if candidate.is_none()
@@ -1829,7 +1866,11 @@ impl BotBrain {
             );
         }
         if let Some(candidate) = candidate {
-            self.set_teamplay_shot(me, ball, candidate, opponent_goal, roles, urgent_save);
+            if teamplay_opportunity {
+                self.set_teamplay_shot(me, ball, candidate, opponent_goal, roles, urgent_save);
+            } else if !committed_shot_active {
+                self.yield_teamplay_opportunity();
+            }
         }
         if candidate.is_none() && !urgent_save && self.ground_flip.is_none()
             && self.defense_flip.is_none() && self.defense_recovery_target.is_none()
@@ -3884,9 +3925,12 @@ fn assign_roles_volt(
             let along_track = (lane_distance.x * ball_flat_velocity.x
                 + lane_distance.y * ball_flat_velocity.y)
                 .abs();
+            // Exact Volt dependency test: cross-track travel time is
+            // compared with along-track travel time. Multiplying by speed
+            // here changes the units and can elect the wrong challenger.
             let path_relevant = save_deadline < 0.0
-                || (cross_track * ball_flat_speed / 2300.0 - 134.85
-                    < along_track);
+                || (cross_track / 2300.0 - 134.85
+                    < along_track / ball_flat_speed.max(1.0));
             (location.y - foe_goal.y).abs()
                 + (location.x - ball.location.x).abs()
                     / 5.0
