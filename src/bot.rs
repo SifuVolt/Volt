@@ -261,7 +261,9 @@ fn shot_patience_adjustment(
 
     let speed = car.velocity.flatten().magnitude();
     let estimated_speed = (speed + 650.0).clamp(1000.0, 2300.0);
-    let end_index = slices.len().min(600);
+    // Python's range(start + 1, max_index + 1) includes max_index.
+    // Preserve that inclusive upper bound at prediction slice 600.
+    let end_index = slices.len().min(601);
     for (i, future) in slices.iter().copied().enumerate().take(end_index).skip(start + 1) {
         let future_time = (i + 1) as f32 / 120.0;
         if future_time <= current_time + 0.15 {
