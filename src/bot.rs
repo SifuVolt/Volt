@@ -2425,15 +2425,27 @@ impl BotBrain {
                 speed_required *= 0.75;
             }
 
+            // Python ground_shot measures arrival distance before field
+            // clamping, then drives with defaultDrive at the required speed.
+            // controlled_drive adds non-source heading caps and can brake
+            // even when the planned contact is straight ahead.
             final_target = cap_in_field(&car, final_target);
-            distance_remaining = final_target.flat_distance(car.location)
-                - car.hitbox.length / 3.0;
             let local_final_target = car.local_location(final_target);
             let local_offset_target = car.local_location(offset_target.flatten());
             let angle_to_target = local_final_target.y.atan2(local_final_target.x).abs();
-            let output = controlled_drive(&car, final_target, speed_required, self.boost_accel);
+            let output = default_drive(
+                &car,
+                DriveInput {
+                    target_speed: speed_required,
+                    local_target: local_final_target,
+                    upside_down: false,
+                    up: None,
+                    handbrake: false,
+                    boost_accel: self.boost_accel,
+                },
+            );
             let velocity = if output.car_speed.abs() < 0.001 { 1.0 } else { output.car_speed };
-            let impulse = dodge_impulse(car.velocity.flatten(), MAX_SPEED);
+            let impulse = dodge_impulse(car.velocity, MAX_SPEED);
             let denominator = velocity + impulse;
             let time_to_target = if denominator.abs() > 0.001 {
                 distance_remaining / denominator
