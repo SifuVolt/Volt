@@ -198,6 +198,7 @@ pub struct BotBrain {
     double_jump_shot: Option<DoubleJumpState>,
     pending_double_jump: Option<PendingDoubleJump>,
     ground_shot_patience_applied: bool,
+    ground_shot_goal_aim_point: Option<Vector>,
     wave_dash: Option<crate::mechanics::WaveDash>,
     defense: GridDefense,
     defense_flip: Option<FlipState>,
@@ -322,6 +323,7 @@ impl BotBrain {
             double_jump_shot: None,
             pending_double_jump: None,
             ground_shot_patience_applied: false,
+            ground_shot_goal_aim_point: None,
             wave_dash: None,
             defense: GridDefense::default(),
             defense_flip: None,
@@ -667,6 +669,7 @@ impl BotBrain {
             }
         } else {
             self.ground_shot_patience_applied = false;
+            self.ground_shot_goal_aim_point = None;
         }
 
         // A newly reachable wall approach replaces ordinary ground/jump
@@ -2694,7 +2697,9 @@ impl BotBrain {
             let t = shot.time;
             // Python ground_shot caches its goal aim from the live ball.
             // Keep that height/aim choice separate from the predicted contact.
-            let goal_aim = relative_goal_aim_point(car, ball.location, shot.targets);
+            let goal_aim = cached_ground_goal_aim_point(
+                &mut self.ground_shot_goal_aim_point, car, ball.location, shot.targets,
+            );
             let shot_vector = (goal_aim - shot.ball).flatten().normalize();
             // Python's agent.best_shot_value is 92.75 for ground_shot.
             let offset_target = contact_approach_from_label(
@@ -4734,6 +4739,17 @@ fn relative_goal_aim_point(car:CarState,ball:Vector,targets:ShotTargets)->Vector
     center
 }
 
+/// Python ground_shot caches goal_aim_point on its first run() and keeps it
+/// when update() replaces the intercept. Only a new routine gets a new aim.
+fn cached_ground_goal_aim_point(
+    cached: &mut Option<Vector>,
+    car: CarState,
+    ball: Vector,
+    targets: ShotTargets,
+) -> Vector {
+    *cached.get_or_insert_with(|| relative_goal_aim_point(car, ball, targets))
+}
+
 
 fn party_cannon_jump_front_contact(
     car: CarState,
@@ -5498,6 +5514,30 @@ mod tests {
             boost: 50.0,
             hitbox: Hitbox { length: 118.0, width: 84.0, height: 36.0, offset: Vector::ZERO },
         }
+    }
+
+    #[test]
+    fn ground_shot_keeps_python_goal_aim_across_live_ball_half_changes() {
+        let me = car(0, 0, Vector::new(0.0, -2500.0, 17.0));
+        let targets = ShotTargets {
+            left: Vector::new(-893.0, 5120.0, 300.0),
+            right: Vector::new(893.0, 5120.0, 300.0),
+        };
+        let mut cached = None;
+        let first = cached_ground_goal_aim_point(
+            &mut cached, me, Vector::new(0.0, -1000.0, 100.0), targets,
+        );
+        assert_eq!(first.z, 310.0);
+        let after_ball_crosses_midfield = cached_ground_goal_aim_point(
+            &mut cached, me, Vector::new(0.0, 1000.0, 100.0), targets,
+        );
+        assert_eq!(after_ball_crosses_midfield, first);
+
+        let mut next_routine = None;
+        let next = cached_ground_goal_aim_point(
+            &mut next_routine, me, Vector::new(0.0, 1000.0, 100.0), targets,
+        );
+        assert_eq!(next.z, 480.0);
     }
 
     #[test]
