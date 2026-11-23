@@ -1206,29 +1206,15 @@ impl BotBrain {
                     self.teamplay_contact_time = 10.0;
                     self.teamplay_cover_released = false;
                     self.teamplay_receive = None;
+                    return Plan {
+                        decision: if is_goalie { Decision::Goalkeeper } else { Decision::Transition },
+                        target: Vector::new(0.0, side * 5050.0, 0.0),
+                        target_speed: 1500.0,
+                        shot: None,
+                        jump: None,
+                    };
                 }
             }
-            if candidate.is_none() && !urgent_save && self.ground_flip.is_none()
-            && self.defense_flip.is_none() && self.defense_recovery_target.is_none()
-        {
-            let kickoff = game_time < self.kickoff_contest_until;
-            let rejected_jump = self.jump_shot.is_some_and(|shot| {
-                opponent_reaches_before(
-                    &opponents, shot.ball, shot.intercept_time - game_time,
-                    ShotType::Jump, kickoff,
-                )
-            });
-            let rejected_double = self.double_jump_shot.is_some_and(|shot| {
-                opponent_reaches_before(
-                    &opponents, shot.ball, shot.intercept_time - game_time,
-                    ShotType::DoubleJump, kickoff,
-                )
-            });
-            if rejected_jump || rejected_double {
-                self.jump_shot = None;
-                self.double_jump_shot = None;
-            }
-        }
         let selected = candidate.map(|candidate| candidate_to_intercept(me, candidate, shot_targets));
             let can_jump = candidate.is_some_and(|candidate| candidate.can_jump);
             let use_jump = selected.filter(|shot| shot.shot_type != ShotType::Ground || can_jump);
@@ -1387,6 +1373,34 @@ impl BotBrain {
         }
         if let Some(candidate) = candidate {
             self.set_teamplay_shot(me, ball, candidate, opponent_goal, roles, urgent_save);
+        }
+        if candidate.is_none() && !urgent_save && self.ground_flip.is_none()
+            && self.defense_flip.is_none() && self.defense_recovery_target.is_none()
+        {
+            let kickoff = game_time < self.kickoff_contest_until;
+            let rejected_jump = self.jump_shot.is_some_and(|shot| {
+                opponent_reaches_before(
+                    &opponents, shot.ball, shot.intercept_time - game_time,
+                    ShotType::Jump, kickoff,
+                )
+            });
+            let rejected_double = self.double_jump_shot.is_some_and(|shot| {
+                opponent_reaches_before(
+                    &opponents, shot.ball, shot.intercept_time - game_time,
+                    ShotType::DoubleJump, kickoff,
+                )
+            });
+            if rejected_jump || rejected_double {
+                self.jump_shot = None;
+                self.double_jump_shot = None;
+                return Plan {
+                    decision: if is_goalie { Decision::Goalkeeper } else { Decision::Transition },
+                    target: Vector::new(0.0, side * 5050.0, 0.0),
+                    target_speed: 1500.0,
+                    shot: None,
+                    jump: None,
+                };
+            }
         }
         let selected = candidate.map(|candidate| candidate_to_intercept(me, candidate, shot_targets));
         let can_jump = candidate.is_some_and(|candidate| candidate.can_jump);
