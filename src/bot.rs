@@ -3147,18 +3147,32 @@ impl BotBrain {
                 return controller_from_drive(drive, car);
             }
 
+            // Python calls VirxERLU-CLib jump_shot_is_viable with the
+            // live car, boost, heading, approach direction and distance.
+            // That wrapper first runs generic_is_viable, then checks the
+            // jump/dodge vertical window. The vertical-only helper by itself
+            // is not an equivalent reachability test.
+            let runtime_reachable = runtime_ground_reachability(
+                t,
+                self.boost_accel,
+                &car,
+                (final_target - car.location).normalize(),
+                distance_remaining,
+            )
+            .is_some_and(|remaining| {
+                jump_shot_is_viable(
+                    remaining,
+                    self.match_state.gravity.z,
+                    car.velocity.z,
+                    car.hitbox.height,
+                    car.airborne,
+                    state.approach.z,
+                    true,
+                )
+            });
+
             if t <= state.needed_jump_time
-                || (t_j > 0.0
-                    && distance_remaining > 50.0
-                    && !jump_shot_is_viable(
-                        t,
-                        self.match_state.gravity.z,
-                        car.velocity.z,
-                        car.hitbox.height,
-                        car.airborne,
-                        state.approach.z,
-                        true,
-                    ))
+                || (t_j > 0.0 && distance_remaining > 50.0 && !runtime_reachable)
             {
                 self.jump_shot = None;
                 if car.airborne {
