@@ -124,11 +124,13 @@ contact target, wrong time-to-intercept, or wrong requested speed.
 
 ### Runtime stalls
 
-The adapter previously sent a neutral controller silently when
-`AgentFrame::from_packet` returned `None`, and also sent neutral controls
-when the match was not active. `src/main.rs` now logs these cases as
-`[AGENT HOLD]` with packet counts and match time. These logs distinguish
-packet/phase holds from a routine that has stopped producing useful controls.
+The adapter logs missing frame decoding and inactive match phases as
+`[AGENT HOLD]`. The brain now also rate-limits `[BOT NEUTRAL]` diagnostics
+when its final controller is completely neutral, reporting the active
+routine category and game time. This is diagnostic only; it does not alter
+controller output. It distinguishes deliberate `power_clear` waiting from
+a jump/aerial routine producing neutral controls or the planner having no
+active action.
 
 ## Rust ecosystem boundary
 
