@@ -52,6 +52,7 @@ enum Decision {
     GroundChallenge,
     AerialChallenge,
     WallDrive,
+    Boost,
     TransitionBump,
     TransitionReceive,
     Goalkeeper,
@@ -194,6 +195,7 @@ pub struct BotBrain {
     aerial_candidate: Option<AerialCandidate>,
     aerial_shot: Option<AerialShot>,
     wall_drive_candidate: Option<WallDrivePlan>,
+    boost_target: Option<BoostPadState>,
     teammate_comms: HashMap<usize, TeamplayMessage>,
     teamplay_status: String,
     teamplay_score: f32,
@@ -925,6 +927,7 @@ impl BotBrain {
             || self.wall_drive_candidate.is_some();
         self.aerial_candidate = None;
         self.wall_drive_candidate = None;
+        self.boost_target = None;
         if committed_shot_active {
             // Python update_teamplay keeps cover released while a shot
             // routine remains on the stack, even when the finder temporarily
@@ -1068,6 +1071,103 @@ impl BotBrain {
                     .clamp(0.12, 2.0)
             } else { 10.0 };
             self.teamplay_cover_released = true;
+        }
+
+        // Port the Python boost decisions before ordinary shot search.
+        // Only an empty routine stack may divert to a pad.
+        let routine_stack_clear = self.jump_shot.is_none()
+            && self.double_jump_shot.is_none()
+            && self.aerial_shot.is_none()
+            && self.ground_flip.is_none()
+            && self.defense_flip.is_none()
+            && self.defense_recovery_target.is_none()
+            && !self.ball_recovery
+            && self.wave_dash.is_none()
+            && self.half_flip.is_none()
+            && self.speed_flip.is_none()
+            && self.kickoff_dodge.is_none()
+            && self.emergency_clear.is_none()
+            && self.power_clear.is_none();
+
+        let friends_count = living_teammates.len().saturating_sub(1);
+        let goalie_holding_net = friends_count > 0 && is_goalie;
+        if goalie_holding_net {
+            self.last_goalie_role_time = game_time;
+        }
+        let recently_released_goalie_under_threat = !goalie_holding_net
+            && game_time - self.last_goalie_role_time <= 5.0
+            && game_time >= self.last_goalie_role_time
+            && ball_depth > 0.0
+            && ball.velocity.y * side > 150.0;
+        let cover_player_deep_defending =
+            friends_count > 0 && goalie_holding_net && ball_depth > 2048.0;
+        let defensive_boost_lock = goalie_holding_net
+            || cover_player_deep_defending
+            || recently_released_goalie_under_threat;
+        let prioritize_ball = should_prioritize_ball(
+            me,
+            cars,
+            ball,
+            side,
+            game_time,
+            self.kickoff_contest_until,
+            urgent_save,
+            false,
+            roles,
+        );
+
+        if routine_stack_clear
+            && me.boost < 70.0
+            && !defensive_boost_lock
+            && !urgent_save
+            && !(friends_count >= 2 && goalie_holding_net && !cover_player_deep_defending)
+            && (prioritize_ball
+                || (me.boost < 55.0 && ball_depth > 640.0 && ball.location.x.abs() > 1200.0))
+        {
+            if let Some(pad) = boost_on_route_to_ball(me, ball, &self.boost_pads, &opponents, side) {
+                self.boost_target = Some(pad);
+                return Plan {
+                    decision: Decision::Boost,
+                    target: pad.location,
+                    target_speed: MAX_SPEED,
+                    shot: None,
+                    jump: None,
+                };
+            }
+        }
+
+        let normal_boost_threshold = if friends_count == 1 {
+            23.0
+        } else if friends_count > 1 {
+            30.0
+        } else {
+            18.0
+        };
+        if routine_stack_clear
+            && me.boost < normal_boost_threshold
+            && !defensive_boost_lock
+            && !prioritize_ball
+            && !cover_player_deep_defending
+        {
+            if let Some(pad) = self
+                .boost_pads
+                .iter()
+                .copied()
+                .filter(|pad| pad.active && pad.large)
+                .min_by(|a, b| {
+                    me.location.distance(a.location)
+                        .total_cmp(&me.location.distance(b.location))
+                })
+            {
+                self.boost_target = Some(pad);
+                return Plan {
+                    decision: Decision::Boost,
+                    target: pad.location,
+                    target_speed: MAX_SPEED,
+                    shot: None,
+                    jump: None,
+                };
+            }
         }
 
         if urgent_save && is_challenger {
@@ -1968,6 +2068,44 @@ impl BotBrain {
     }
 
     fn drive_to(&mut self, car: CarState, plan: Plan, game_time: f32, ball: BallState) -> ControllerState {
+        if plan.decision == Decision::Boost {
+            let Some(pad) = self.boost_target else {
+                return ControllerState::default();
+            };
+            let car_to_target = pad.location - car.location;
+            let distance_remaining = car_to_target.flatten().magnitude();
+            let mut final_target = pad.location.flatten();
+            if !pad.large && distance_remaining > 640.0 {
+                let vector = ball.location;
+                let side_value = vector.cross(Vector::new(0.0, 0.0, 1.0)).dot(car_to_target);
+                let side_of_vector = if side_value > 0.0 {
+                    1.0
+                } else if side_value < 0.0 {
+                    -1.0
+                } else {
+                    0.0
+                };
+                let perpendicular = car_to_target
+                    .cross(Vector::new(0.0, 0.0, side_of_vector))
+                    .normalize();
+                let adjustment = car_to_target.angle2d(vector) * distance_remaining
+                    / std::f32::consts::PI;
+                final_target = final_target + perpendicular * adjustment;
+            }
+            final_target = cap_in_field(&car, final_target);
+            let output = default_drive(
+                &car,
+                DriveInput {
+                    target_speed: MAX_SPEED,
+                    local_target: car.local_location(final_target),
+                    upside_down: false,
+                    up: None,
+                    handbrake: false,
+                    boost_accel: self.boost_accel,
+                },
+            );
+            return controller_from_drive(output, car);
+        }
         if plan.decision == Decision::TransitionReceive
             && self.jump_shot.is_none()
             && self.double_jump_shot.is_none()
@@ -3511,6 +3649,76 @@ fn car_ball_facing_angle(car: CarState, ball: Vector) -> f32 {
         return std::f32::consts::PI;
     }
     forward.normalize().dot(to_ball.normalize()).clamp(-1.0, 1.0).acos()
+}
+
+fn boost_on_route_to_ball(
+    car: CarState,
+    ball: BallState,
+    pads: &[BoostPadState],
+    foes: &[CarState],
+    side: f32,
+) -> Option<BoostPadState> {
+    if foes.iter().any(|foe| foe.location.distance(ball.location) < 700.0) {
+        return None;
+    }
+
+    let dx = ball.location.x - car.location.x;
+    let dy = ball.location.y - car.location.y;
+    let length_squared = dx * dx + dy * dy;
+    let ball_depth = ball.location.y * side;
+    let own_corner = ball_depth > 640.0 && ball.location.x.abs() > 1200.0 && car.boost < 70.0;
+
+    let mut best: Option<BoostPadState> = None;
+    let mut best_score = f32::INFINITY;
+    for pad in pads.iter().copied().filter(|pad| pad.active) {
+        let car_distance = car.location.flat_distance(pad.location);
+        let pad_to_ball = pad.location.flat_distance(ball.location);
+        let enemy_near_pad = foes
+            .iter()
+            .any(|foe| foe.location.flat_distance(pad.location) < 1100.0);
+        let own_corner_pad = pad.large
+            && pad.location.y * side > 2500.0
+            && pad.location.x.abs() > 2200.0;
+
+        if own_corner && own_corner_pad && !enemy_near_pad {
+            let max_distance = if car.boost < 35.0 {
+                2800.0
+            } else if car.boost < 55.0 {
+                2100.0
+            } else {
+                1500.0
+            };
+            if car_distance <= max_distance && pad_to_ball < 3200.0 {
+                let score = car_distance + 0.35 * pad_to_ball;
+                if score < best_score {
+                    best_score = score;
+                    best = Some(pad);
+                }
+            }
+        }
+
+        if length_squared > 1.0 {
+            let bx = pad.location.x - car.location.x;
+            let by = pad.location.y - car.location.y;
+            let progress = (bx * dx + by * dy) / length_squared;
+            if !(0.05 < progress && progress < 0.92) {
+                continue;
+            }
+            let nearest_x = car.location.x + progress * dx;
+            let nearest_y = car.location.y + progress * dy;
+            let lateral_distance =
+                ((pad.location.x - nearest_x).powi(2) + (pad.location.y - nearest_y).powi(2)).sqrt();
+            if lateral_distance > 350.0 || car_distance > 1400.0 {
+                continue;
+            }
+            let score = car_distance + lateral_distance * 1.5;
+            if score < best_score {
+                best_score = score;
+                best = Some(pad);
+            }
+        }
+    }
+    best
 }
 
 fn kickoff_boost_target(
