@@ -342,7 +342,7 @@ pub fn parse_slice_for_shot_with_target(
 
     result.ball_offset=ball_offset;
     result.approach_target=final_target;
-    result.time=found_time as f32;
+    result.time=time_remaining;
     let _=ball_velocity; // retained in signature to match the slice parser call site
     result
 }
@@ -394,7 +394,7 @@ pub fn parse_slice_for_shot(
     }
     result.ball_offset=ball_offset;
     result.approach_target=ball_offset;
-    result.time=found_time as f32;
+    result.time=time_remaining;
     result
 }
 
@@ -437,6 +437,10 @@ mod tests {
         let targets=ShotTargets{left:Vector::new(-700.0,5120.0,350.0),right:Vector::new(700.0,5120.0,350.0)};
         let result=parse_slice_for_shot_with_target(&c,Vector::new(0.0,0.0,100.0),Vector::ZERO,1.0,92.75,991.6667,Vector::new(0.0,0.0,-650.0),targets,true,true,true,false,true,true);
         assert!(result.time.is_finite());
+        // The C parser uses generic_is_viable's reduced time only to decide
+        // whether a shot is possible. Its Shot result does not replace the
+        // prediction-slice intercept timestamp with that remaining-time value.
+        assert!((result.time - 1.0).abs() < 1e-6);
         assert!(result.ball_offset.x.is_finite() && result.ball_offset.y.is_finite() && result.ball_offset.z.is_finite());
     }
 
