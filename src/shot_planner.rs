@@ -2,7 +2,7 @@
 use crate::{
     math::Vector,
     prediction::{BallSlice, BallTrajectory},
-    shot_parser::{parse_slice_for_shot_with_target, ParsedShot, ShotTargets},
+    shot_parser::{parse_slice_for_shot, parse_slice_for_shot_with_target, ParsedShot, ShotTargets},
     shot_physics::{get_jump_time, ShotType},
     state::CarState,
 };
@@ -247,6 +247,266 @@ pub fn find_best_shot(
         }
     }
     let _=ball_now;
+    best
+}
+
+
+fn parse_any_budget(
+    me: CarState,
+    slice: BallSlice,
+    time_remaining: f32,
+    gravity: Vector,
+    boost_accel: f32,
+    flags: (bool, bool, bool),
+    unlimited: bool,
+) -> ParsedShot {
+    let mut car = me;
+    let mut shot = parse_slice_for_shot(
+        &car, slice.location, time_remaining, R, boost_accel, gravity,
+        flags.0, flags.1, flags.2, false, true,
+    );
+    if !shot.found || unlimited { return shot; }
+    let mut seen = [false; 3];
+    for _ in 0..3 {
+        let Some(kind) = shot.shot_type else { return shot; };
+        let index = match kind {
+            ShotType::Ground => 0,
+            ShotType::Jump => 1,
+            ShotType::DoubleJump => 2,
+            ShotType::Aerial => return shot,
+        };
+        if seen[index] { return ParsedShot::default(); }
+        seen[index] = true;
+        let required = reserve(me, slice.location, time_remaining, kind, gravity.z, unlimited);
+        if required <= 0.25 { return shot; }
+        let budget = me.boost - required;
+        if budget < -0.01 { return ParsedShot::default(); }
+        car.boost = budget.max(0.0).trunc();
+        let next = parse_slice_for_shot(
+            &car, slice.location, time_remaining, R, boost_accel, gravity,
+            flags.0, flags.1, flags.2, false, true,
+        );
+        if !next.found { return next; }
+        if next.shot_type == Some(kind) { return next; }
+        shot = next;
+    }
+    ParsedShot::default()
+}
+
+fn score_any(
+    me: CarState,
+    friends: &[CarState],
+    ball: Vector,
+    velocity: Vector,
+    kind: ShotType,
+    time: f32,
+) -> f32 {
+    let mut value = time * 0.22 + match kind {
+        ShotType::Ground => 0.0,
+        ShotType::Jump => 0.12,
+        ShotType::DoubleJump => 0.25,
+        ShotType::Aerial => 0.35,
+    };
+    if kind == ShotType::DoubleJump && backwall_rebound(me, ball, velocity) {
+        value -= 0.15;
+    }
+    let side = team_side(me.team);
+    let goal_direction = Vector::new(0.0, -side, 0.0);
+    let approach = (ball - me.location).flatten();
+    if approach.magnitude() > 1.0 {
+        let approach = approach.normalize();
+        let alignment = approach.dot(goal_direction).clamp(-1.0, 1.0);
+        let time_factor = cap(1.5 / time.max(0.1), 0.7, 1.8);
+        value += (1.0 - alignment) * 0.45 * time_factor;
+        let closing = me.velocity.flatten().dot(approach)
+            - velocity.flatten().dot(approach);
+        let weak_contact = cap((850.0 - closing) / 850.0, 0.0, 1.0) * 0.55;
+        value += weak_contact * cap(1.2 / time.max(0.1), 0.4, 1.0);
+
+        let own_goal = Vector::new(0.0, side * 5120.0, 350.0);
+        let to_own = (own_goal - ball).flatten();
+        let urgent = to_own.magnitude() < 3000.0
+            && velocity.flatten().dot(to_own.normalize()) > 250.0;
+        if !friends.is_empty() && !urgent {
+            let mut best_edge = 0.0_f32;
+            for friend in friends {
+                let to_ball = (ball - friend.location).flatten();
+                let distance = to_ball.magnitude();
+                if distance <= 1.0 { continue; }
+                let arrival = distance
+                    / (friend.velocity.flatten().magnitude() + 350.0).max(1200.0);
+                let friend_alignment = to_ball.normalize()
+                    .dot(goal_direction).clamp(-1.0, 1.0);
+                let arrival_edge = time - arrival;
+                let angle_edge = friend_alignment - alignment;
+                if arrival_edge >= -0.15 && angle_edge > 0.18 {
+                    let edge = ((arrival_edge + 0.2).max(0.0) * 0.35
+                        + angle_edge * 0.75).min(0.65);
+                    best_edge = best_edge.max(edge);
+                }
+            }
+            value += best_edge;
+        }
+    }
+    if me.boost < 12.0 {
+        value += match kind {
+            ShotType::Jump => 0.18,
+            ShotType::DoubleJump => 0.08,
+            ShotType::Aerial => 0.10,
+            _ => 0.0,
+        };
+    }
+    if me.boost <= 0.0 {
+        value += match kind {
+            ShotType::Jump => 0.22,
+            ShotType::DoubleJump => -0.12,
+            _ => 0.0,
+        };
+    }
+    value
+}
+
+/// Port of tools.find_any_shot: score untargeted contacts toward the
+/// opponent half, then let the normal Volt contact selector choose the
+/// actual hitbox face and goal-directed approach during execution.
+pub fn find_best_any_shot(
+    me: CarState,
+    cars: &[CarState],
+    prediction: &BallTrajectory,
+    targets: ShotTargets,
+    gravity: Vector,
+    boost_accel: f32,
+    game_time: f32,
+    kickoff_contest_until: f32,
+    unlimited_boost: bool,
+    horizon: f32,
+) -> Option<ShotCandidate> {
+    if prediction.slices.is_empty() || horizon.min(6.0) <= 0.10 {
+        return None;
+    }
+    let friends: Vec<CarState> = cars.iter().copied()
+        .filter(|car| car.team == me.team && !car.demolished && car.index != me.index)
+        .collect();
+    let foes: Vec<CarState> = cars.iter().copied()
+        .filter(|car| car.team != me.team && !car.demolished)
+        .collect();
+    let in_own_net = me.location.y * team_side(me.team) >= 5120.0
+        && me.location.x.abs() <= 900.0;
+    let can_ground = !me.airborne;
+    let can_jump = !me.airborne && !in_own_net;
+    let can_double = !me.airborne;
+    let mut best: Option<ShotCandidate> = None;
+    let mut last = -999.0_f32;
+
+    for slice in &prediction.slices {
+        let time = slice.time;
+        if time < 0.10 { continue; }
+        if time > horizon.min(6.0) { break; }
+        let interval = if time < 1.5 { 0.05 } else { 0.10 };
+        if time - last + 1.0e-5 < interval { continue; }
+        last = time;
+        if slice.location.y.abs() > 5212.75 { break; }
+        let remaining = time - 1.0 / 120.0;
+        if remaining <= 0.0 { continue; }
+
+        let mut flags = (can_ground, can_jump, can_double);
+        if backwall_rebound(me, slice.location, slice.velocity) {
+            flags.1 = false;
+        }
+        if !unlimited_boost && me.boost <= 0.0 {
+            if slice.location.z > 105.0 {
+                flags.0 = false;
+                flags.1 = false;
+            } else {
+                flags.2 = false;
+            }
+        }
+        let parsed = parse_any_budget(
+            me, *slice, remaining, gravity, boost_accel, flags, unlimited_boost,
+        );
+        if !parsed.found { continue; }
+        let Some(kind) = parsed.shot_type else { continue; };
+        if kind == ShotType::Aerial { continue; }
+        if !useful(
+            me, &foes, &friends, slice.location, remaining, kind,
+            game_time < kickoff_contest_until, !friends.is_empty(),
+        ) { continue; }
+
+        let mut value = score_any(me, &friends, slice.location, slice.velocity, kind, remaining);
+        if kind == ShotType::DoubleJump && me.boost > 0.0 { value += 0.25; }
+        if value < best.map_or(f32::INFINITY, |candidate| candidate.score) {
+            let direction = (center(targets) - slice.location).flatten().normalize();
+            let mut parser = parsed;
+            parser.targets = targets;
+            parser.shot_vector = direction;
+            best = Some(ShotCandidate {
+                time,
+                ball: slice.location,
+                ball_velocity: slice.velocity,
+                approach: parsed.approach_target,
+                shot_direction: direction,
+                shot_type: kind,
+                can_jump: !in_own_net,
+                fast: false,
+                score: value,
+                parser,
+            });
+        }
+    }
+
+    // Keep Grid's independently solved double-jump candidate in the same
+    // untargeted competition, with its original finite-boost reserve.
+    if can_double {
+        if let Some(grid) = find_grid_jump(me, prediction, targets, horizon.min(5.0)) {
+            let remaining = grid.time - 1.0 / 120.0;
+            if remaining > 0.0 {
+                let nearest = prediction.slices.iter().min_by(|a, b| {
+                    (a.time - grid.time).abs().total_cmp(&(b.time - grid.time).abs())
+                })?;
+                let reserve = reserve(
+                    me, grid.ball, remaining, ShotType::DoubleJump, gravity.z, unlimited_boost,
+                );
+                let budget_ok = unlimited_boost || me.boost - reserve >= 0.0;
+                if budget_ok
+                    && !( !unlimited_boost && me.boost <= 0.0 && grid.ball.z <= 105.0 )
+                    && useful(
+                        me, &foes, &friends, grid.ball, remaining, ShotType::DoubleJump,
+                        game_time < kickoff_contest_until, !friends.is_empty(),
+                    )
+                {
+                    let mut value = score_any(
+                        me, &friends, grid.ball, nearest.velocity, ShotType::DoubleJump, remaining,
+                    );
+                    if me.boost > 0.0 { value += 0.25; }
+                    if value < best.map_or(f32::INFINITY, |candidate| candidate.score) {
+                        let direction = (center(targets) - grid.ball).flatten().normalize();
+                        let parser = ParsedShot {
+                            found: true,
+                            fast: false,
+                            shot_type: Some(ShotType::DoubleJump),
+                            targets,
+                            ball_offset: grid.contact,
+                            shot_vector: direction,
+                            approach_target: grid.contact,
+                            time: remaining,
+                        };
+                        best = Some(ShotCandidate {
+                            time: grid.time,
+                            ball: grid.ball,
+                            ball_velocity: nearest.velocity,
+                            approach: grid.contact,
+                            shot_direction: direction,
+                            shot_type: ShotType::DoubleJump,
+                            can_jump: !in_own_net,
+                            fast: false,
+                            score: value,
+                            parser,
+                        });
+                    }
+                }
+            }
+        }
+    }
     best
 }
 
