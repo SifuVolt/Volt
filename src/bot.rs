@@ -2394,7 +2394,7 @@ impl BotBrain {
             let shot_vector = (goal_aim - shot.ball).flatten().normalize();
             let offset_target = contact_approach_from_label(
                 shot.ball, shot_vector, shot.contact_face, 92.75,
-            ).unwrap_or(shot.ball - shot_vector * 120.0);
+            ).unwrap_or(shot.ball - shot_vector * 92.75);
 
             let local_ball = car.local_location(ball.location);
             let close_contact = local_ball.y.abs() < 92.75 + car.hitbox.width * 0.5
@@ -2477,18 +2477,34 @@ impl BotBrain {
                 let recovery_target = if t > 0.5 {
                     final_target
                 } else {
-                    car.location + car.up() * 1000.0
+                    car.location
+                        + if car.velocity.magnitude() > 1.0 {
+                            car.velocity.normalize() * 1000.0
+                        } else {
+                            Vector::ZERO
+                        }
                 };
                 self.defense_recovery_target = Some(recovery_target);
                 return GridDefense::recovery_controller(
                     car, recovery_target, self.match_state.gravity.z,
                 );
-            } else if t <= 0.0
-                || (t > 0.35 && distance_remaining > 50.0
-                    && !ground_shot_is_viable(car.hitbox.height, car.airborne, offset_target.z))
-            {
-                return ControllerState::default();
-            } else if !self.unlimited_boost
+            } else {
+                let runtime_reachable = runtime_ground_reachability(
+                    t,
+                    self.boost_accel,
+                    &car,
+                    (final_target - car.location).normalize(),
+                    distance_remaining,
+                ).is_some_and(|_| {
+                    ground_shot_is_viable(car.hitbox.height, car.airborne, offset_target.z)
+                });
+                if t <= 0.0
+                    || (t > 0.35 && distance_remaining > 50.0 && !runtime_reachable)
+                {
+                    return ControllerState::default();
+                }
+            }
+            if !self.unlimited_boost
                 && car.boost < 48.0
                 && angle_to_target < 0.03
                 && velocity > 500.0
