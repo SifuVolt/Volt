@@ -371,8 +371,17 @@ impl GridDefense {
         smallest_index(&times)
     }
 
-    /// Volt's landing-plane recovery routine (boost_to_surface=false).
-    pub fn recovery_controller(car: CarState, target: Vector, gravity: f32) -> ControllerState {
+    /// Shared implementation of Volt's Python recovery routine.
+    ///
+    /// `boost_to_surface` is enabled only by ball_recovery. It reproduces
+    /// the source's floor-only downward boost phase and its 260-unit
+    /// wheel-orientation handoff; ordinary recovery never boosts.
+    fn recovery_controller_for(
+        car: CarState,
+        target: Vector,
+        gravity: f32,
+        boost_to_surface: bool,
+    ) -> ControllerState {
         let direction = (target - car.location).normalize();
         let plane = Self::landing_plane(car.location, car.velocity, gravity).min(5);
         let target_vectors = [
@@ -391,20 +400,56 @@ impl GridDefense {
             Vector::new(0.0, 0.0, -1.0),
             Vector::new(0.0, 0.0, 1.0),
         ];
-        let (_, controls) = default_pd(
-            &car,
-            car.local(target_vectors[plane]),
-            false,
-            Some(car.local(up_vectors[plane])),
-        );
+
+        let down = Vector::new(0.0, 0.0, -1.0);
+        let floor_clearance = (car.location.z - car.hitbox.height * 0.5).max(0.0);
+        let boosting_down = boost_to_surface
+            && plane == 5
+            && car.boost > 0.0
+            && floor_clearance > 260.0
+            && car.velocity.magnitude() < 2300.0
+            && car.velocity.dot(down) < 1800.0;
+
+        let (steer, controls, boost) = if boosting_down {
+            // The horizontal up reference keeps roll defined while the nose
+            // points vertically toward the predicted floor landing.
+            let (_, controls) = default_pd(
+                &car,
+                car.local(down),
+                false,
+                Some(car.local(Vector::new(1.0, 0.0, 0.0))),
+            );
+            (controls.steer, controls, car.forward().dot(down) > 0.90)
+        } else {
+            let (_, controls) = default_pd(
+                &car,
+                car.local(target_vectors[plane]),
+                false,
+                Some(car.local(up_vectors[plane])),
+            );
+            (controls.steer, controls, false)
+        };
+
         let mut controller = ControllerState::default();
         controller.throttle = 1.0;
-        controller.boost = false;
-        controller.steer = controls.steer;
+        controller.boost = boost;
+        controller.steer = steer;
         controller.pitch = controls.pitch;
         controller.yaw = controls.yaw;
         controller.roll = controls.roll;
         controller
+    }
+
+    /// Volt's ordinary recovery routine (boost_to_surface=false).
+    pub fn recovery_controller(car: CarState, target: Vector, gravity: f32) -> ControllerState {
+        Self::recovery_controller_for(car, target, gravity, false)
+    }
+
+    /// Volt's ball_recovery routine: face the velocity-aligned landing point
+    /// and allow downward boost only when the predicted landing plane is floor.
+    pub fn ball_recovery_controller(car: CarState, gravity: f32) -> ControllerState {
+        let target = car.location + car.velocity.normalize();
+        Self::recovery_controller_for(car, target, gravity, true)
     }
 }
 
