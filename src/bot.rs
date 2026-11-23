@@ -416,6 +416,7 @@ impl BotBrain {
         aim: Vector,
         roles: Option<TeamRoles>,
         urgent_save: bool,
+        targeted: bool,
     ) {
         let distance = me.location.distance(ball.location);
         let local_ball = me.local_location(ball.location);
@@ -425,12 +426,14 @@ impl BotBrain {
         let alignment = if approach.magnitude() > 0.001 && goal_direction.magnitude() > 0.001 {
             approach.dot(goal_direction).clamp(-1.0, 1.0)
         } else { 1.0 };
-        let mut score = 78.0 - candidate.slice.time.min(4.0) * 7.0
+        let shot_status = if targeted { "SHOT_FOUND" } else { "ANY_SHOT_FOUND" };
+        let mut score = if targeted { 78.0 } else { 64.0 }
+            - candidate.slice.time.min(4.0) * 7.0
             - facing.min(3.14) * 7.0 - (distance / 3000.0).min(1.0) * 10.0
-            - (1.0 - alignment) * 14.0;
+            - (1.0 - alignment) * 14.0 * if targeted { 1.0 } else { 0.35 };
         if me.boost < 25.0 { score -= 4.0; }
         if urgent_save { score += 15.0; }
-        self.teamplay_status = "SHOT_FOUND".to_owned();
+        self.teamplay_status = shot_status.to_owned();
         self.teamplay_score = score.clamp(0.0, 100.0);
         self.teamplay_contact_time = candidate.slice.time.clamp(0.0, 10.0);
         self.teamplay_cover_released = true;
@@ -3371,6 +3374,25 @@ fn should_commit_to_shot(
     game_time: f32,
 ) -> bool {
     if urgent_save { return true; }
+    let friends: Vec<CarState> = cars.iter().copied()
+        .filter(|car| car.team == me.team && car.index != me.index && !car.demolished)
+        .collect();
+    // Python's find_teamplay_opportunity makes the elected cover player
+    // yield to any teammate with a comparable real shot/touch, before the
+    // more general best-score/arrival-time comparison below.
+    if friends.len() >= 2
+        && roles.is_some_and(|role| role.goalie == me.index && role.challenger != me.index)
+    {
+        for friend in &friends {
+            let Some(message) = messages.get(&friend.index) else { continue; };
+            if game_time - message.received_at > 0.5 { continue; }
+            if matches!(message.status.as_str(), "SHOT_FOUND" | "ANY_SHOT_FOUND" | "WALL_PASS")
+                && message.score >= my_score - 8.0
+            {
+                return false;
+            }
+        }
+    }
     let side = team_side(me.team);
     let ball_is_our_side = ball.location.y * side > 640.0;
     for friend in cars.iter().filter(|car| car.team == me.team && car.index != me.index && !car.demolished) {
