@@ -1527,6 +1527,7 @@ impl BotBrain {
                     };
                 }
             }
+        let selected_score = candidate.map(|shot| shot.score);
         let selected = candidate.map(|candidate| candidate_to_intercept(me, candidate, shot_targets));
             let can_jump = candidate.is_some_and(|candidate| candidate.can_jump);
             let use_jump = selected.filter(|shot| shot.shot_type != ShotType::Ground || can_jump);
@@ -1619,7 +1620,7 @@ impl BotBrain {
                     self.shot_search_horizon(game_time),
                     self.unlimited_boost,
                 ).filter(|candidate| {
-                    selected.is_none_or(|ground_or_jump| candidate.score < ground_or_jump.score)
+                    selected_score.is_none_or(|best_score| candidate.score < best_score)
                 }) {
                     self.aerial_candidate = Some(candidate);
                     return Plan {
@@ -1719,6 +1720,7 @@ impl BotBrain {
                 };
             }
         }
+        let selected_score = candidate.map(|shot| shot.score);
         let selected = candidate.map(|candidate| candidate_to_intercept(me, candidate, shot_targets));
         let can_jump = candidate.is_some_and(|candidate| candidate.can_jump);
         let use_jump = selected.filter(|shot| shot.shot_type != ShotType::Ground || can_jump);
