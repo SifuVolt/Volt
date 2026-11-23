@@ -106,6 +106,7 @@ struct JumpShotState {
     shot_direction: Vector,
     contact_face: &'static str,
     quick: bool,
+    counter: u8,
     patience_applied: bool,
     dodge_started_at: Option<f32>,
     dodge_direction: Vector,
@@ -1908,7 +1909,8 @@ impl BotBrain {
                 approach: geometry.approach,
                 shot_direction: geometry.shot_direction,
                 contact_face: "centre",
-                quick: time_remaining <= 0.45,
+                quick:                 ,
+                counter: 0,
                 patience_applied: false,
                 dodge_started_at: None,
                 dodge_direction: Vector::new(1.0, 0.0, 0.0),
@@ -2115,7 +2117,8 @@ impl BotBrain {
                     approach: jump.approach,
                     shot_direction,
                     contact_face: jump.contact_face,
-                    quick: t <= 0.45,
+                    quick:                     ,
+                    counter: 0,
                     patience_applied: false,
                     dodge_started_at: None,
                     dodge_direction: Vector::new(1.0, 0.0, 0.0),
@@ -2569,13 +2572,18 @@ impl BotBrain {
         mut state: JumpShotState,
         game_time: f32,
     ) -> ControllerState {
-        let elapsed = (game_time - state.started_at).max(0.0);
-        let time_remaining = state.intercept_time - game_time;
-        let has_goal_targets = (self.shot_targets.left - self.shot_targets.right).magnitude() > 1.0;
+        let jump_elapsed = (game_time - state.started_at).max(0.0);
+        let t = state.intercept_time - game_time;
+        let time_remaining = t.clamp(0.000001, 6.0);
+
+        // Recalculate the goal-directed shot vector and contact approach each
+        // frame, as Python jump_shot.run does after it has committed to the
+        // predicted ball slice.
+        let has_goal_targets = (state.targets.left - state.targets.right).magnitude() > 1.0;
         let blended_shot = if has_goal_targets {
             let goal_aim = relative_goal_aim_point(car, state.ball, state.targets);
             let predicted_slice = BallSlice {
-                time: time_remaining.max(0.001),
+                time: time_remaining,
                 location: state.ball,
                 velocity: state.ball_velocity,
             };
@@ -2596,15 +2604,27 @@ impl BotBrain {
         state.shot_direction = adjusted_shot;
 
         if state.side_mode {
-            let lateral = Vector::new(-state.shot_direction.y, state.shot_direction.x, 0.0).normalize();
-            state.approach = state.ball - lateral * state.side_lateral_distance * state.side_sign;
+            let lateral = Vector::new(
+                -state.shot_direction.y,
+                state.shot_direction.x,
+                0.0,
+            ).normalize();
+            state.approach =
+                state.ball - lateral * state.side_lateral_distance * state.side_sign;
         } else {
-            let hitbox_target = state.ball - state.shot_direction * 155.0;
+            // Python _party_cannon_hitbox_target: ball radius plus half the
+            // actual hitbox length, with the current contact label rebuilt
+            // against the refreshed shot vector.
             let contact_standoff = 92.75 + car.hitbox.length * 0.5;
+            let hitbox_target = state.ball - state.shot_direction * 155.0;
             let nominal_target = state.ball - state.shot_direction * contact_standoff;
             let mut offset_target = contact_approach_from_label(
-                state.ball, state.shot_direction, state.contact_face, contact_standoff,
+                state.ball,
+                state.shot_direction,
+                state.contact_face,
+                contact_standoff,
             ).map_or(hitbox_target, |refreshed| refreshed + hitbox_target - nominal_target);
+
             if let Some(normal) = wall_normal {
                 let tangent = state.shot_direction - normal * state.shot_direction.dot(normal);
                 if tangent.magnitude() > 0.001 {
@@ -2615,140 +2635,147 @@ impl BotBrain {
                         state.ball.z - car.location.z,
                         car.velocity.z,
                         self.match_state.gravity.z,
-                    ).time as f32;
+                    ).time;
                     offset_target.z = state.ball.z
                         + (offset_target.z - state.ball.z).clamp(-120.0, 120.0);
-                    offset_target = offset_target - self.match_state.gravity * (0.5 * jump_time * jump_time);
+                    offset_target = offset_target
+                        - self.match_state.gravity * (0.5 * jump_time * jump_time);
                 }
             }
             state.approach = offset_target;
         }
+
         let local_ball = car.local_location(state.ball).flatten();
-        let distance_to_contact = car.location.flat_distance(state.approach);
+        let local_target = car.local_location(state.approach).flatten();
+        let contact_distance = car.location.distance(state.approach);
+        let contact_limit = (92.75 + car.hitbox.length) * 1.02;
+
+        // Python's jump_shot aborts only after the intercept has expired by
+        // 0.8s, or after it has landed without finding a dodge window.
+        if t <= -0.8 || (!car.airborne && state.counter >= 3) {
+            self.jump_shot = None;
+            self.defense_recovery_target = None;
+            if car.airborne {
+                let target = if car.velocity.magnitude() > 1.0 {
+                    car.location + car.velocity.normalize() * 1000.0
+                } else {
+                    car.location + car.forward() * 1000.0
+                };
+                self.defense_recovery_target = Some(target);
+                return GridDefense::recovery_controller(
+                    car, target, self.match_state.gravity.z,
+                );
+            }
+            return ControllerState::default();
+        }
+
         let mut controller = ControllerState::default();
 
-        if time_remaining < -0.40
-            || (elapsed > 0.30 && !car.airborne && state.dodge_started_at.is_none())
-        {
+        // Python jump_shot's flight prediction: jump impulse is added on the
+        // launch frame only; hf is captured before the held-jump acceleration.
+        let gravity = self.match_state.gravity;
+        let mut vf = car.velocity + gravity * t;
+        let mut xf = car.location + car.velocity * t + gravity * (0.5 * t * t);
+        if jump_elapsed <= 1.0e-6 {
+            vf = vf + car.up() * JUMP_SPEED;
+            xf = xf + car.up() * (JUMP_SPEED * t);
+        }
+        let hf = vf.z;
+        let tau = (JUMP_MAX_DURATION - jump_elapsed).max(0.0);
+        vf = vf + car.up() * (JUMP_ACCEL * tau);
+        xf = xf + car.up() * (JUMP_ACCEL * tau * (t - 0.5 * tau));
+
+        // Orient and add forward-axis acceleration only during the first
+        // three jump-counter phases, exactly like the Python routine.
+        if state.counter < 3 && state.dodge_started_at.is_none() {
+            let local_shot_direction = car
+                .local(state.shot_direction.flatten())
+                .flatten()
+                .normalize();
+            let (_, pd) = default_pd(&car, local_shot_direction, false, None);
+            controller.pitch = pd.pitch;
+            controller.yaw = pd.yaw;
+            controller.roll = pd.roll;
+
+            let hold_s = state.ball.z > 130.0
+                && state.ball.z > car.location.z + 65.0
+                && !state.quick;
+            if hold_s {
+                controller.pitch = 1.0;
+                controller.roll = if pd.yaw.abs() > 0.08 {
+                    -0.20 * pd.yaw.signum()
+                } else {
+                    0.0
+                };
+            }
+
+            let delta_x = state.approach - xf;
+            let d_direction = delta_x.normalize();
+            if car.forward().dot(d_direction).abs() > 0.5 && t > 1.0e-6 {
+                let mut delta_v = delta_x.dot(car.forward()) / t;
+                if car.boost > 0.0 && delta_v >= self.boost_accel * MIN_AIR_BOOST_TIME {
+                    controller.boost = true;
+                    delta_v -= self.boost_accel * MIN_AIR_BOOST_TIME;
+                }
+                let throttle_accel = throttle_acceleration(car.local_velocity().x);
+                if throttle_accel.abs() > 1.0e-6
+                    && delta_v.abs() > throttle_accel * MIN_AIR_BOOST_TIME
+                {
+                    controller.throttle = (delta_v
+                        / (throttle_accel * MIN_AIR_BOOST_TIME)).clamp(-1.0, 1.0);
+                }
+            }
+        }
+
+        // Counter 3 is the exact Python dodge window. Do not delay it behind
+        // an invented 0.18s timer or require extra RLBot dodge flags.
+        if state.counter == 3 {
+            if contact_distance < contact_limit
+                && (local_target.x > 0.0 || state.side_mode)
+            {
+                let dodge_direction = if local_ball.magnitude() > 1.0 {
+                    local_ball.normalize()
+                } else {
+                    Vector::new(1.0, 0.0, 0.0)
+                };
+                state.dodge_direction = dodge_direction;
+                state.dodge_started_at = Some(game_time);
+                state.counter = 4;
+                self.last_flip_time = game_time;
+                controller.jump = true;
+                controller.pitch = -dodge_direction.x;
+                controller.yaw = dodge_direction.y;
+                controller.boost = false;
+            } else if local_target.x <= 0.0
+                || (contact_distance > contact_limit + 150.0 && t < 0.12)
+            {
+                state.counter = 5;
+            }
+        } else if state.counter == 4 {
+            // The dodge has been issued; let the original jump hold and
+            // intercept-expiry logic complete the routine.
+        } else if state.counter == 5 {
             self.jump_shot = None;
             return self.start_ball_recovery(car);
         }
 
-        // Keep the nose aimed along the planned outgoing shot vector. The
-        // normal shot posture deliberately pitches back (S) while the ball is
-        // above the car; quick shots skip that posture and go straight to the
-        // contact/dodge sequence.
-        let local_shot_direction = car
-            .local(state.shot_direction.flatten())
-            .flatten()
-            .normalize();
-        let (_, pd) = default_pd(&car, local_shot_direction, false, None);
-        controller.pitch = pd.pitch;
-        controller.yaw = pd.yaw;
-        controller.roll = pd.roll;
-
-        let hold_s = !state.quick
-            && state.ball.z > 130.0
-            && state.ball.z > car.location.z + 65.0
-            && state.dodge_started_at.is_none();
-        if hold_s {
-            controller.pitch = 1.0;
-            // Pair A/D yaw correction with a small opposite air-roll input,
-            // matching Volt's Python jump-shot controller.
-            controller.roll = if pd.yaw.abs() > 0.08 {
-                -0.20 * pd.yaw.signum()
-            } else {
-                0.0
-            };
+        if state.counter == 5 {
+            self.jump_shot = None;
+            return self.start_ball_recovery(car);
         }
 
-        if let Some(dodge_time) = state.dodge_started_at {
-            let dodge_elapsed = game_time - dodge_time;
-            controller.jump = dodge_elapsed <= 0.045;
-            controller.pitch = -state.dodge_direction.x;
-            controller.yaw = state.dodge_direction.y;
-            controller.roll = 0.0;
-            if dodge_elapsed > 0.12 || car.has_dodged {
-                self.jump_shot = None;
-                return self.start_ball_recovery(car);
-            } else {
-                self.jump_shot = Some(state);
-            }
-            return controller;
-        }
-
-        // Predict the remaining jump arc and use the remaining approach error
-        // to add throttle/boost along the car's forward axis. This is the
-        // important part missing from the previous "jump, wait, dodge" logic:
-        // the car actively corrects its flight instead of merely pointing.
-        let tau = (JUMP_MAX_DURATION - elapsed).max(0.0);
-        let gravity = self.match_state.gravity;
-        let mut predicted_velocity = car.velocity + gravity * time_remaining.max(0.0);
-        let mut predicted_car = car.location
-            + car.velocity * time_remaining.max(0.0)
-            + gravity * (0.5 * time_remaining.max(0.0).powi(2));
-
-        // The packet on the launch frame has not yet incorporated the first
-        // jump impulse. On later frames, the live velocity already contains it.
-        if elapsed <= 1.0 / 120.0 {
-            predicted_velocity = predicted_velocity + car.up() * JUMP_SPEED;
-            predicted_car = predicted_car + car.up() * (JUMP_SPEED * time_remaining.max(0.0));
-        }
-        predicted_velocity = predicted_velocity + car.up() * (JUMP_ACCEL * tau);
-        predicted_car = predicted_car + car.up()
-            * (JUMP_ACCEL * tau * (time_remaining.max(0.0) - 0.5 * tau));
-
-        let delta = state.approach - predicted_car;
-        let delta_direction = delta.normalize();
-        let forward = car.forward().normalize();
-        if delta_direction.magnitude() > 0.001 && forward.dot(delta_direction) > 0.5 {
-            let required_velocity = delta.dot(forward) / time_remaining.max(0.05);
-            let mut delta_velocity = required_velocity;
-            if car.boost > 0.0 && delta_velocity >= self.boost_accel * MIN_AIR_BOOST_TIME {
-                controller.boost = true;
-                delta_velocity -= self.boost_accel * MIN_AIR_BOOST_TIME;
-            }
-            let forward_speed = car.local_velocity().x;
-            let acceleration = throttle_acceleration(forward_speed);
-            if acceleration > 0.0 && delta_velocity.abs() > acceleration * MIN_AIR_BOOST_TIME {
-                controller.throttle =
-                    (delta_velocity / (acceleration * MIN_AIR_BOOST_TIME)).clamp(-1.0, 1.0);
-            }
-        }
-
-        // Hold the first jump long enough to leave the ground, then release
-        // until the real contact window. Never burn the second jump early.
-        let desired_vertical_speed = (state.approach.z - car.location.z)
-            / time_remaining.max(0.05);
-        if elapsed <= 0.06
-            || (elapsed <= JUMP_MAX_DURATION && predicted_velocity.z < desired_vertical_speed)
+        // Python's minimum 0.06s jump hold and its original hf/height
+        // comparison are retained rather than replaced with a vertical-speed
+        // controller.
+        if jump_elapsed <= JUMP_MAX_DURATION
+            && (jump_elapsed <= 0.06 || hf <= state.approach.z)
         {
             controller.jump = true;
+        } else if state.counter < 3 {
+            state.counter += 1;
         }
 
-        let close_enough = distance_to_contact < (92.75 + car.hitbox.length) * 1.02;
-        let local_target = car.local_location(state.approach).flatten();
-        if car.airborne
-            && elapsed >= 0.06
-            && local_ball.x > 0.0
-            && close_enough
-            && time_remaining <= 0.18
-            && !car.has_double_jumped
-            && !car.has_dodged
-            && local_target.x > 0.0
-        {
-            state.dodge_started_at = Some(game_time);
-            self.last_flip_time = game_time;
-            state.dodge_direction = local_ball.normalize();
-            controller.jump = true;
-            controller.pitch = -state.dodge_direction.x;
-            controller.yaw = state.dodge_direction.y;
-            controller.throttle = 1.0;
-            controller.boost = false;
-            self.jump_shot = Some(state);
-            return controller;
-        }
-
+        let _ = vf;
         self.jump_shot = Some(state);
         controller
     }
@@ -4663,7 +4690,8 @@ mod tests {
             approach: Vector::new(200.0, 0.0, 0.0),
             shot_direction: Vector::new(1.0, 0.0, 0.0),
             contact_face: "centre",
-            quick: true,
+            quick:             ,
+            counter: 0,
             patience_applied: false,
             dodge_started_at: None,
             dodge_direction: Vector::new(1.0, 0.0, 0.0),
@@ -4694,7 +4722,8 @@ mod tests {
             approach: Vector::new(1000.0, 0.0, 0.0),
             shot_direction: Vector::new(1.0, 0.0, 0.0),
             contact_face: "centre",
-            quick: false,
+            quick:             ,
+            counter: 0,
             patience_applied: false,
             dodge_started_at: None,
             dodge_direction: Vector::new(1.0, 0.0, 0.0),
@@ -4721,7 +4750,8 @@ mod tests {
             approach: Vector::new(200.0, 0.0, 0.0),
             shot_direction: Vector::new(1.0, 0.0, 0.0),
             contact_face: "centre",
-            quick: false,
+            quick:             ,
+            counter: 0,
             patience_applied: false,
             dodge_started_at: None,
             dodge_direction: Vector::new(1.0, 0.0, 0.0),
@@ -4748,7 +4778,8 @@ mod tests {
             approach: Vector::new(200.0, 0.0, 0.0),
             shot_direction: Vector::new(1.0, 1.0, 0.0),
             contact_face: "centre",
-            quick: false,
+            quick:             ,
+            counter: 0,
             patience_applied: false,
             dodge_started_at: None,
             dodge_direction: Vector::new(1.0, 0.0, 0.0),
