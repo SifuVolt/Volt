@@ -105,7 +105,13 @@ mod tests {
 
     #[test]
     fn close_contact_uses_python_max_speed_override() {
-        let car = car(Vector::ZERO, 20.0);
+        let mut car = car(Vector::ZERO, 20.0);
+        car.hitbox = Hitbox {
+            length: 118.0,
+            width: 84.0,
+            height: 36.16,
+            offset: Vector::ZERO,
+        };
         let ball = ball(Vector::new(100.0, 0.0, 92.75), Vector::ZERO);
         let direction = Vector::new(1.0, 0.0, 0.0);
         let plan = calculate_ground_drive_plan(
