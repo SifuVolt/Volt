@@ -532,7 +532,12 @@ impl BotBrain {
 
         self.boost_pads.clear();
         self.boost_pads.extend_from_slice(boost_pads);
-        if self.jump_shot.is_none()
+        let mut plan = self.choose_plan(me, cars, ball, prediction, game_time, match_state, shot_targets);
+
+        // Python evaluates boost collection before its rolling-ball clear.
+        // If no boost route was selected, preserve that exact priority order.
+        if plan.decision != Decision::Boost
+            && self.jump_shot.is_none()
             && self.double_jump_shot.is_none()
             && self.aerial_shot.is_none()
             && self.ground_flip.is_none()
@@ -551,7 +556,32 @@ impl BotBrain {
             return self.run_power_clear(me, cars, ball, prediction, game_time, state);
         }
 
-        let plan = self.choose_plan(me, cars, ball, prediction, game_time, match_state, shot_targets);
+        if let Some(mut shot) = plan.shot {
+            if !self.ground_shot_patience_applied {
+                let foe_goal_y = -side * 5120.0;
+                if let Some((intercept_time, later_slice)) = shot_patience_adjustment(
+                    me,
+                    &prediction.slices,
+                    game_time,
+                    game_time + shot.time,
+                    foe_goal_y,
+                ) {
+                    shot.time = intercept_time - game_time;
+                    shot.ball = later_slice.location;
+                    shot.ball_velocity = later_slice.velocity;
+                    let aim = relative_goal_aim_point(me, shot.ball, shot.targets);
+                    shot.shot_direction = (aim - shot.ball).flatten().normalize();
+                    shot.approach = contact_approach_from_label(
+                        shot.ball, shot.shot_direction, shot.contact_face, 92.75,
+                    ).unwrap_or(shot.ball - shot.shot_direction * 92.75);
+                    plan.target = shot.approach;
+                    plan.shot = Some(shot);
+                    self.ground_shot_patience_applied = true;
+                }
+            }
+        } else {
+            self.ground_shot_patience_applied = false;
+        }
 
         // A newly reachable wall approach replaces ordinary ground/jump
         // setups, but never a launched aerial, flip, or recovery.
