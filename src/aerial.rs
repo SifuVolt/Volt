@@ -412,13 +412,10 @@ impl AerialShot {
 
         self.ceiling = car.location.z > 2044.0 - car.hitbox.height * 2.0 && !car.jumped;
         let time = time_remaining.max(0.001);
-        let (mut final_position, mut final_velocity) = if self.jumped {
-            (
-                car.location + car.velocity * time + gravity * (0.5 * time * time),
-                car.velocity + gravity * time,
-            )
+        let mut final_position = if self.jumped {
+            car.location + car.velocity * time + gravity * (0.5 * time * time)
         } else {
-            jump_prediction(car, time, self.elapsed, self.double_jump, gravity)
+            jump_prediction(car, time, self.elapsed, self.double_jump, gravity).0
         };
 
         // Party Cannon's fast-aerial pitchback briefly tilts the nose up so
@@ -444,7 +441,6 @@ impl AerialShot {
                     + car.up() * pitchback_angle.sin()
             ).normalize();
             let acceleration = pitchback_direction * boost_accel;
-            final_velocity = final_velocity + acceleration * pitchback_time;
             final_position = final_position
                 + acceleration * (pitchback_time * (time - 0.5 * pitchback_time));
         }
