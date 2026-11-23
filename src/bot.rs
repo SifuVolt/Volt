@@ -5218,6 +5218,44 @@ mod tests {
     }
 
     #[test]
+    fn jump_shot_contact_target_includes_world_hitbox_offset() {
+        let mut me = car(0, 0, Vector::ZERO);
+        me.airborne = true;
+        me.air_state = AirState::InAir;
+        me.hitbox.offset = Vector::new(10.0, 5.0, 3.0);
+        let ball = Vector::new(300.0, 0.0, 100.0);
+        let state = JumpShotState {
+            started_at: 1.0,
+            intercept_time: 2.0,
+            ball,
+            ball_velocity: Vector::ZERO,
+            approach: Vector::new(145.0, 0.0, 100.0),
+            shot_direction: Vector::new(1.0, 0.0, 0.0),
+            contact_face: "centre",
+            quick: true,
+            counter: 0,
+            patience_applied: false,
+            dodge_started_at: None,
+            dodge_direction: Vector::new(1.0, 0.0, 0.0),
+            side_mode: false,
+            side_sign: 1.0,
+            side_lateral_distance: 0.0,
+            targets: ShotTargets::default(),
+        };
+        let mut brain = BotBrain::new();
+        brain.match_state.gravity = Vector::new(0.0, 0.0, -650.0);
+        brain.jump_shot = Some(state);
+        brain.run_jump_shot(me, state, 1.0);
+
+        let actual = brain.jump_shot.expect("jump remains committed").approach;
+        let standoff = 92.75 + me.hitbox.length * 0.5;
+        let expected = ball
+            - Vector::new(1.0, 0.0, 0.0) * standoff
+            - Vector::new(10.0, 5.0, 3.0);
+        assert!((actual - expected).magnitude() < 1e-3);
+    }
+
+    #[test]
     fn shot_patience_waits_for_goal_alignment_when_the_car_can_reach_it() {
         let mut me = car(0, 0, Vector::new(1000.0, 4500.0, 17.0));
         me.velocity = Vector::new(1500.0, 0.0, 0.0);
