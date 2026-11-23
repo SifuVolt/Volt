@@ -2860,6 +2860,7 @@ impl BotBrain {
             // distance / intercept-time, with only its explicit speed-build
             // exception.
             let local_offset_target = car.local_location(offset_target.flatten());
+            let local_ball = car.local_location(ball.location).flatten();
             let angle_to_target = local_final_target.y.atan2(local_final_target.x).abs();
             // Preserve forward momentum in the final ground-contact window.
             // The distance/ETA speed remains the normal request; this floor
@@ -2891,12 +2892,13 @@ impl BotBrain {
                 != (((game_time - 1.0 / 120.0) * 4.0).round() as i32)
             {
                 println!(
-                    "[GROUND SHOT APPROACH TRACE] player={} T={:.3} close={} dist={:.1} requested={:.1} turn_limited={:.1} forward={:.1} angle={:.3} local_target=({:.1},{:.1}) boost={:.1}",
+                    "[GROUND SHOT APPROACH TRACE] player={} T={:.3} close={} dist={:.1} requested={:.1} drive_request={:.1} turn_limited={:.1} forward={:.1} angle={:.3} local_target=({:.1},{:.1}) boost={:.1}",
                     car.index,
                     t,
                     close_contact,
                     distance_remaining,
                     speed_required,
+                    drive_speed,
                     output.target_speed,
                     velocity,
                     angle_to_target,
