@@ -3546,16 +3546,19 @@ fn assign_roles_volt(
         let facing_own_goal_from_line = location.y * side >= 5050.0
             && location.x.abs() <= 900.0
             && forward.y * side > 0.0;
+        // Python's side-wall and back-wall branches intentionally use only
+        // the goal-line-facing penalty. The general branch additionally
+        // penalizes bad facing, falling after a double jump, and sitting on
+        // the post; applying those extra penalties to every branch changes
+        // which teammate is elected to challenge.
+        let special_wall_clear = sidewall_clear || backwall_point.is_some();
+        let closest_penalty = if special_wall_clear {
+            facing_own_goal_from_line
+        } else {
+            facing_badly || falling_without_jump || on_goal_post || facing_own_goal_from_line
+        };
         let closest_score = location.distance(ball.location)
-            + if facing_badly
-                || falling_without_jump
-                || on_goal_post
-                || facing_own_goal_from_line
-            {
-                5000.0
-            } else {
-                0.0
-            };
+            + if closest_penalty { 5000.0 } else { 0.0 };
 
         let dependency = if sidewall_clear {
             ball.location.x * ball_side >= location.x * ball_side
@@ -3572,8 +3575,8 @@ fn assign_roles_volt(
                 + lane_distance.y * ball_flat_velocity.y)
                 .abs();
             let path_relevant = save_deadline < 0.0
-                || (cross_track / 2300.0 - 134.85
-                    < along_track / ball_flat_speed.max(1.0));
+                || (cross_track * ball_flat_speed / 2300.0 - 134.85
+                    < along_track);
             (location.y - foe_goal.y).abs()
                 + (location.x - ball.location.x).abs()
                     / 5.0
