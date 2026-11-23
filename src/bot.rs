@@ -2179,7 +2179,7 @@ impl BotBrain {
                 );
                 let aerial_goal = relative_goal_aim_point(car, ball.location, self.shot_targets);
                 aerial.refresh_prediction(
-                    prediction, game_time, aerial_goal, self.match_state.gravity, ball.location.z,
+                    car, prediction, game_time, aerial_goal, self.match_state.gravity, ball.location.z,
                 );
                 if aerial.fast_aerial
                     && (aerial.ball.z <= 350.0 || ball.location.z <= 350.0)
@@ -2478,7 +2478,7 @@ impl BotBrain {
                 );
                 let aerial_goal = relative_goal_aim_point(car, ball.location, self.shot_targets);
                 aerial.refresh_prediction(
-                    prediction, game_time, aerial_goal, self.match_state.gravity, ball.location.z,
+                    car, prediction, game_time, aerial_goal, self.match_state.gravity, ball.location.z,
                 );
                 if aerial.fast_aerial
                     && (aerial.ball.z <= 350.0 || ball.location.z <= 350.0)
