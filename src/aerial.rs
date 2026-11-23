@@ -20,7 +20,6 @@ const AIR_THROTTLE_ACCEL: f32 = 66.667;
 const JUMP_VEL: f32 = 291.667;
 const JUMP_ACCEL: f32 = 1458.333;
 const JUMP_DURATION: f32 = 0.2;
-const STICKY_ACCEL: f32 = 325.0;
 const BOOST_CONSUMPTION: f32 = 33.3;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -47,21 +46,18 @@ pub struct AerialShot {
     pub target_location: Vector,
     pub shot_direction: Vector,
     pub up: Vector,
-    pub start_boost: f32,
     pub double_jump: bool,
     pub fast_aerial: bool,
     pub backboard_mode: bool,
-    pub jump_immediately: bool,
     pub aerialing: bool,
     pub elapsed: f32,
     pub jump_release_frames: u8,
     pub second_jump_frames: u8,
     pub jumped: bool,
     pub dodging: bool,
-    pub dodge_elapsed: f32,
-    pub dodge_step: u8,
-    pub dodge_input: Vector,
-    pub dodge_jump: bool,
+    pub double_jump_complete: bool,
+    pub first_jump_impulse_applied: bool,
+    pub double_jump_time: Option<f32>,
     pub side_wall_launched: bool,
     pub side_wall_active: bool,
     pub ceiling: bool,
@@ -76,13 +72,6 @@ impl AerialShot {
         gravity: Vector,
         boost_accel: f32,
     ) -> Self {
-        let up = car.up();
-        let flat_velocity = car.velocity - up * car.velocity.dot(up);
-        let to_target = candidate.target_location - car.location;
-        let flat_target = to_target - up * to_target.dot(up);
-        let jump_immediately = flat_velocity.angle(flat_target) < 0.6
-            || flat_velocity.magnitude() < 500.0
-            || car.air_state != AirState::OnGround;
         let ceiling = car.location.z > 2044.0 - car.hitbox.height * 2.0 && !car.jumped;
         let target_location = if ceiling {
             candidate.target_location - Vector::new(0.0, 0.0, 92.0)
@@ -90,7 +79,7 @@ impl AerialShot {
             candidate.target_location
         };
 
-        let mut aerial = Self {
+        Self {
             started_at: game_time,
             last_update: game_time,
             intercept_time: game_time + candidate.slice.time,
@@ -100,33 +89,24 @@ impl AerialShot {
             shot_target: candidate.shot_target,
             target_location,
             shot_direction: candidate.shot_direction,
-            up,
-            start_boost: car.boost,
-            double_jump: false,
+            up: car.up(),
+            double_jump: candidate.fast,
             fast_aerial: candidate.fast,
             backboard_mode: false,
-            jump_immediately,
             aerialing: false,
             elapsed: 0.0,
             jump_release_frames: 0,
             second_jump_frames: 0,
-            jumped: false,
+            jumped: car.airborne,
             dodging: false,
-            dodge_elapsed: 0.0,
-            dodge_step: 0,
-            dodge_input: Vector::ZERO,
-            dodge_jump: true,
+            double_jump_complete: false,
+            first_jump_impulse_applied: false,
+            double_jump_time: None,
             side_wall_launched: false,
             side_wall_active: false,
             ceiling,
             finished: false,
-        };
-        let single = aerial.boost_estimate(car, false, 0.0, candidate.slice.time, gravity, boost_accel);
-        let double = aerial.boost_estimate(car, true, 0.0, candidate.slice.time, gravity, boost_accel);
-        let can_hit = single >= 0.0 || double >= 0.0;
-        aerial.double_jump = double >= 0.0 && (double < single || single < 0.0);
-        aerial.finished = !can_hit;
-        aerial
+        }
     }
 
     /// Refresh the committed aerial's contact from the latest absolute
