@@ -26,7 +26,6 @@ const MAX_SPEED: f32 = 2300.0;
 const BOOST_ACCEL: f32 = 991.6667;
 const JUMP_SPEED: f32 = 291.6667;
 const JUMP_ACCEL: f32 = 1458.3333;
-const JUMP_MAX_DURATION: f32 = 0.20;
 const JUMP_SHOT_TILT_HOLD: f32 = 0.12;
 const MIN_AIR_BOOST_TIME: f32 = 1.0 / 30.0;
 
