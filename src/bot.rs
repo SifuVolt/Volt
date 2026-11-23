@@ -4365,25 +4365,61 @@ fn select_side_shot(car:CarState,candidate:ShotCandidate,targets:ShotTargets)->O
 }
 
 fn candidate_to_intercept(car:CarState,candidate:ShotCandidate,targets:ShotTargets)->GroundIntercept {
-    let targets = if (candidate.parser.targets.left - candidate.parser.targets.right).magnitude() > 1.0 {
+    let parser_has_targets =
+        (candidate.parser.targets.left - candidate.parser.targets.right).magnitude() > 1.0;
+    let untargeted = !parser_has_targets && !candidate.targeted;
+    let selected_targets = if parser_has_targets {
         candidate.parser.targets
-    } else { targets };
-    let (mut contact_point,_,mut contact_face,contact_quality)=select_ball_contact(car,candidate.ball,targets);
-    let contact_normal=(contact_point-candidate.ball).normalize();
+    } else if untargeted {
+        ShotTargets::default()
+    } else {
+        targets
+    };
+
     let contact_standoff=BALL_RADIUS+car.hitbox.length*0.5;
-    let mut approach=candidate.ball+contact_normal*contact_standoff;
-    let side_shot=select_side_shot(car,candidate,targets);
-    let shot_direction=side_shot.map_or(candidate.shot_direction,|s|s.shot_direction);
-    if let Some(side)=side_shot {
-        let lateral=Vector::new(-side.shot_direction.y,side.shot_direction.x,0.0).normalize();
-        approach=candidate.ball-lateral*side.lateral_distance*side.side_sign;
-        contact_point=candidate.ball-lateral*BALL_RADIUS*side.side_sign;
-        contact_face=if side.side_sign<0.0 {"left"} else {"right"};
-    }
+    let (mut contact_point,mut approach,mut contact_face,contact_quality,shot_direction,side_shot) =
+        if untargeted {
+            // fast_intercept_finder constructs routines without a target
+            // tuple. Python therefore uses the opponent-goal ray and a
+            // centred front contact, not select_ball_contact's side-face
+            // candidates or a forced goal-target flank route.
+            let goal_direction=(foe_goal(team_side(car.team))-candidate.ball)
+                .flatten().normalize();
+            let direction=if goal_direction.magnitude()>0.001 {
+                goal_direction
+            } else {
+                Vector::new(0.0,-team_side(car.team),0.0)
+            };
+            (
+                candidate.ball-direction*BALL_RADIUS,
+                candidate.ball-direction*contact_standoff,
+                "centre",
+                1.0,
+                direction,
+                None,
+            )
+        } else {
+            let (point,_,face,quality)=select_ball_contact(car,candidate.ball,selected_targets);
+            let normal=(point-candidate.ball).normalize();
+            let approach=candidate.ball+normal*contact_standoff;
+            let side=select_side_shot(car,candidate,selected_targets);
+            let direction=side.map_or(candidate.shot_direction,|s|s.shot_direction);
+            let (approach,point,face)=if let Some(side)=side {
+                let lateral=Vector::new(-side.shot_direction.y,side.shot_direction.x,0.0).normalize();
+                (
+                    candidate.ball-lateral*side.lateral_distance*side.side_sign,
+                    candidate.ball-lateral*BALL_RADIUS*side.side_sign,
+                    if side.side_sign<0.0 {"left"} else {"right"},
+                )
+            } else {
+                (approach,point,face)
+            };
+            (point,approach,face,quality,direction,side)
+        };
     GroundIntercept {
         time:candidate.time, ball:candidate.ball, ball_velocity:candidate.ball_velocity,
         approach, shot_direction, contact_quality,
-        contact_point, contact_face, shot_type:candidate.shot_type, side_shot, targets,
+        contact_point, contact_face, shot_type:candidate.shot_type, side_shot, targets:selected_targets,
     }
 }
 
