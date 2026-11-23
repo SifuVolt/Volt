@@ -2839,7 +2839,9 @@ impl BotBrain {
         let angle_to_target = local_target.y.atan2(local_target.x).abs();
         let distance_remaining = final_target.flat_distance(car.location)
             - car.hitbox.length / 3.0;
-        let local_ball = car.local_location(ball);
+        // Python's reverse-drive decision uses the live ball, not the
+        // selected future prediction slice.
+        let local_ball = car.local_location(current_ball.location);
         let direction_sign = if angle_to_target >= 1.6
             && car.local_velocity().x <= 1000.0
             && local_ball.x < -250.0
@@ -2863,7 +2865,7 @@ impl BotBrain {
         let mut velocity = output.car_speed;
         if velocity == 0.0 { velocity = 1.0; }
         let local_velocity = car.local_velocity();
-        let denominator = velocity.abs() + dodge_impulse(car.velocity.flatten(), MAX_SPEED);
+        let denominator = velocity.abs() + dodge_impulse(car.velocity, MAX_SPEED);
         let time_to_target = if denominator > 0.001 {
             distance_remaining / denominator
         } else {
@@ -2898,16 +2900,28 @@ impl BotBrain {
             return GridDefense::recovery_controller(car, final_target, self.match_state.gravity.z);
         }
 
-        let double_jump_viable = double_jump_shot_is_viable(
+        // Python's CLib double_jump_shot_is_viable first runs the generic
+        // ground reachability simulation (turning, braking, boost and
+        // distance), then validates the double-jump vertical window.
+        let runtime_reachable = runtime_ground_reachability(
             t,
-            self.match_state.gravity.z,
-            car.velocity.z,
-            car.hitbox.height * 0.5,
-            car.airborne,
-            offset_target.z,
-            true,
-        );
-        if t <= jump_time || (tj > 0.0 && distance_remaining > 50.0 && !double_jump_viable) {
+            self.boost_accel,
+            &car,
+            (final_target - car.location).normalize(),
+            distance_remaining,
+        )
+        .is_some_and(|remaining| {
+            double_jump_shot_is_viable(
+                remaining,
+                self.match_state.gravity.z,
+                car.velocity.z,
+                car.hitbox.height * 0.5,
+                car.airborne,
+                offset_target.z,
+                true,
+            )
+        });
+        if t <= jump_time || (tj > 0.0 && distance_remaining > 50.0 && !runtime_reachable) {
             // Python double_jump.run executes defaultDrive before its
             // reachability/timeout exit. Preserve that frame's drive controls.
             return controller_from_drive(output, car);
