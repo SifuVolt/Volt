@@ -14,7 +14,7 @@ use crate::{
     planning::{find_wall_drive, wall_approach_geometry, WallDriveMode, WallDrivePlan},
     shot_physics::{double_jump_shot_is_viable, get_jump_time, ground_shot_is_viable, jump_shot_is_viable, ShotType},
     shot_parser::ShotTargets,
-    shot_planner::{find_best_any_shot, find_best_shot, find_fast_intercept, grid_jump_time, ShotCandidate},
+    shot_planner::{find_best_any_shot, find_best_pass_shot, find_best_shot, find_fast_intercept, grid_jump_time, ShotCandidate},
     state::{BallState, BoostPadState, CarState, MatchState},
 };
 use std::collections::HashMap;
@@ -69,6 +69,7 @@ struct GroundIntercept {
     contact_face: &'static str,
     shot_type: ShotType,
     side_shot: Option<SideShotPlan>,
+    targets: ShotTargets,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -109,6 +110,7 @@ struct JumpShotState {
     side_mode: bool,
     side_sign: f32,
     side_lateral_distance: f32,
+    targets: ShotTargets,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -122,6 +124,7 @@ struct DoubleJumpState {
     jump_frames: u32,
     second_jump_sent: bool,
     prev_jump: bool,
+    targets: ShotTargets,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -274,6 +277,7 @@ impl BotBrain {
         candidate: ShotCandidate,
         goal: Vector,
         roles: Option<TeamRoles>,
+        urgent_save: bool,
     ) {
         let distance = me.location.distance(candidate.ball);
         let local_ball = me.local_location(candidate.ball);
@@ -284,19 +288,24 @@ impl BotBrain {
             approach.dot(goal_direction).clamp(-1.0, 1.0)
         } else { 1.0 };
         let shooting_penalty = (1.0 - alignment) * 14.0;
-        let mut score = 78.0
-            - candidate.time.min(4.0) * 7.0
-            - facing_angle.min(std::f32::consts::PI) * 7.0
-            - (distance / 3000.0).min(1.0) * 10.0
-            - shooting_penalty;
+        let shot_type = if candidate.targeted { "SHOT_FOUND" } else { "ANY_SHOT_FOUND" };
+        let mut score = if candidate.targeted { 78.0 } else { 64.0 };
+        score -= candidate.time.min(4.0) * 7.0;
+        score -= facing_angle.min(3.14) * 7.0;
+        score -= (distance / 3000.0).min(1.0) * 10.0;
+        score -= if candidate.targeted { shooting_penalty } else { shooting_penalty * 0.35 };
         if me.boost < 25.0 { score -= 4.0; }
-        self.teamplay_status = "SHOT_FOUND".to_owned();
+        if urgent_save { score += 15.0; }
+        self.teamplay_status = shot_type.to_owned();
         self.teamplay_score = score.clamp(0.0, 100.0);
         self.teamplay_contact_time = candidate.time.clamp(0.0, 10.0);
         self.teamplay_cover_released = true;
         self.teamplay_cover_owner = roles.and_then(|r| if r.goalie != r.challenger { Some(r.goalie) } else { None });
         let _ = ball;
-        self.teamplay_receive = receive_plan(candidate.ball, goal);
+        let receive_aim = if (candidate.parser.targets.left - candidate.parser.targets.right).magnitude() > 1.0 {
+            (candidate.parser.targets.left + candidate.parser.targets.right) * 0.5
+        } else { goal };
+        self.teamplay_receive = receive_plan(candidate.ball, receive_aim);
     }
 
     pub fn teamplay_message(&self, now: f32) -> TeamplayMessage {
@@ -1030,7 +1039,7 @@ impl BotBrain {
         if is_challenger {
             let aim = shot_aim_point(ball.location, side, me.airborne);
             let fast_intercept_zone = ball_depth > 0.0 && ball_depth <= 1280.0;
-            let candidate = if fast_intercept_zone {
+            let mut candidate = if fast_intercept_zone {
                 find_fast_intercept(
                     me, prediction, shot_targets, match_state.gravity, self.boost_accel,
                     0.10, self.shot_search_horizon(game_time), self.unlimited_boost,
@@ -1050,8 +1059,15 @@ impl BotBrain {
                     } else { None }
                 })
             };
+            if candidate.is_none() && !fast_intercept_zone {
+                candidate = find_best_pass_shot(
+                    me, cars, ball.location, prediction, match_state.gravity,
+                    self.boost_accel, game_time, self.kickoff_contest_until,
+                    urgent_save, true, self.unlimited_boost, self.shot_search_horizon(game_time),
+                );
+            }
             if let Some(candidate) = candidate {
-                self.set_teamplay_shot(me, ball, candidate, opponent_goal, roles);
+                self.set_teamplay_shot(me, ball, candidate, opponent_goal, roles, urgent_save);
                 if !should_commit_to_shot(
                     me, cars, ball, roles, urgent_save, self.teamplay_score,
                     candidate.time, &self.teammate_comms, game_time,
@@ -1165,7 +1181,7 @@ impl BotBrain {
         // In 1v1 there is no separate goalie: the sole player challenges.
         let aim = shot_aim_point(ball.location, side, me.airborne);
         let fast_intercept_zone = ball_depth > 0.0 && ball_depth <= 1280.0;
-        let candidate = if fast_intercept_zone {
+        let mut candidate = if fast_intercept_zone {
             find_fast_intercept(
                 me, prediction, shot_targets, match_state.gravity, self.boost_accel,
                 0.10, self.shot_search_horizon(game_time), self.unlimited_boost,
@@ -1185,8 +1201,15 @@ impl BotBrain {
                 } else { None }
             })
         };
+        if candidate.is_none() && !fast_intercept_zone {
+            candidate = find_best_pass_shot(
+                me, cars, ball.location, prediction, match_state.gravity,
+                self.boost_accel, game_time, self.kickoff_contest_until,
+                urgent_save, true, self.unlimited_boost, self.shot_search_horizon(game_time),
+            );
+        }
         if let Some(candidate) = candidate {
-            self.set_teamplay_shot(me, ball, candidate, opponent_goal, roles);
+            self.set_teamplay_shot(me, ball, candidate, opponent_goal, roles, urgent_save);
         }
         let selected = candidate.map(|candidate| candidate_to_intercept(me, candidate, shot_targets));
         let can_jump = candidate.is_some_and(|candidate| candidate.can_jump);
@@ -1491,6 +1514,7 @@ impl BotBrain {
                     contact_face: "centre",
                     shot_type: ShotType::DoubleJump,
                     side_shot: None,
+                    targets: self.shot_targets,
                 };
                 self.wall_drive_candidate = None;
                 return self.drive_double_jump(car, shot, game_time);
@@ -1510,6 +1534,7 @@ impl BotBrain {
                     side_mode: false,
                     side_sign: 1.0,
                     side_lateral_distance: 0.0,
+                    targets: self.shot_targets,
             };
             self.jump_shot = Some(state);
             self.wall_drive_candidate = None;
@@ -1671,6 +1696,7 @@ impl BotBrain {
                     side_mode,
                     side_sign: side.map_or(1.0, |s| s.side_sign),
                     side_lateral_distance: side.map_or(0.0, |s| s.lateral_distance),
+                    targets: jump.targets,
                 };
                 self.jump_shot = Some(state);
                 return self.run_jump_shot(car, state, game_time);
@@ -1709,7 +1735,7 @@ impl BotBrain {
             }
             let t = shot.time;
             let time_remaining = t.clamp(0.000001, 6.0);
-            let goal_aim = relative_goal_aim_point(car, shot.ball, self.shot_targets);
+            let goal_aim = relative_goal_aim_point(car, shot.ball, shot.targets);
             let shot_vector = (goal_aim - shot.ball).flatten().normalize();
             let offset_target = contact_approach_from_label(
                 shot.ball, shot_vector, shot.contact_face, 92.75,
@@ -1977,6 +2003,7 @@ impl BotBrain {
                 jump_frames: 0,
                 second_jump_sent: false,
                 prev_jump: false,
+                targets: shot.targets,
             };
             self.double_jump_shot = Some(state);
             return self.run_double_jump(car, state, game_time);
@@ -2112,7 +2139,7 @@ impl BotBrain {
         let time_remaining = state.intercept_time - game_time;
         let has_goal_targets = (self.shot_targets.left - self.shot_targets.right).magnitude() > 1.0;
         let blended_shot = if has_goal_targets {
-            let goal_aim = relative_goal_aim_point(car, state.ball, self.shot_targets);
+            let goal_aim = relative_goal_aim_point(car, state.ball, state.targets);
             let predicted_slice = BallSlice {
                 time: time_remaining.max(0.001),
                 location: state.ball,
@@ -3089,6 +3116,9 @@ fn select_side_shot(car:CarState,candidate:ShotCandidate,targets:ShotTargets)->O
 }
 
 fn candidate_to_intercept(car:CarState,candidate:ShotCandidate,targets:ShotTargets)->GroundIntercept {
+    let targets = if (candidate.parser.targets.left - candidate.parser.targets.right).magnitude() > 1.0 {
+        candidate.parser.targets
+    } else { targets };
     let (mut contact_point,mut approach,mut contact_face,contact_quality)=select_ball_contact(car,candidate.ball,targets);
     let contact_normal=(contact_point-candidate.ball).normalize();
     let contact_standoff=BALL_RADIUS+car.hitbox.length*0.5;
@@ -3104,7 +3134,7 @@ fn candidate_to_intercept(car:CarState,candidate:ShotCandidate,targets:ShotTarge
     GroundIntercept {
         time:candidate.time, ball:candidate.ball, ball_velocity:candidate.ball_velocity,
         approach, shot_direction, contact_quality,
-        contact_point, contact_face, shot_type:candidate.shot_type, side_shot,
+        contact_point, contact_face, shot_type:candidate.shot_type, side_shot, targets,
     }
 }
 
@@ -3267,6 +3297,7 @@ fn choose_jump_intercept(
                 contact_face,
                 shot_type: ShotType::Jump,
                 side_shot: None,
+                targets: ShotTargets { left: Vector::ZERO, right: Vector::ZERO },
             }));
         }
     }
@@ -3734,6 +3765,7 @@ fn choose_ground_intercept(
             contact_face,
             shot_type: ShotType::Ground,
             side_shot: None,
+            targets: ShotTargets { left: Vector::ZERO, right: Vector::ZERO },
         };
 
         if best.is_none_or(|(best_score, _)| score < best_score) {
@@ -4122,6 +4154,7 @@ mod tests {
             jump_frames: 0,
             second_jump_sent: false,
             prev_jump: false,
+                targets: ShotTargets { left: Vector::ZERO, right: Vector::ZERO },
         };
 
         let first = brain.run_double_jump(me, state, 0.10);
@@ -4157,6 +4190,7 @@ mod tests {
                     side_mode: false,
                     side_sign: 1.0,
                     side_lateral_distance: 0.0,
+                    targets: ShotTargets { left: Vector::ZERO, right: Vector::ZERO },
         };
 
         let controller = brain.run_jump_shot(me, state, 1.10);
@@ -4186,6 +4220,7 @@ mod tests {
                     side_mode: false,
                     side_sign: 1.0,
                     side_lateral_distance: 0.0,
+                    targets: ShotTargets { left: Vector::ZERO, right: Vector::ZERO },
         };
 
         let controller = brain.run_jump_shot(me, state, 1.10);
@@ -4211,6 +4246,7 @@ mod tests {
                     side_mode: false,
                     side_sign: 1.0,
                     side_lateral_distance: 0.0,
+                    targets: ShotTargets { left: Vector::ZERO, right: Vector::ZERO },
         };
 
         let controller = brain.run_jump_shot(me, state, 1.50);
@@ -4236,6 +4272,7 @@ mod tests {
                     side_mode: false,
                     side_sign: 1.0,
                     side_lateral_distance: 0.0,
+                    targets: ShotTargets { left: Vector::ZERO, right: Vector::ZERO },
         };
 
         let normal = brain.run_jump_shot(me, state, 1.01);

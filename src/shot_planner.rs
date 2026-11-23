@@ -17,6 +17,7 @@ pub struct ShotCandidate {
     pub approach: Vector,
     pub shot_direction: Vector,
     pub shot_type: ShotType,
+    pub targeted: bool,
     pub can_jump: bool,
     pub fast: bool,
     pub score: f32,
@@ -210,7 +211,7 @@ pub fn find_best_shot(
         if value<best.map_or(f32::INFINITY,|b|b.score) {
             best=Some(ShotCandidate{time:t,ball:slice.location,ball_velocity:slice.velocity,
                 approach:parsed.approach_target,shot_direction:parsed.shot_vector,
-                shot_type:kind,can_jump:!in_own_net,fast:parsed.fast,score:value,parser:parsed});
+                shot_type:kind,targeted:true,can_jump:!in_own_net,fast:parsed.fast,score:value,parser:parsed});
         }
     }
     // Compare Grid's independent 60 Hz double-jump reachability candidate.
@@ -240,7 +241,7 @@ pub fn find_best_shot(
                     best=Some(ShotCandidate{
                         time:grid.time,ball:grid.ball,ball_velocity:slice.velocity,
                         approach:grid.contact,shot_direction:direction,
-                        shot_type:ShotType::DoubleJump,can_jump:true,fast:false,score:value,parser,
+                        shot_type:ShotType::DoubleJump,targeted:true,can_jump:true,fast:false,score:value,parser,
                     });
                 }
             }
@@ -446,6 +447,7 @@ pub fn find_best_any_shot(
                 approach: parsed.approach_target,
                 shot_direction: direction,
                 shot_type: kind,
+                targeted: false,
                 can_jump: !in_own_net,
                 fast: false,
                 score: value,
@@ -497,6 +499,7 @@ pub fn find_best_any_shot(
                             approach: grid.contact,
                             shot_direction: direction,
                             shot_type: ShotType::DoubleJump,
+                            targeted: false,
                             can_jump: !in_own_net,
                             fast: false,
                             score: value,
@@ -566,6 +569,7 @@ pub fn find_fast_intercept(
             approach: parsed.approach_target,
             shot_direction: direction,
             shot_type: kind,
+            targeted: false,
             can_jump: !in_own_net,
             fast: false,
             score: time,
@@ -573,6 +577,56 @@ pub fn find_fast_intercept(
         });
     }
     None
+}
+
+
+/// Last-resort pass candidate from tools.find_pass_shot. Choose the teammate
+/// with the strongest forward-position/separation value, lead their movement,
+/// and reuse the exact targeted CLib shot parser for the pass window.
+pub fn find_best_pass_shot(
+    me: CarState,
+    cars: &[CarState],
+    ball_now: Vector,
+    prediction: &BallTrajectory,
+    gravity: Vector,
+    boost_accel: f32,
+    game_time: f32,
+    kickoff_contest_until: f32,
+    urgent_save: bool,
+    elected_challenger: bool,
+    unlimited_boost: bool,
+    horizon: f32,
+) -> Option<ShotCandidate> {
+    let side = team_side(me.team);
+    let friend = cars.iter().copied()
+        .filter(|car| car.team == me.team && car.index != me.index && !car.demolished)
+        .max_by(|a, b| {
+            let value = |friend: &CarState| {
+                -friend.location.y * side
+                    + me.location.flat_distance(friend.location).min(1800.0) * 0.25
+            };
+            value(a).total_cmp(&value(b))
+        })?;
+    let friend_velocity = friend.velocity.flatten();
+    let mut lead_x = friend.location.x;
+    let mut lead_y = friend.location.y - side * 650.0;
+    if friend_velocity.magnitude() > 250.0 {
+        lead_x += friend_velocity.x / friend_velocity.magnitude() * 350.0;
+        lead_y += friend_velocity.y / friend_velocity.magnitude() * 250.0;
+    }
+    lead_x = lead_x.clamp(-3500.0, 3500.0);
+    lead_y = lead_y.clamp(-4600.0, 4600.0);
+    let targets = ShotTargets {
+        left: Vector::new(lead_x - 350.0, lead_y, 120.0),
+        right: Vector::new(lead_x + 350.0, lead_y, 120.0),
+    };
+    let mut candidate = find_best_shot(
+        me, cars, ball_now, prediction, targets, gravity, boost_accel,
+        game_time, kickoff_contest_until, urgent_save, elected_challenger,
+        unlimited_boost, horizon.min(4.0),
+    )?;
+    candidate.targeted = false;
+    Some(candidate)
 }
 
 fn solve_quad(a:f64,b:f64,c:f64,y:f64,branch:i32)->Option<f32> {
