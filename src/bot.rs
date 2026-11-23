@@ -2867,9 +2867,11 @@ impl BotBrain {
             // only prevents defaultDrive from braking a fast, correctly-laned
             // car just before it reaches the ball.
             let current_forward_speed = car.local_velocity().x;
-            let power_contact_window = t < 0.35
+            let power_contact_window = t < 0.55
                 && t > 0.10
+                && distance_remaining < 700.0
                 && local_ball.x > 0.0
+                && local_offset_target.y.abs() < 180.0
                 && current_forward_speed > 700.0;
             let drive_speed = if power_contact_window {
                 speed_required.max(current_forward_speed.min(1200.0))
@@ -3649,6 +3651,7 @@ impl BotBrain {
                 && local_target.x > 0.0
                 && local_target.y.abs() <= 180.0
                 && contact_distance <= contact_limit + 100.0
+                && time_to_contact >= 0.0
                 && time_to_contact <= t.max(0.0) + 0.08;
             let quick_ready = quick_eta_pressure
                 && quick_contact_ready
