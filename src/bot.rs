@@ -600,12 +600,10 @@ impl BotBrain {
         {
             self.aerial_shot = None;
         }
-        if plan.decision == Decision::WallDrive {
-            self.jump_shot = None;
-            self.double_jump_shot = None;
-            if self.aerial_shot.as_ref().is_some_and(|shot| !shot.aerialing) {
-                self.aerial_shot = None;
-            }
+        if plan.decision == Decision::WallDrive
+            && self.aerial_shot.as_ref().is_some_and(|shot| !shot.aerialing)
+        {
+            self.aerial_shot = None;
         }
 
         // Aerial aborts in the Python routine stack push ball_recovery,
@@ -961,10 +959,11 @@ impl BotBrain {
         match_state: MatchState,
         shot_targets: ShotTargets,
     ) -> Plan {
-        let committed_shot_active = self.jump_shot.is_some()
+        let committed_nonwall_shot_active = self.jump_shot.is_some()
             || self.double_jump_shot.is_some()
-            || self.aerial_shot.is_some()
-            || self.wall_drive_candidate.is_some();
+            || self.aerial_shot.is_some();
+        let committed_shot_active =
+            committed_nonwall_shot_active || self.wall_drive_candidate.is_some();
         self.aerial_candidate = None;
         self.wall_drive_candidate = None;
         self.boost_target = None;
@@ -1508,9 +1507,12 @@ impl BotBrain {
 
             // Noob Black's unfolded wall-shot scan competes with ordinary
             // ground/jump contacts, but never displaces an urgent save.
-            if !urgent_save && self.ground_flip.is_none() && self.defense_flip.is_none()
+            if !committed_nonwall_shot_active
+                && !urgent_save
+                && self.ground_flip.is_none()
+                && self.defense_flip.is_none()
                 && self.defense_recovery_target.is_none()
-                && self.aerial_shot.as_ref().is_none_or(|shot| !shot.aerialing) {
+            {
                 if let Some(wall) = find_wall_drive(
                     &me, &prediction.slices, me.team, opponent_goal, 5.0,
                 ) {
