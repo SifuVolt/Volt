@@ -2038,7 +2038,7 @@ impl BotBrain {
                 jump.ball.z - car.location.z,
                 car.velocity.z,
                 self.match_state.gravity.z,
-            ).time;
+            ).time as f32;
             let side = jump.side_shot;
             let side_mode = side.is_some();
 
@@ -2696,7 +2696,7 @@ impl BotBrain {
                         state.ball.z - car.location.z,
                         car.velocity.z,
                         self.match_state.gravity.z,
-                    ).time;
+                    ).time as f32;
                     offset_target.z = state.ball.z
                         + (offset_target.z - state.ball.z).clamp(-120.0, 120.0);
                     offset_target = offset_target
