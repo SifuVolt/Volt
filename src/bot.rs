@@ -387,7 +387,7 @@ impl BotBrain {
         self.teamplay_cover_released = true;
         self.teamplay_cover_owner = roles.and_then(|r| if r.goalie != r.challenger { Some(r.goalie) } else { None });
         let _ = ball;
-        self.teamplay_receive = receive_plan(candidate.ball, receive_aim);
+        self.teamplay_receive = receive_plan(me, candidate.ball, receive_aim);
     }
 
 
@@ -419,7 +419,7 @@ impl BotBrain {
         self.teamplay_contact_time = candidate.slice.time.clamp(0.0, 10.0);
         self.teamplay_cover_released = true;
         self.teamplay_cover_owner = roles.and_then(|r| if r.goalie != r.challenger { Some(r.goalie) } else { None });
-        self.teamplay_receive = receive_plan(candidate.slice.location, aim);
+        self.teamplay_receive = receive_plan(me, candidate.slice.location, aim);
     }
 
     pub fn teamplay_message(&self, now: f32) -> TeamplayMessage {
@@ -3111,11 +3111,18 @@ impl BotBrain {
 }
 
 
-fn receive_plan(contact: Vector, aim: Vector) -> Option<(Vector, Vector, Vector)> {
+fn receive_plan(car: CarState, contact: Vector, aim: Vector) -> Option<(Vector, Vector, Vector)> {
     let mut lane = (aim - contact).flatten();
-    if lane.magnitude() < 1.0 { return None; }
+    if lane.magnitude() < 1.0 {
+        lane = car.forward().flatten();
+    }
+    if lane.magnitude() < 1.0 {
+        return None;
+    }
     lane = lane.normalize();
-    let lane_distance = (contact.flat_distance(aim) * 0.28).clamp(350.0, 1050.0);
+    // Python scales the receiving lead from car-to-contact distance, not
+    // from the ball-to-goal distance.
+    let lane_distance = (car.location.distance(contact) * 0.28).clamp(350.0, 1050.0);
     Some((contact + lane * lane_distance, lane, contact))
 }
 
