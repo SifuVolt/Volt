@@ -117,6 +117,7 @@ struct JumpShotState {
     goal_aim_point: Option<Vector>,
     needed_jump_time: f32,
     jumping: bool,
+    dodging: bool,
     jump_time: Option<f32>,
     quick: bool,
     counter: u8,
@@ -2400,6 +2401,7 @@ impl BotBrain {
                     self.match_state.gravity.z,
                 ).time as f32,
                 jumping: false,
+                dodging: false,
                 jump_time: None,
                 quick: time_remaining <= 0.45,
                 counter: 0,
@@ -2606,6 +2608,7 @@ impl BotBrain {
                     self.match_state.gravity.z,
                 ).time as f32,
                 jumping: false,
+                dodging: false,
                 jump_time: None,
                 quick: jump.time <= 0.45,
                 counter: 0,
@@ -3553,7 +3556,7 @@ impl BotBrain {
         // Exact Python orientation rule: defaultPD aims the shot, then S
         // (positive pitch = nose up) is held only for a non-quick airborne
         // ball that is above the car. Keep defaultPD yaw and its paired roll.
-        if state.counter < 3 {
+        if state.counter < 3 && !state.dodging {
             controller.steer = pd.steer;
             controller.pitch = pd.pitch;
             controller.yaw = pd.yaw;
