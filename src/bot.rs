@@ -5279,7 +5279,10 @@ mod tests {
             side_mode: false,
             side_sign: 1.0,
             side_lateral_distance: 0.0,
-            targets: ShotTargets::default(),
+            targets: ShotTargets {
+                left: Vector::new(5000.0, -500.0, 300.0),
+                right: Vector::new(5000.0, 500.0, 300.0),
+            },
         };
         let future = BallSlice {
             time: 1.5,
