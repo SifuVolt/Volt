@@ -69,8 +69,8 @@ impl AerialShot {
         car: CarState,
         candidate: AerialCandidate,
         game_time: f32,
-        gravity: Vector,
-        boost_accel: f32,
+        _gravity: Vector,
+        _boost_accel: f32,
     ) -> Self {
         let ceiling = car.location.z > 2044.0 - car.hitbox.height * 2.0 && !car.jumped;
         let target_location = if ceiling {
@@ -563,55 +563,6 @@ impl AerialShot {
 
 }
 
-fn jump_prediction(
-    car: CarState,
-    time: f32,
-    elapsed: f32,
-    double_jump: bool,
-    gravity: Vector,
-) -> (Vector, Vector) {
-    let up = car.up();
-    let jump_remaining = (JUMP_DURATION - elapsed).clamp(0.0, JUMP_DURATION);
-    let stick_remaining = (0.05 - elapsed).clamp(0.0, 0.05);
-    let grounded = car.air_state == AirState::OnGround;
-    let mut position = car.location
-        + car.velocity * time
-        + gravity * (0.5 * time * time)
-        + if grounded { up * (JUMP_VEL * time) } else { Vector::ZERO }
-        + up * JUMP_ACCEL * jump_remaining * (time - 0.5 * jump_remaining)
-        - up * STICKY_ACCEL * stick_remaining * (time - 0.5 * stick_remaining);
-    let mut velocity = car.velocity
-        + gravity * time
-        + if grounded { up * JUMP_VEL } else { Vector::ZERO }
-        + up * JUMP_ACCEL * jump_remaining
-        - up * STICKY_ACCEL * stick_remaining;
-    if double_jump && !car.has_double_jumped && !car.has_dodged {
-        position = position + up * JUMP_VEL * (time - jump_remaining);
-        velocity = velocity + up * JUMP_VEL;
-    }
-    (position, velocity)
-}
-
-fn dodge_direction(car: CarState, shot_direction: Vector) -> Vector {
-    let forward = car.forward();
-    let flat_forward = forward.flatten().normalize();
-    let direction = shot_direction.flatten().normalize();
-    let perpendicular = Vector::new(flat_forward.y, -flat_forward.x, 0.0);
-    let mut local = Vector::new(-perpendicular.dot(direction), -flat_forward.dot(direction), 0.0);
-    let forward_velocity = forward.dot(car.velocity);
-    let speed_fraction = forward_velocity.abs() / MAX_SPEED;
-    let backwards = if forward_velocity.abs() < 100.0 {
-        local.x < 0.0
-    } else {
-        (local.x >= 0.0) != (forward_velocity > 0.0)
-    };
-    if backwards {
-        local.x /= (16.0 / 15.0) * (1.0 + 1.5 * speed_fraction);
-    }
-    local.y /= 1.0 + 0.9 * speed_fraction;
-    local.normalize()
-}
-
 fn shot_power_modifier(value: f32) -> f32 {
     let value = value.clamp(0.0, 4600.0);
     if value <= 500.0 {
@@ -620,7 +571,7 @@ fn shot_power_modifier(value: f32) -> f32 {
         let t = (value - 500.0) / 1800.0;
         0.65 + (0.55 - 0.65) * t
     } else {
-        let t = (value - MAX_SPEED) / 4600.0;
+        let t = (value - MAX_SPEED) / 2300.0;
         0.55 + (0.3 - 0.55) * t
     }
 }
