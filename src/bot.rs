@@ -145,6 +145,21 @@ struct HalfFlipState {
     flip_started_at: Option<f32>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct EmergencyClearState {
+    started_at: f32,
+    target: Option<Vector>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct PowerClearState {
+    started_at: f32,
+    phase: u8,
+    initial_ball_velocity: Vector,
+    initial_ball_z: f32,
+    contact_time: Option<f32>,
+}
+
 #[derive(Debug, Default)]
 pub struct BotBrain {
     kickoff_complete: bool,
@@ -186,6 +201,11 @@ pub struct BotBrain {
     transition_followup_until: f32,
     transition_last_target: Option<Vector>,
     transition_bump_cooldown_until: f32,
+    emergency_clear: Option<EmergencyClearState>,
+    emergency_save_zone_active: bool,
+    power_clear: Option<PowerClearState>,
+    last_goalie_role_time: f32,
+    last_emergency_clear_time: f32,
 }
 
 impl BotBrain {
@@ -230,6 +250,11 @@ impl BotBrain {
             transition_followup_until: -999.0,
             transition_last_target: None,
             transition_bump_cooldown_until: -999.0,
+            emergency_clear: None,
+            emergency_save_zone_active: false,
+            power_clear: None,
+            last_goalie_role_time: -999.0,
+            last_emergency_clear_time: -999.0,
         }
     }
 
@@ -336,8 +361,58 @@ impl BotBrain {
         if let Some(state) = self.half_flip {
             return self.run_half_flip(me, state, game_time, match_state.gravity.z);
         }
+
+        let side = team_side(me.team);
+        let own_goal = Vector::new(0.0, side * 5120.0, 0.0);
+        let ball_in_goal_danger = ball.location.flat_distance(own_goal) < 400.0
+            && ball.velocity.y * side > 250.0;
+        if ball_in_goal_danger {
+            if !self.emergency_save_zone_active {
+                self.emergency_save_zone_active = true;
+                if self.aerial_shot.is_none()
+                    && self.ground_flip.is_none()
+                    && self.defense_recovery_target.is_none()
+                {
+                    self.jump_shot = None;
+                    self.double_jump_shot = None;
+                    self.power_clear = None;
+                    self.emergency_clear = Some(EmergencyClearState {
+                        started_at: game_time,
+                        target: None,
+                    });
+                }
+            }
+        } else {
+            self.emergency_save_zone_active = false;
+        }
+
+        if let Some(state) = self.emergency_clear {
+            return self.run_emergency_clear(me, ball, game_time, state);
+        }
+        if let Some(state) = self.power_clear {
+            return self.run_power_clear(me, cars, ball, prediction, game_time, state);
+        }
+
         self.boost_pads.clear();
         self.boost_pads.extend_from_slice(boost_pads);
+        if self.jump_shot.is_none()
+            && self.double_jump_shot.is_none()
+            && self.aerial_shot.is_none()
+            && self.ground_flip.is_none()
+            && self.defense_recovery_target.is_none()
+            && self.ball_rolling_toward_me(me, cars, ball, prediction, game_time)
+        {
+            let state = PowerClearState {
+                started_at: game_time,
+                phase: 1,
+                initial_ball_velocity: ball.velocity,
+                initial_ball_z: ball.location.z,
+                contact_time: None,
+            };
+            self.power_clear = Some(state);
+            return self.run_power_clear(me, cars, ball, prediction, game_time, state);
+        }
+
         let plan = self.choose_plan(me, cars, ball, prediction, game_time, match_state, shot_targets);
 
         // VirxERLU routines are stack-prioritized: a recovery pushed by
@@ -752,8 +827,11 @@ impl BotBrain {
         } else {
             0.0
         };
-        let urgent_save = toward_goal_speed >= 400.0
-            && (ball_depth >= 1500.0 || to_own_goal.magnitude() <= 3200.0);
+        let extreme_danger = ball_depth > 4200.0 && ball.location.z < 350.0;
+        let low_ball_threat = ball_depth > 1200.0
+            && ball.location.z < 350.0
+            && ball.velocity.y * side > 250.0;
+        let urgent_save = extreme_danger || low_ball_threat;
 
         // The Python bot elects the challenger and deepest defender from
         // the same ball-dependency scores in every team size. Do not use a
@@ -1115,6 +1193,186 @@ impl BotBrain {
     }
 
 
+
+    fn ball_rolling_toward_me(
+        &mut self,
+        me: CarState,
+        cars: &[CarState],
+        ball: BallState,
+        prediction: &BallTrajectory,
+        game_time: f32,
+    ) -> bool {
+        let side = team_side(me.team);
+        let teammates: Vec<CarState> = cars.iter().copied()
+            .filter(|car| car.team == me.team && !car.demolished).collect();
+        let own_goal = Vector::new(0.0, side * 5120.0, 350.0);
+        let foe_goal = Vector::new(0.0, -side * 5120.0, 300.0);
+        if teammates.len() > 1 {
+            let roles = assign_roles_volt(
+                &teammates, ball, side, own_goal, foe_goal, prediction, game_time,
+            );
+            if roles.is_some_and(|role| role.goalie == me.index) {
+                self.last_goalie_role_time = game_time;
+                return false;
+            }
+        }
+        if game_time - self.last_goalie_role_time < 5.0 {
+            return false;
+        }
+        if ball.location.z > 120.0 || me.location.flat_distance(ball.location) > 2500.0 {
+            return false;
+        }
+        let ball_velocity = ball.velocity.flatten();
+        if ball_velocity.magnitude() < 250.0 {
+            return false;
+        }
+        let ball_to_car = (me.location - ball.location).flatten().normalize();
+        ball_velocity.normalize().dot(ball_to_car) > 0.65
+    }
+
+    fn run_emergency_clear(
+        &mut self,
+        car: CarState,
+        ball: BallState,
+        game_time: f32,
+        mut state: EmergencyClearState,
+    ) -> ControllerState {
+        if game_time - state.started_at > 2.0 {
+            self.emergency_clear = None;
+            return ControllerState::default();
+        }
+        let target = *state.target.get_or_insert_with(|| {
+            Vector::new(
+                if ball.location.x >= 0.0 { 3500.0 } else { -3500.0 },
+                ball.location.y,
+                0.0,
+            )
+        });
+        let target = cap_in_field(&car, target);
+        state.target = Some(target);
+        self.emergency_clear = Some(state);
+
+        let clear_direction = (target - ball.location).flatten().normalize();
+        if clear_direction.magnitude() < 0.001 {
+            return ControllerState::default();
+        }
+        let hit_target = ball.location - clear_direction * BALL_RADIUS;
+        if car.airborne {
+            self.defense_recovery_target = Some(hit_target);
+            return GridDefense::recovery_controller(car, hit_target, self.match_state.gravity.z);
+        }
+
+        let local_target = car.local_location(hit_target);
+        let local_ball = car.local_location(ball.location);
+        let distance = car.location.flat_distance(hit_target);
+        let angle = local_target.y.atan2(local_target.x).abs();
+        let drive = default_drive(
+            &car,
+            DriveInput {
+                target_speed: MAX_SPEED,
+                local_target,
+                upside_down: false,
+                up: None,
+                handbrake: false,
+                boost_accel: self.boost_accel,
+            },
+        );
+        let mut controller = controller_from_drive(drive, car);
+        controller.throttle = 1.0;
+        controller.boost = angle < 0.35 && distance > 500.0 && car.boost > 0.0;
+
+        if distance < 700.0 && local_ball.y.abs() < 180.0 && local_ball.x > 0.0 {
+            let flip = FlipState {
+                started_at: game_time,
+                direction: car.local(clear_direction).flatten().normalize(),
+                cancel: false,
+            };
+            self.emergency_clear = None;
+            self.ground_flip = Some(flip);
+            return self.run_ground_flip(Some(car), game_time, flip);
+        }
+        controller
+    }
+
+    fn run_power_clear(
+        &mut self,
+        car: CarState,
+        cars: &[CarState],
+        ball: BallState,
+        prediction: &BallTrajectory,
+        game_time: f32,
+        mut state: PowerClearState,
+    ) -> ControllerState {
+        let local_ball = car.local_location(ball.location);
+        let distance = car.location.flat_distance(ball.location);
+        if state.phase == 1 {
+            if car.airborne || game_time - state.started_at > 1.3
+                || (ball.location.z > 260.0 && distance > 350.0)
+            {
+                self.power_clear = None;
+                return ControllerState::default();
+            }
+            let velocity_change = (ball.velocity - state.initial_ball_velocity).magnitude();
+            let likely_contact = distance < 300.0
+                && (ball.location.z > state.initial_ball_z + 25.0
+                    || ball.velocity.z > 120.0
+                    || velocity_change > 300.0);
+            if likely_contact {
+                state.phase = 2;
+                state.contact_time = Some(game_time);
+                self.power_clear = Some(state);
+                return ControllerState::default();
+            }
+
+            let angle = local_ball.y.atan2(local_ball.x).abs();
+            let drive = default_drive(
+                &car,
+                DriveInput {
+                    target_speed: 1300.0,
+                    local_target: local_ball,
+                    upside_down: false,
+                    up: None,
+                    handbrake: false,
+                    boost_accel: self.boost_accel,
+                },
+            );
+            let mut controller = controller_from_drive(drive, car);
+            controller.throttle = 1.0;
+            controller.boost = angle < 0.18
+                && distance > 100.0
+                && car.boost > 0.0
+                && car.velocity.magnitude() < 1390.0;
+            self.power_clear = Some(state);
+            return controller;
+        }
+
+        let elapsed = game_time - state.contact_time.unwrap_or(game_time);
+        if ball.location.z > 140.0 || ball.velocity.z > 100.0 {
+            let opponents: Vec<CarState> = cars.iter().copied()
+                .filter(|other| other.team != car.team && !other.demolished).collect();
+            let aim = relative_goal_aim_point(car, ball.location, self.shot_targets);
+            if let Some(candidate) = find_aerial_candidate(
+                car, prediction, aim, &opponents, self.match_state.gravity, self.boost_accel,
+            ) {
+                let mut aerial = AerialShot::new(
+                    car, candidate, game_time, self.match_state.gravity, self.boost_accel,
+                );
+                let controls = aerial.run(
+                    car, game_time, self.match_state.gravity, self.boost_accel, 0.0,
+                );
+                self.power_clear = None;
+                if !aerial.finished { self.aerial_shot = Some(aerial); }
+                return controls;
+            }
+        }
+        if elapsed > 1.45 {
+            self.power_clear = None;
+        } else {
+            self.power_clear = Some(state);
+        }
+        ControllerState::default()
+    }
+
     fn run_wall_approach(
         &mut self,
         car: CarState,
@@ -1248,6 +1506,14 @@ impl BotBrain {
     }
 
     fn drive_to(&mut self, car: CarState, plan: Plan, game_time: f32, ball: BallState) -> ControllerState {
+        if plan.decision == Decision::EmergencyChallenge {
+            let state = self.emergency_clear.unwrap_or(EmergencyClearState {
+                started_at: game_time,
+                target: None,
+            });
+            self.emergency_clear = Some(state);
+            return self.run_emergency_clear(car, ball, game_time, state);
+        }
         if let Some(state) = self.double_jump_shot {
             return self.run_double_jump(car, state, game_time);
         }
