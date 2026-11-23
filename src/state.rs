@@ -136,6 +136,14 @@ impl CarState {
     pub fn up(&self) -> Vector {
         self.orientation.up
     }
+
+    /// Convert VirxERLU's local angular-velocity representation back to
+    /// RLBot's world-space angular velocity.
+    pub fn world_angular_velocity(&self) -> Vector {
+        self.forward() * self.angular_velocity.x
+            + self.right() * self.angular_velocity.y
+            + self.up() * self.angular_velocity.z
+    }
 }
 
 /// Ball position and velocity, matching Volt's Python ball_object.
