@@ -2699,14 +2699,21 @@ impl BotBrain {
             // actual hitbox length, with the current contact label rebuilt
             // against the refreshed shot vector.
             let contact_standoff = 92.75 + car.hitbox.length * 0.5;
-            let hitbox_target = state.ball - state.shot_direction * 155.0;
             let nominal_target = state.ball - state.shot_direction * contact_standoff;
+            // VirxERLU exposes hitbox offset in local forward/right/up axes;
+            // convert it to world space exactly as Python Aerial does.
+            let world_hitbox_offset = car.forward() * car.hitbox.offset.x
+                + car.right() * car.hitbox.offset.y
+                + car.up() * car.hitbox.offset.z;
+            let hitbox_target = nominal_target - world_hitbox_offset;
             let mut offset_target = contact_approach_from_label(
                 state.ball,
                 state.shot_direction,
                 state.contact_face,
                 contact_standoff,
-            ).map_or(hitbox_target, |refreshed| refreshed + hitbox_target - nominal_target);
+            ).map_or(hitbox_target, |refreshed| {
+                refreshed + hitbox_target - nominal_target
+            });
 
             if let Some(normal) = wall_normal {
                 let tangent = state.shot_direction - normal * state.shot_direction.dot(normal);
