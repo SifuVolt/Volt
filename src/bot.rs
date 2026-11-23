@@ -1794,7 +1794,7 @@ impl BotBrain {
                 self.shot_search_horizon(game_time),
                 self.unlimited_boost,
             ).filter(|candidate| {
-                selected.is_none_or(|ground_or_jump| candidate.score < ground_or_jump.score)
+                selected_score.is_none_or(|best_score| candidate.score < best_score)
             }) {
                 self.set_teamplay_aerial(me, ball, candidate, opponent_goal, aim, roles, urgent_save);
                 self.aerial_candidate = Some(candidate);
