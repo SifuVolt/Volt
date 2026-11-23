@@ -259,8 +259,8 @@ fn shot_patience_adjustment(
 
     let speed = car.velocity.flatten().magnitude();
     let estimated_speed = (speed + 650.0).clamp(1000.0, 2300.0);
-    let max_index = (slices.len() - 1).min(600);
-    for (i, future) in slices.iter().copied().enumerate().take(max_index + 1).skip(start + 1) {
+    let end_index = slices.len().min(600);
+    for (i, future) in slices.iter().copied().enumerate().take(end_index).skip(start + 1) {
         let future_time = (i + 1) as f32 / 120.0;
         if future_time <= current_time + 0.15 {
             continue;
