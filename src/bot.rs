@@ -2939,6 +2939,20 @@ impl BotBrain {
                         - self.match_state.gravity * (0.5 * jump_time * jump_time);
                 }
             }
+
+            if wall_normal.is_none() {
+                if let Some((selected_target, label)) = party_cannon_jump_front_contact(
+                    car,
+                    state.ball,
+                    state.shot_direction,
+                    time_remaining,
+                    self.match_state.gravity,
+                    state.contact_face_label,
+                ) {
+                    offset_target = selected_target;
+                    state.contact_face_label = Some(label);
+                }
+            }
             state.approach = offset_target;
         }
 
