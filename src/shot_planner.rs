@@ -215,8 +215,8 @@ fn parse_budget(me:CarState,slice:BallSlice,t:f32,targets:ShotTargets,g:Vector,b
 }
 
 /// Source-faithful port of routines.fast_intercept_finder.find().
-/// It searches every prediction slice, gives a reachable normal aerial
-/// priority over a high-ball fast aerial, then falls back to the earliest
+/// It searches every prediction slice and chooses the earliest reachable
+/// normal or high-ball fast aerial before falling back to the earliest
 /// reachable ground/jump/double/aerial touch without a goal target.
 pub fn find_fast_intercept_candidate(
     car: CarState,
