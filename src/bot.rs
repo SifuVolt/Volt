@@ -4748,19 +4748,15 @@ mod tests {
 
     #[test]
     fn shot_patience_waits_for_goal_alignment_when_the_car_can_reach_it() {
-        let me = car(
-            Vector::new(1000.0, 4500.0, 17.0),
-            Vector::new(1500.0, 0.0, 0.0),
-            50.0,
-        );
-        let mut slices = vec![
-            BallSlice {
+        let mut me = car(0, 0, Vector::new(1000.0, 4500.0, 17.0));
+        me.velocity = Vector::new(1500.0, 0.0, 0.0);
+        let mut slices: Vec<BallSlice> = (0..100)
+            .map(|i| BallSlice {
                 time: i as f32 / 120.0,
                 location: Vector::ZERO,
                 velocity: Vector::ZERO,
-            };
-            100
-        ];
+            })
+            .collect();
         slices[59] = BallSlice {
             time: 59.0 / 120.0,
             location: Vector::new(1000.0, 5000.0, 200.0),
