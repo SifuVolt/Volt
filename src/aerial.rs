@@ -185,6 +185,7 @@ impl AerialShot {
     fn run_side_wall_takeoff(
         &mut self,
         car: CarState,
+        game_time: f32,
         time_remaining: f32,
         boost_accel: f32,
     ) -> Option<ControllerState> {
@@ -271,57 +272,61 @@ impl AerialShot {
 
         self.side_wall_launched = true;
         self.side_wall_active = false;
-        self.jump_immediately = true;
         self.aerialing = true;
+        self.started_at = game_time;
         self.elapsed = 0.0;
         self.up = car.up();
         self.jumped = false;
+        self.first_jump_impulse_applied = false;
+        self.double_jump_complete = false;
+        self.double_jump_time = None;
         self.jump_release_frames = 0;
         self.second_jump_frames = 0;
         self.dodging = false;
         None
     }
 
-    fn boost_estimate(
+    fn party_cannon_boost_estimate(
         &self,
         car: CarState,
-        double_jump: bool,
-        elapsed: f32,
+        target: Vector,
         time_remaining: f32,
-        gravity: Vector,
+        final_position: Vector,
+        final_velocity: Vector,
         boost_accel: f32,
-    ) -> f32 {
+    ) -> Option<f32> {
         if time_remaining <= 1.0 / 120.0 {
-            return 0.0;
+            return Some(0.0);
         }
-        let time = time_remaining;
-        let (final_position, final_velocity) = if car.air_state == AirState::OnGround {
-            jump_prediction(car, time, elapsed, double_jump, gravity)
-        } else {
-            (
-                car.location + car.velocity * time + gravity * (0.5 * time * time),
-                car.velocity + gravity * time,
-            )
-        };
-        let delta = self.target_location - final_position;
-        let direction = delta.normalize();
-        let angle = delta.angle(car.forward()).max(0.0001);
+        let offset = target - final_position;
+        let distance = offset.magnitude();
+        if distance <= 1.0 {
+            return Some(0.0);
+        }
+        let direction = offset / distance;
+        let angle = direction.dot(car.forward()).clamp(-1.0, 1.0).acos().max(0.0001);
         let turn_time = (0.6 * (2.0 * (angle / 9.0).sqrt()))
-            .min((time - 1.0 / 120.0).max(0.0));
+            .min((time_remaining - 1.0 / 120.0).max(0.0));
         let tau1 = turn_time * (1.0 - 0.4 / angle).clamp(0.0, 1.0);
-        let available_time = (time - tau1).max(1.0 / 120.0);
-        let required_accel = 2.0 * delta.magnitude() / (available_time * available_time);
-        let ratio = required_accel / (boost_accel + AIR_THROTTLE_ACCEL);
-        let tau2 = time - available_time * (1.0 - ratio.clamp(0.0, 1.0)).sqrt();
-        let velocity_estimate = final_velocity
-            + direction * ((boost_accel + AIR_THROTTLE_ACCEL) * (tau2 - tau1));
-        let boost_estimate = (tau2 - tau1) * BOOST_CONSUMPTION;
-        let enough_boost = boost_estimate < car.boost * 0.9;
-        let enough_time = ratio.abs() < 0.9;
-        if velocity_estimate.magnitude() < MAX_SPEED * 0.9 && enough_boost && enough_time {
-            boost_estimate
+        let usable_time = (time_remaining - tau1).max(1.0 / 120.0);
+        let total_acceleration = boost_accel + AIR_THROTTLE_ACCEL;
+        let required_acceleration = 2.0 * distance / (usable_time * usable_time);
+        let ratio = required_acceleration / total_acceleration.max(1.0);
+        if ratio.abs() >= 0.9 {
+            return None;
+        }
+        let tau2 = time_remaining
+            - (time_remaining - tau1) * (1.0 - ratio.clamp(0.0, 1.0)).sqrt();
+        let boost_time = (tau2 - tau1).max(0.0);
+        let boost_estimate = boost_time * BOOST_CONSUMPTION;
+        let velocity_estimate =
+            final_velocity + direction * (total_acceleration * boost_time);
+        if velocity_estimate.magnitude() >= MAX_SPEED * 0.9
+            || boost_estimate >= car.boost.max(0.0) * 0.9
+        {
+            None
         } else {
-            -1.0
+            Some(boost_estimate)
         }
     }
 
@@ -331,116 +336,141 @@ impl AerialShot {
         game_time: f32,
         gravity: Vector,
         boost_accel: f32,
-        steer: f32,
+        _steer: f32,
     ) -> ControllerState {
-        let delta_time = (game_time - self.last_update).max(1.0 / 120.0);
+        let delta_time = (game_time - self.last_update).max(0.0);
         self.last_update = game_time;
+        let frame_dt = delta_time.max(1.0 / 120.0);
         let mut controls = ControllerState::default();
         let time_remaining = self.intercept_time - game_time;
         if self.finished {
             return controls;
         }
+
         if !self.side_wall_launched && !self.jumped && !self.dodging {
-            if let Some(wall_controls) = self.run_side_wall_takeoff(car, time_remaining, boost_accel) {
+            if let Some(wall_controls) =
+                self.run_side_wall_takeoff(car, game_time, time_remaining, boost_accel)
+            {
                 return wall_controls;
             }
         }
-        if self.dodging {
-            return self.run_dodge(car, controls, delta_time);
+
+        // Python Aerial.run starts the jump immediately from the floor. It
+        // does not wait for a custom steering threshold or re-select single
+        // versus fast aerial from a second, unrelated boost estimate.
+        if !self.aerialing {
+            self.aerialing = true;
+            if car.airborne {
+                self.jumped = true;
+            } else {
+                self.started_at = game_time;
+                self.jumped = false;
+                self.first_jump_impulse_applied = false;
+                self.double_jump_complete = false;
+                self.double_jump_time = None;
+                self.jump_release_frames = 0;
+                self.second_jump_frames = 0;
+            }
         }
 
-        if !self.aerialing {
-            if self.start_boost < car.boost || car.boost <= 0.0 || time_remaining <= 0.0 {
-                self.finished = true;
-                return controls;
+        self.elapsed = if self.jumped {
+            self.elapsed
+        } else {
+            (game_time - self.started_at).max(0.0)
+        };
+        let jump_elapsed = self.elapsed;
+        let time = time_remaining.max(0.000001);
+
+        // Python begins with the live ballistic state. Only the impulses that
+        // have not yet appeared in the live packet are added to the forecast.
+        let mut final_velocity = car.velocity + gravity * time_remaining;
+        let mut final_position =
+            car.location + car.velocity * time_remaining + gravity * (0.5 * time_remaining * time_remaining);
+        let up = car.up();
+
+        if !self.jumped {
+            let tau = (JUMP_DURATION - jump_elapsed).max(0.0);
+            if !self.first_jump_impulse_applied {
+                final_velocity = final_velocity + up * JUMP_VEL;
+                final_position = final_position + up * (JUMP_VEL * time_remaining);
+                self.first_jump_impulse_applied = true;
             }
-            if self.jump_immediately || steer.abs() < 0.2 {
-                let single = self.boost_estimate(
-                    car, false, self.elapsed, time_remaining, gravity, boost_accel,
-                );
-                let double = self.boost_estimate(
-                    car, true, self.elapsed, time_remaining, gravity, boost_accel,
-                );
-                if single >= 0.0 || double >= 0.0 {
-                    self.double_jump = double >= 0.0 && (double < single || single < 0.0);
-                    self.aerialing = true;
-                } else {
-                    self.finished = true;
-                    return controls;
+            final_velocity = final_velocity + up * (JUMP_ACCEL * tau);
+            final_position = final_position
+                + up * (JUMP_ACCEL * tau * (time_remaining - 0.5 * tau));
+
+            if self.fast_aerial {
+                if car.doublejumped {
+                    self.double_jump_complete = true;
+                }
+                if !self.double_jump_complete {
+                    let second_jump_delay = if let Some(double_jump_time) = self.double_jump_time {
+                        (double_jump_time - game_time).max(0.0)
+                    } else if jump_elapsed <= JUMP_DURATION {
+                        tau + 3.0 / 120.0
+                    } else {
+                        (3_i32 - self.jump_release_frames as i32).max(0) as f32 / 120.0
+                    };
+                    if time_remaining >= second_jump_delay {
+                        final_velocity = final_velocity + up * JUMP_VEL;
+                        final_position = final_position
+                            + up * (JUMP_VEL * (time_remaining - second_jump_delay));
+                    }
+                }
+            }
+
+            if jump_elapsed <= JUMP_DURATION {
+                controls.jump = true;
+            } else if self.fast_aerial && self.jump_release_frames < 3 {
+                self.jump_release_frames += 1;
+                controls.jump = false;
+            } else if self.fast_aerial && self.second_jump_frames < 3 {
+                self.second_jump_frames += 1;
+                controls.jump = true;
+                self.dodging = true;
+                if self.second_jump_frames == 1 && self.double_jump_time.is_none() {
+                    self.double_jump_time = Some(game_time);
                 }
             } else {
-                return controls;
-            }
-        }
-
-        self.elapsed += delta_time;
-        let mut currently_double_jumping = false;
-        if !self.jumped {
-            if self.elapsed <= JUMP_DURATION {
-                controls.jump = true;
-            } else if self.double_jump && self.jump_release_frames < 3 {
-                controls.jump = false;
-                self.jump_release_frames += 1;
-            } else if self.double_jump && self.second_jump_frames < 6 {
-                controls.jump = true;
-                self.second_jump_frames += 1;
-                currently_double_jumping = true;
-            } else {
+                self.dodging = false;
                 self.jumped = true;
             }
         }
 
         self.ceiling = car.location.z > 2044.0 - car.hitbox.height * 2.0 && !car.jumped;
-        let time = time_remaining.max(0.001);
-        let mut final_position = if self.jumped {
-            car.location + car.velocity * time + gravity * (0.5 * time * time)
-        } else {
-            jump_prediction(car, time, self.elapsed, self.double_jump, gravity).0
-        };
-
-        // Party Cannon's fast-aerial pitchback briefly tilts the nose up so
-        // forward boost contributes a vertical component. Its acceleration
-        // is included in the predicted contact position, not just the input.
         let fast_pitchback = self.fast_aerial
-            && self.aerialing
-            && (0.02..=0.16).contains(&self.elapsed)
+            && !self.jumped
+            && 0.02 <= jump_elapsed
+            && jump_elapsed <= 0.16
             && time_remaining > 0.30
             && self.target_location.z - final_position.z > 80.0
             && car.boost > 0.0
             && !self.backboard_mode
             && !self.ceiling
             && GridDefense::landing_plane(car.location, car.velocity, gravity.z) != 4;
+
         if fast_pitchback {
             let pitchback_time = time_remaining
-                .min(0.16 - self.elapsed)
+                .min(0.16 - jump_elapsed)
                 .min(car.boost / BOOST_CONSUMPTION)
                 .max(0.0);
             let pitchback_angle: f32 = 0.35;
-            let pitchback_direction = (
-                car.forward() * pitchback_angle.cos()
-                    + car.up() * pitchback_angle.sin()
-            ).normalize();
+            let pitchback_direction =
+                (car.forward() * pitchback_angle.cos() + up * pitchback_angle.sin()).normalize();
             let acceleration = pitchback_direction * boost_accel;
+            final_velocity = final_velocity + acceleration * pitchback_time;
             final_position = final_position
-                + acceleration * (pitchback_time * (time - 0.5 * pitchback_time));
+                + acceleration * (pitchback_time * (time_remaining - 0.5 * pitchback_time));
         }
 
         let offset = self.target_location - final_position;
         let offset_length = offset.magnitude();
         let forward = car.forward();
-        let forward_projection = offset.dot(forward) / time;
-        if fast_pitchback {
-            controls.boost = true;
-            controls.throttle = 1.0;
+        let forward_projection = if time_remaining > 0.0 {
+            offset.dot(forward) / time_remaining
         } else {
-            controls.boost = forward_projection
-                >= (boost_accel + AIR_THROTTLE_ACCEL) * delta_time.max(13.0 / 120.0)
-                && offset.angle(forward) < 0.4
-                && car.boost > 0.0;
-            controls.throttle = (forward_projection
-                / (AIR_THROTTLE_ACCEL * delta_time.max(1.0 / 120.0)))
-                .clamp(-1.0, 1.0);
-        }
+            0.0
+        };
 
         let aim_vector = if offset_length > 50.0 { offset } else { self.shot_direction };
         let local_aim = car.local(aim_vector);
@@ -449,83 +479,88 @@ impl AerialShot {
         } else if GridDefense::landing_plane(car.location, car.velocity, gravity.z) == 4 {
             (true, None)
         } else {
-            let up = if self.aerialing {
-                // Party Cannon keeps the roof aligned to world-up throughout
-                // the jump sequence, then rolls relative to the ball in flight.
-                Vector::new(0.0, 0.0, 1.0)
-            } else {
+            let up_reference = if self.jumped {
                 (self.ball - car.location).normalize()
+            } else {
+                Vector::new(0.0, 0.0, 1.0)
             };
-            (false, Some(car.local(up)))
+            (false, Some(car.local(up_reference)))
         };
         let (_, pd) = default_pd(&car, local_aim, upside_down, up_reference);
         controls.pitch = if fast_pitchback { 1.0 } else { pd.pitch };
         controls.yaw = pd.yaw;
         controls.roll = pd.roll;
 
-        if currently_double_jumping {
+        if self.dodging {
             controls.steer = 0.0;
-            controls.yaw = 0.0;
             controls.pitch = 0.0;
+            controls.yaw = 0.0;
             controls.roll = 0.0;
         }
 
-        let required_accel = 2.0 * offset_length / (time * time);
-        let cannot_reach = self.jumped
-            && offset_length > 50.0
-            && time > 0.5
-            && required_accel * 0.8 > AIR_THROTTLE_ACCEL
-            && (car.boost <= 0.0 || required_accel * 0.8 > boost_accel + AIR_THROTTLE_ACCEL);
-        if time_remaining <= 0.0 || cannot_reach
-            || (car.air_state == AirState::OnGround && self.jumped)
-        {
-            self.finished = true;
-        } else if (
-            (!self.double_jump && self.elapsed < 1.45)
-                || (!car.has_jumped && self.jumped)
-        ) && time_remaining < 0.1 && offset_length < 100.0 {
-            self.dodging = true;
-            self.dodge_elapsed = 0.0;
-            self.dodge_step = 0;
-            self.dodge_input = dodge_direction(car, self.shot_direction);
-            self.dodge_jump = car.air_state == AirState::OnGround;
-            return self.run_dodge(car, ControllerState::default(), delta_time);
-        } else if offset_length < 50.0 && !currently_double_jumping {
+        // The source checks boost budget for diagnostics/selection but keeps
+        // tracking the contact even when the estimate is rejected.
+        if time_remaining > 0.25 && !self.dodging {
+            let _ = self.party_cannon_boost_estimate(
+                car, self.target_location, time_remaining, final_position,
+                final_velocity, boost_accel,
+            );
+        }
+
+        if fast_pitchback && car.boost > 0.0 {
+            controls.boost = true;
+            controls.throttle = 1.0;
+        } else if time_remaining > 0.0 && offset_length > 1.0 {
+            let forward_need = offset.dot(forward) / time_remaining;
+            let contact_direction = offset.normalize();
+            let forward_angle = forward
+                .dot(contact_direction)
+                .clamp(-1.0, 1.0)
+                .acos();
+            controls.boost = forward_need
+                >= (boost_accel + AIR_THROTTLE_ACCEL) * frame_dt.max(13.0 / 120.0)
+                && forward_angle < 0.4
+                && car.boost > 0.0;
+            controls.throttle = (forward_need
+                / (AIR_THROTTLE_ACCEL * frame_dt.max(1.0 / 120.0)))
+                .clamp(-1.0, 1.0);
+        } else {
+            controls.boost = false;
+            controls.throttle = 0.0;
+        }
+
+        if offset_length < 50.0 && !self.dodging {
             let (_, aligned) = default_pd(&car, car.local(self.shot_direction), false, None);
             controls.pitch = aligned.pitch;
             controls.yaw = aligned.yaw;
             controls.roll = aligned.roll;
         }
+
+        let runtime_viable = aerial_shot_is_viable(
+            &car, self.target_location, time_remaining, gravity, boost_accel, false,
+        ).valid;
+        if time_remaining <= -0.4 || (self.jumped && time_remaining > 1.5 && !runtime_viable) {
+            self.finished = true;
+            return controls;
+        }
+
+        let side = if car.team == 0 { -1.0 } else { 1.0 };
+        let ceiling_flip = self.ceiling
+            && car.location.distance(self.target_location) < 92.0 + car.hitbox.length
+            && !car.doublejumped
+            && car.location.z < self.ball.z + 92.0
+            && self.target_location.y * side > -4240.0;
+        let normal_flip = !self.ceiling && !car.doublejumped && time_remaining < 0.1;
+        if ceiling_flip || normal_flip {
+            let local_target = car.local_location(self.target_location).flatten().normalize();
+            controls.pitch = -local_target.x;
+            controls.yaw = local_target.y;
+            controls.jump = true;
+        }
+
         controls
     }
 
-    fn run_dodge(
-        &mut self,
-        car: CarState,
-        mut controls: ControllerState,
-        delta_time: f32,
-    ) -> ControllerState {
-        self.dodge_elapsed += delta_time.max(1.0 / 120.0);
-        let grounded = car.air_state == AirState::OnGround;
-        if grounded && self.dodge_elapsed > (if self.dodge_jump { 0.1 } else { 0.0 }) + 0.1 {
-            self.finished = true;
-        } else if self.dodge_elapsed < 0.1 && self.dodge_jump {
-            controls.jump = true;
-        } else if self.dodge_step < 3 && self.dodge_jump {
-            controls.jump = false;
-            self.dodge_step += 1;
-        } else if self.dodge_elapsed < (if self.dodge_jump { 0.1 } else { 0.0 }) + 0.6 {
-            controls.yaw = self.dodge_input.x;
-            controls.pitch = self.dodge_input.y;
-            controls.jump = true;
-        } else {
-            self.finished = true;
-        }
-        if car.has_dodged {
-            self.finished = true;
-        }
-        controls
-    }
 }
 
 fn jump_prediction(
