@@ -5010,6 +5010,38 @@ mod tests {
     }
 
     #[test]
+    fn elected_three_player_cover_yields_to_a_comparable_teammate_shot() {
+        let me = car(0, 0, Vector::new(0.0, -2500.0, 17.0));
+        let attacker = car(1, 0, Vector::new(0.0, -1000.0, 17.0));
+        let transition = car(2, 0, Vector::new(1000.0, -1800.0, 17.0));
+        let ball = BallState {
+            location: Vector::new(0.0, -500.0, 100.0),
+            velocity: Vector::ZERO,
+        };
+        let role = TeamRoles { challenger: 1, goalie: 0, transition: Some(2) };
+        let mut messages = HashMap::new();
+        messages.insert(1, TeamplayMessage {
+            status: "SHOT_FOUND".to_owned(),
+            shot_type: "SHOT_FOUND".to_owned(),
+            score: 80.0,
+            contact_time: 1.2,
+            received_at: 0.9,
+            cover_owner: Some(0),
+            cover_released: false,
+            receive_x: None,
+            receive_y: None,
+            receive_dir_x: None,
+            receive_dir_y: None,
+            contact_x: None,
+            contact_y: None,
+        });
+        assert!(!should_commit_to_shot(
+            me, &[me, attacker, transition], ball, Some(role), false,
+            75.0, 1.5, &messages, 1.0,
+        ));
+    }
+
+    #[test]
     fn vulnerable_opponent_fallback_requires_close_ball_and_bad_facing() {
         let me = car(0, 0, Vector::new(0.0, -1000.0, 17.0));
         let ball = BallState {
