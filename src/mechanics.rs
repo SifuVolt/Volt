@@ -16,6 +16,9 @@ use rlbot::flat::ControllerState;
 pub struct MechanicsOutput {
     pub controller: ControllerState,
     pub finished: bool,
+    /// Python wave_dash pushes recovery when its two-second flight timeout expires.
+    pub recover: bool,
+    pub recovery_target: Option<Vector>,
 }
 
 /// The Python wall_dash routine's four phases:
@@ -96,7 +99,7 @@ impl WallDash {
                     if self.last_wall_contact.map_or(true, |last| now - last > 0.15) {
                         return MechanicsOutput { finished: true, ..Default::default() };
                     }
-                    return MechanicsOutput { controller: output, finished: false };
+                    return MechanicsOutput { controller: output, finished: false, ..Default::default() };
                 }
                 output.jump = true;
                 if phase_time >= Self::JUMP_TIME {
@@ -141,7 +144,7 @@ impl WallDash {
             }
         }
 
-        MechanicsOutput { controller: output, finished: false }
+        MechanicsOutput { controller: output, finished: false, ..Default::default() }
     }
 }
 
@@ -209,7 +212,12 @@ impl WaveDash {
         } else if !car.airborne {
             return MechanicsOutput { finished: true, ..Default::default() };
         } else if now - start > 2.0 {
-            return MechanicsOutput { finished: true, ..Default::default() };
+            return MechanicsOutput {
+                finished: true,
+                recover: true,
+                recovery_target: self.target,
+                ..Default::default()
+            };
         } else if car.location.z + car.velocity.z * 0.2 < 5.0 {
             output.jump = true;
             output.yaw = 0.0;
