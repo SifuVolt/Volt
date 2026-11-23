@@ -1605,23 +1605,25 @@ impl BotBrain {
             } else if self.unlimited_boost || me.airborne {
                 150.0
             } else {
-                350.0
+                450.0
             };
             if !urgent_save && self.jump_shot.is_none() && self.ground_flip.is_none() {
                 if let Some(candidate) = find_aerial_candidate(
                     me,
                     prediction,
                     aim,
-                    &opponents,
+                    self.shot_targets,
+                    cars,
                     match_state.gravity,
                     self.boost_accel,
+                    game_time,
+                    self.kickoff_contest_until,
+                    min_aerial_height,
+                    max_aerial_height,
+                    self.shot_search_horizon(game_time),
+                    self.unlimited_boost,
                 ).filter(|candidate| {
-                    candidate.slice.location.z > min_aerial_height
-                        && candidate.slice.location.z < max_aerial_height
-                        && (!candidate.fast || (ball.location.z > 350.0 && candidate.slice.location.z > 350.0))
-                        && selected.is_none_or(|ground_or_jump| {
-                            candidate.score + 0.05 < ground_or_jump.time
-                        })
+                    selected.is_none_or(|ground_or_jump| candidate.score < ground_or_jump.score)
                 }) {
                     self.aerial_candidate = Some(candidate);
                     return Plan {
@@ -1753,7 +1755,7 @@ impl BotBrain {
         } else if self.unlimited_boost || me.airborne {
             150.0
         } else {
-            350.0
+            450.0
         };
         if !urgent_save && self.ground_flip.is_none() && self.jump_shot.is_none() {
             if fast_intercept_zone && (me.airborne || game_time - self.last_landing_time > 0.5) {
@@ -1774,12 +1776,21 @@ impl BotBrain {
                 }
             }
             if let Some(candidate) = find_aerial_candidate(
-                me, prediction, aim, &opponents, match_state.gravity, self.boost_accel,
+                me,
+                prediction,
+                aim,
+                self.shot_targets,
+                cars,
+                match_state.gravity,
+                self.boost_accel,
+                game_time,
+                self.kickoff_contest_until,
+                min_aerial_height,
+                max_aerial_height,
+                self.shot_search_horizon(game_time),
+                self.unlimited_boost,
             ).filter(|candidate| {
-                candidate.slice.location.z > min_aerial_height
-                    && candidate.slice.location.z < max_aerial_height
-                    && (!candidate.fast || (ball.location.z > 350.0 && candidate.slice.location.z > 350.0))
-                    && selected.is_none_or(|ground_or_jump| candidate.score + 0.05 < ground_or_jump.time)
+                selected.is_none_or(|ground_or_jump| candidate.score < ground_or_jump.score)
             }) {
                 self.set_teamplay_aerial(me, ball, candidate, opponent_goal, aim, roles, urgent_save);
                 self.aerial_candidate = Some(candidate);
@@ -1972,11 +1983,41 @@ impl BotBrain {
 
         let elapsed = game_time - state.contact_time.unwrap_or(game_time);
         if ball.location.z > 140.0 || ball.velocity.z > 100.0 {
-            let opponents: Vec<CarState> = cars.iter().copied()
-                .filter(|other| other.team != car.team && !other.demolished).collect();
+            let friend_count = cars.iter().filter(|other| {
+                other.team == car.team && other.index != car.index && !other.demolished
+            }).count();
+            let foe_count = cars.iter().filter(|other| {
+                other.team != car.team && !other.demolished
+            }).count();
+            let max_aerial_height = if friend_count == 0 && foe_count == 1 {
+                1200.0
+            } else {
+                f32::INFINITY
+            };
+            let min_aerial_height = if max_aerial_height > 1200.0
+                && car.location.z >= 2044.0 - car.hitbox.height * 1.1
+            {
+                551.0
+            } else if self.unlimited_boost || car.airborne {
+                150.0
+            } else {
+                450.0
+            };
             let aim = relative_goal_aim_point(car, ball.location, self.shot_targets);
             if let Some(candidate) = find_aerial_candidate(
-                car, prediction, aim, &opponents, self.match_state.gravity, self.boost_accel,
+                car,
+                prediction,
+                aim,
+                self.shot_targets,
+                cars,
+                self.match_state.gravity,
+                self.boost_accel,
+                game_time,
+                self.kickoff_contest_until,
+                min_aerial_height,
+                max_aerial_height,
+                6.0,
+                self.unlimited_boost,
             ) {
                 let mut aerial = AerialShot::new(
                     car, candidate, game_time, self.match_state.gravity, self.boost_accel,
