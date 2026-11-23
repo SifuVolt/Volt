@@ -89,6 +89,9 @@ impl SpeedFlipKickoff {
 
                 if car.location.flat_distance(ball.location) < 1000.0 {
                     self.phase = 3;
+                    // Python explicitly forces boost on the transition frame,
+                    // even when the measured speed has crossed 2290.
+                    controller.boost = true;
                 }
             }
             // Python phase 3: drive through the ball and use a one-frame
