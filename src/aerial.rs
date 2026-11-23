@@ -582,13 +582,9 @@ pub fn party_cannon_shot_direction(
     gravity: Vector,
 ) -> Vector {
     let safe_time = time_remaining.max(1.0 / 120.0);
-    let raw_car_velocity = (ball - car.location) / safe_time;
-    let raw_speed = raw_car_velocity.magnitude();
-    let car_final_velocity = if raw_speed > MAX_SPEED {
-        raw_car_velocity * (MAX_SPEED / raw_speed)
-    } else {
-        raw_car_velocity
-    };
+    // VirxERLU Vector.cap is component-wise, not a magnitude clamp.
+    // Preserve the source's cap(0, max_speed), including its zero floor.
+    let car_final_velocity = ((ball - car.location) / safe_time).cap(0.0, MAX_SPEED);
 
     let velocity_for_power = (car_final_velocity * 6.0 + ball_velocity) / 7.0;
     let direction_to_score = (goal - ball).flatten().normalize();
@@ -632,13 +628,8 @@ fn contact_geometry(
     gravity: Vector,
 ) -> (Vector, Vector) {
     let time = slice.time.max(0.001);
-    let raw_car_velocity = (slice.location - car.location) / time;
-    let raw_speed = raw_car_velocity.magnitude();
-    let car_final_velocity = if raw_speed > MAX_SPEED {
-        raw_car_velocity * (MAX_SPEED / raw_speed)
-    } else {
-        raw_car_velocity
-    };
+    // Match Python Vector.cap(0, max_speed): component-wise clamping.
+    let car_final_velocity = ((slice.location - car.location) / time).cap(0.0, MAX_SPEED);
     let ball_after_velocity = (car_final_velocity * 6.0 + slice.velocity) / 7.0;
     let direction_to_goal = (goal - slice.location).flatten().normalize();
     let velocity_difference = (car_final_velocity - slice.velocity).magnitude();
