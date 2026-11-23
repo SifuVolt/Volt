@@ -3017,6 +3017,29 @@ impl BotBrain {
                 drive_speed = drive_speed.max(current_forward_speed.min(1200.0));
             }
 
+            // Keep a low-rate trace of the actual Python-equivalent
+            // arrival-speed controller. This distinguishes a planner timing
+            // error (large T -> low required speed) from a throttle/steering
+            // error (high requested speed but negative throttle).
+            if ((game_time * 4.0).round() as i32)
+                != (((game_time - 1.0 / 120.0) * 4.0).round() as i32)
+            {
+                println!(
+                    "[JUMP APPROACH TRACE] T={:.3} Tj={:.3} dist={:.1} required={:.1} drive={:.1} forward={:.1} angle={:.3} local_target=({:.1},{:.1}) boost={:.1} launch_window={}",
+                    t,
+                    t_j,
+                    distance_remaining,
+                    speed_required,
+                    drive_speed,
+                    car.local_velocity().x,
+                    angle_to_target,
+                    local_final_target.x,
+                    local_final_target.y,
+                    car.boost,
+                    t <= state.needed_jump_time * 1.08
+                );
+            }
+
             let drive = default_drive(
                 &car,
                 DriveInput {
