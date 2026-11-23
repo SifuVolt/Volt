@@ -2443,7 +2443,7 @@ impl BotBrain {
                     targets: jump.targets,
                 };
                 self.jump_shot = Some(state);
-                return self.run_jump_shot(car, state, game_time);
+                return self.run_jump_shot(car, ball, state, game_time);
             }
 
             let runtime_reachable = runtime_ground_reachability(
@@ -5456,7 +5456,7 @@ mod tests {
                     targets: ShotTargets { left: Vector::ZERO, right: Vector::ZERO },
         };
 
-        let controller = brain.run_jump_shot(me, state, 1.10);
+        let controller = brain.run_jump_shot(me, BallState { location: state.ball, velocity: state.ball_velocity }, state, 1.10);
         assert!(controller.boost);
         assert!(controller.throttle > 0.0);
     }
