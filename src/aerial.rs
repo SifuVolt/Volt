@@ -1017,6 +1017,28 @@ mod tests {
     }
 
     #[test]
+    fn jump_shot_party_cannon_direction_is_raw_before_jump_wall_correction() {
+        let mut me = car(Vector::new(3500.0, -1000.0, 17.0), 50.0);
+        me.velocity = Vector::new(0.0, 1500.0, 0.0);
+        let ball = Vector::new(4000.0, 0.0, 700.0);
+        let goal = Vector::new(0.0, 5120.0, 300.0);
+        let gravity = Vector::new(0.0, 0.0, -650.0);
+
+        let raw = party_cannon_shot_direction(
+            me, ball, Vector::ZERO, 1.0, goal, gravity,
+        );
+        let slice = BallSlice { time: 1.0, location: ball, velocity: Vector::ZERO };
+        let (_, aerial_corrected) = party_cannon_contact_geometry(me, slice, goal, gravity);
+
+        assert!(raw.magnitude() > 0.99);
+        assert!(aerial_corrected.magnitude() > 0.99);
+        assert!(
+            raw.distance(aerial_corrected) > 0.001,
+            "jump-shot direction must not inherit the aerial wall correction"
+        );
+    }
+
+    #[test]
     fn party_cannon_wall_aerial_correction_uses_vertical_wall_clearance() {
         let ball = Vector::new(4050.0, 0.0, 700.0);
         let direction = Vector::new(0.0, 1.0, 0.0);
