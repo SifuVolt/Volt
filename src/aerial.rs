@@ -473,7 +473,9 @@ impl AerialShot {
         } else if GridDefense::landing_plane(car.location, car.velocity, gravity.z) == 4 {
             (true, None)
         } else {
-            let up = if self.jumped {
+            let up = if self.aerialing {
+                // Party Cannon keeps the roof aligned to world-up throughout
+                // the jump sequence, then rolls relative to the ball in flight.
                 Vector::new(0.0, 0.0, 1.0)
             } else {
                 (self.ball - car.location).normalize()
