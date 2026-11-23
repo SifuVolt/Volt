@@ -660,7 +660,7 @@ impl BotBrain {
                 pending.shot.time = time_remaining;
                 pending.shot.ball = slice.location;
                 pending.shot.ball_velocity = slice.velocity;
-                let controller = self.drive_double_jump(me, pending.shot, game_time);
+                let controller = self.drive_double_jump(me, ball, pending.shot, prediction, game_time);
                 if self.double_jump_shot.is_some() {
                     self.pending_double_jump = None;
                 } else {
