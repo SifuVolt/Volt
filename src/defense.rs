@@ -296,7 +296,7 @@ impl GridDefense {
     }
 
     /// Port of VirxERLU-CLib::find_landing_plane, used by Volt's recovery routine.
-    fn landing_plane(location: Vector, velocity: Vector, gravity: f32) -> usize {
+    pub fn landing_plane(location: Vector, velocity: Vector, gravity: f32) -> usize {
         const SIDE_WALL: f64 = 4080.0;
         const GOAL_LINE: f64 = 5120.0;
         const BACK_WALL: f64 = 5110.0;
