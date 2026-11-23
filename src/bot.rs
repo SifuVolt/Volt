@@ -107,6 +107,7 @@ struct JumpShotState {
     shot_direction: Vector,
     contact_face: &'static str,
     contact_face_label: Option<&'static str>,
+    goal_aim_point: Option<Vector>,
     needed_jump_time: f32,
     jumping: bool,
     jump_time: Option<f32>,
@@ -2073,6 +2074,7 @@ impl BotBrain {
                 shot_direction: geometry.shot_direction,
                 contact_face: "centre",
                 contact_face_label: None,
+                goal_aim_point: None,
                 needed_jump_time: get_jump_time(
                     geometry.ball.z - car.location.z,
                     car.velocity.z,
@@ -2268,6 +2270,7 @@ impl BotBrain {
                 shot_direction: side.map_or(jump.shot_direction, |s| s.shot_direction),
                 contact_face: jump.contact_face,
                 contact_face_label: None,
+                goal_aim_point: None,
                 needed_jump_time: get_jump_time(
                     jump.ball.z - car.location.z,
                     car.velocity.z,
@@ -2758,6 +2761,18 @@ impl BotBrain {
             }
         }
 
+        if state.goal_aim_point.is_none() {
+            // Python caches _relative_goal_aim_point on the first routine
+            // frame, using the live ball's half of the field. Do not recompute
+            // it from the future intercept slice on every packet.
+            state.goal_aim_point = Some(relative_goal_aim_point(
+                car, current_ball.location, state.targets,
+            ));
+        }
+        let goal_aim = state.goal_aim_point.unwrap_or_else(|| {
+            relative_goal_aim_point(car, current_ball.location, state.targets)
+        });
+
         let t = state.intercept_time - game_time;
         let time_remaining = t.clamp(0.000001, 6.0);
 
@@ -2784,26 +2799,22 @@ impl BotBrain {
         // Recalculate the goal-directed shot vector and contact approach each
         // frame, as Python jump_shot.run does after it has committed to the
         // predicted ball slice.
-        let has_goal_targets = (state.targets.left - state.targets.right).magnitude() > 1.0;
-        let blended_shot = if has_goal_targets {
-            let goal_aim = relative_goal_aim_point(car, state.ball, state.targets);
-            let predicted_slice = BallSlice {
-                time: time_remaining,
-                location: state.ball,
-                velocity: state.ball_velocity,
-            };
-            let (_, predicted_shot) = party_cannon_contact_geometry(
-                car, predicted_slice, goal_aim, self.match_state.gravity,
-            );
-            let goal_shot = (goal_aim - state.ball).flatten().normalize();
-            let predicted_shot = predicted_shot.flatten().normalize();
-            if goal_shot.magnitude() > 0.001 && predicted_shot.magnitude() > 0.001 {
-                (goal_shot * 0.65 + predicted_shot * 0.35).normalize()
-            } else {
-                goal_shot
-            }
+        let predicted_slice = BallSlice {
+            time: time_remaining,
+            location: state.ball,
+            velocity: state.ball_velocity,
+        };
+        let (_, predicted_shot) = party_cannon_contact_geometry(
+            car, predicted_slice, goal_aim, self.match_state.gravity,
+        );
+        let goal_shot = (goal_aim - state.ball).flatten().normalize();
+        let predicted_shot = predicted_shot.flatten().normalize();
+        let blended_shot = if goal_shot.magnitude() > 0.001
+            && predicted_shot.magnitude() > 0.001
+        {
+            (goal_shot * 0.65 + predicted_shot * 0.35).normalize()
         } else {
-            state.shot_direction.flatten().normalize()
+            goal_shot
         };
         let (adjusted_shot, wall_normal, _) = wall_shot_adjust_jump(state.ball, blended_shot);
         state.shot_direction = adjusted_shot;
@@ -2883,7 +2894,7 @@ impl BotBrain {
         if !state.jumping {
             let t_j = t - state.needed_jump_time * 1.15;
             let mut final_target = state.approach.flatten();
-            if t_j > 0.0 && has_goal_targets && !state.side_mode {
+            if t_j > 0.0 && (state.targets.left - state.targets.right).magnitude() > 1.0 && !state.side_mode {
                 final_target = shot_approach_target(
                     car,
                     state.ball,
@@ -5258,6 +5269,7 @@ mod tests {
             shot_direction: Vector::new(1.0, 0.0, 0.0),
             contact_face: "centre",
             contact_face_label: None,
+                goal_aim_point: None,
             needed_jump_time: 0.2,
             jumping: true,
             jump_time: Some(1.0),
@@ -5295,6 +5307,7 @@ mod tests {
             shot_direction: Vector::new(1.0, 0.0, 0.0),
             contact_face: "centre",
             contact_face_label: None,
+                goal_aim_point: None,
             needed_jump_time: 0.2,
             jumping: true,
             jump_time: Some(1.0),
@@ -5327,6 +5340,7 @@ mod tests {
             shot_direction: Vector::new(1.0, 0.0, 0.0),
             contact_face: "centre",
             contact_face_label: None,
+                goal_aim_point: None,
             needed_jump_time: 0.2,
             jumping: true,
             jump_time: Some(1.0),
@@ -5359,6 +5373,7 @@ mod tests {
             shot_direction: Vector::new(1.0, 1.0, 0.0),
             contact_face: "centre",
             contact_face_label: None,
+                goal_aim_point: None,
             needed_jump_time: 0.2,
             jumping: true,
             jump_time: Some(1.0),
