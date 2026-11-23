@@ -636,10 +636,16 @@ impl BotBrain {
         // grid_defense remains active until the car regains wheel contact,
         // even if the strategic role changes during flight.
         if let Some(target) = self.defense_recovery_target {
+            let controller = GridDefense::recovery_controller(me, target, match_state.gravity.z);
             if me.airborne {
-                return GridDefense::recovery_controller(me, target, match_state.gravity.z);
+                return controller;
             }
+            // Python recovery() still runs once after a failed jump even if
+            // the car has already landed: it sets throttle/orientation, then
+            // pops itself on that grounded frame. Return that controller
+            // before allowing the planner to select the same shot again.
             self.defense_recovery_target = None;
+            return controller;
         }
 
         if self.defense_flip.is_some() {
@@ -3484,18 +3490,11 @@ impl BotBrain {
         // 0.8s, or after it has landed without finding a dodge window.
         if t <= -0.8 || (!car.airborne && state.counter >= 3) {
             self.jump_shot = None;
-            self.defense_recovery_target = None;
-            if car.airborne {
-                let target = if car.velocity.magnitude() > 1.0 {
-                    car.location + car.velocity.normalize() * 1000.0
-                } else {
-                    car.location + car.forward() * 1000.0
-                };
-                self.defense_recovery_target = Some(target);
-                return GridDefense::recovery_controller(
-                    car, target, self.match_state.gravity.z,
-                );
-            }
+            // Python pops jump_shot and pushes recovery() unconditionally,
+            // including when the car has already touched down. The recovery
+            // routine gets its own next tick to orient/throttle and then pop.
+            let target = car.location + car.velocity.normalize();
+            self.defense_recovery_target = Some(target);
             return ControllerState::default();
         }
 
