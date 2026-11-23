@@ -510,6 +510,71 @@ pub fn find_best_any_shot(
     best
 }
 
+
+/// Earliest-reachable slice search used by Volt's shallow-own-half and
+/// emergency fast-intercept path. Unlike the normal planner it does not
+/// downsample or rank later contacts: the first CLib-valid contact wins.
+pub fn find_fast_intercept(
+    me: CarState,
+    prediction: &BallTrajectory,
+    targets: ShotTargets,
+    gravity: Vector,
+    boost_accel: f32,
+    earliest_time: f32,
+    horizon: f32,
+    unlimited_boost: bool,
+) -> Option<ShotCandidate> {
+    if me.airborne || prediction.slices.is_empty() || horizon <= 0.10 {
+        return None;
+    }
+    let in_own_net = me.location.y * team_side(me.team) >= 5120.0
+        && me.location.x.abs() <= 900.0;
+    let mut flags = (true, !in_own_net, true);
+    for slice in &prediction.slices {
+        let time = slice.time;
+        if time < earliest_time.max(0.0) { continue; }
+        if time > horizon.min(6.0) { break; }
+        if slice.location.y.abs() > 5212.75 { break; }
+        let remaining = time - 1.0 / 120.0;
+        if remaining <= 0.0 { continue; }
+        flags = (true, !in_own_net, true);
+        if backwall_rebound(me, slice.location, slice.velocity) {
+            flags.1 = false;
+        }
+        if !unlimited_boost && me.boost <= 0.0 {
+            if slice.location.z > 105.0 {
+                flags.0 = false;
+                flags.1 = false;
+            } else {
+                flags.2 = false;
+            }
+        }
+        let parsed = parse_any_budget(
+            me, *slice, remaining, gravity, boost_accel, flags, unlimited_boost,
+        );
+        if !parsed.found { continue; }
+        let Some(kind) = parsed.shot_type else { continue; };
+        if kind == ShotType::Aerial { continue; }
+        let direction = (center(targets) - slice.location).flatten().normalize();
+        let mut parser = parsed;
+        parser.targets = targets;
+        parser.shot_vector = direction;
+        return Some(ShotCandidate {
+            time,
+            ball: slice.location,
+            ball_velocity: slice.velocity,
+            approach: parsed.approach_target,
+            shot_direction: direction,
+            shot_type: kind,
+            can_jump: !in_own_net,
+            fast: false,
+            score: time,
+            parser,
+        });
+    }
+    None
+}
+
 fn solve_quad(a:f64,b:f64,c:f64,y:f64,branch:i32)->Option<f32> {
     let root=(y-c)/a+b*b/(4.0*a*a);
     if root < -1.0e-12 {None}else{

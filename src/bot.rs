@@ -14,7 +14,7 @@ use crate::{
     planning::{find_wall_drive, wall_approach_geometry, WallDriveMode, WallDrivePlan},
     shot_physics::{double_jump_shot_is_viable, get_jump_time, ground_shot_is_viable, jump_shot_is_viable, ShotType},
     shot_parser::ShotTargets,
-    shot_planner::{find_best_any_shot, find_best_shot, grid_jump_time, ShotCandidate},
+    shot_planner::{find_best_any_shot, find_best_shot, find_fast_intercept, grid_jump_time, ShotCandidate},
     state::{BallState, BoostPadState, CarState, MatchState},
 };
 use std::collections::HashMap;
@@ -1029,19 +1029,27 @@ impl BotBrain {
 
         if is_challenger {
             let aim = shot_aim_point(ball.location, side, me.airborne);
-            let candidate = find_best_shot(
-                me, cars, ball.location, prediction, shot_targets,
-                match_state.gravity, self.boost_accel, game_time,
-                self.kickoff_contest_until, urgent_save, true, self.unlimited_boost, self.shot_search_horizon(game_time),
-            ).or_else(|| {
-                if ball_depth < me.location.y * side {
-                    find_best_any_shot(
-                        me, cars, prediction, shot_targets, match_state.gravity,
-                        self.boost_accel, game_time, self.kickoff_contest_until,
-                        self.unlimited_boost, self.shot_search_horizon(game_time),
-                    )
-                } else { None }
-            });
+            let fast_intercept_zone = ball_depth > 0.0 && ball_depth <= 1280.0;
+            let candidate = if fast_intercept_zone {
+                find_fast_intercept(
+                    me, prediction, shot_targets, match_state.gravity, self.boost_accel,
+                    0.10, self.shot_search_horizon(game_time), self.unlimited_boost,
+                )
+            } else {
+                find_best_shot(
+                    me, cars, ball.location, prediction, shot_targets,
+                    match_state.gravity, self.boost_accel, game_time,
+                    self.kickoff_contest_until, urgent_save, true, self.unlimited_boost, self.shot_search_horizon(game_time),
+                ).or_else(|| {
+                    if ball_depth < me.location.y * side {
+                        find_best_any_shot(
+                            me, cars, prediction, shot_targets, match_state.gravity,
+                            self.boost_accel, game_time, self.kickoff_contest_until,
+                            self.unlimited_boost, self.shot_search_horizon(game_time),
+                        )
+                    } else { None }
+                })
+            };
             if let Some(candidate) = candidate {
                 self.set_teamplay_shot(me, ball, candidate, opponent_goal, roles);
                 if !should_commit_to_shot(
@@ -1156,19 +1164,27 @@ impl BotBrain {
 
         // In 1v1 there is no separate goalie: the sole player challenges.
         let aim = shot_aim_point(ball.location, side, me.airborne);
-        let candidate = find_best_shot(
-            me, cars, ball.location, prediction, shot_targets,
-            match_state.gravity, self.boost_accel, game_time,
-            self.kickoff_contest_until, urgent_save, true, self.unlimited_boost, self.shot_search_horizon(game_time),
-        ).or_else(|| {
-            if ball_depth < me.location.y * side {
-                find_best_any_shot(
-                    me, cars, prediction, shot_targets, match_state.gravity,
-                    self.boost_accel, game_time, self.kickoff_contest_until,
-                    self.unlimited_boost, self.shot_search_horizon(game_time),
-                )
-            } else { None }
-        });
+        let fast_intercept_zone = ball_depth > 0.0 && ball_depth <= 1280.0;
+        let candidate = if fast_intercept_zone {
+            find_fast_intercept(
+                me, prediction, shot_targets, match_state.gravity, self.boost_accel,
+                0.10, self.shot_search_horizon(game_time), self.unlimited_boost,
+            )
+        } else {
+            find_best_shot(
+                me, cars, ball.location, prediction, shot_targets,
+                match_state.gravity, self.boost_accel, game_time,
+                self.kickoff_contest_until, urgent_save, true, self.unlimited_boost, self.shot_search_horizon(game_time),
+            ).or_else(|| {
+                if ball_depth < me.location.y * side {
+                    find_best_any_shot(
+                        me, cars, prediction, shot_targets, match_state.gravity,
+                        self.boost_accel, game_time, self.kickoff_contest_until,
+                        self.unlimited_boost, self.shot_search_horizon(game_time),
+                    )
+                } else { None }
+            })
+        };
         if let Some(candidate) = candidate {
             self.set_teamplay_shot(me, ball, candidate, opponent_goal, roles);
         }
