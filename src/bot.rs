@@ -4762,12 +4762,12 @@ mod tests {
                     targets: ShotTargets { left: Vector::ZERO, right: Vector::ZERO },
         };
 
-        let expected_dodge = me.local_location(state.ball).flatten().normalize();
         let controller = brain.run_jump_shot(me, state, 1.10);
         assert!(controller.jump);
-        assert!((controller.pitch + expected_dodge.x).abs() < 1e-6);
-        assert!((controller.yaw - expected_dodge.y).abs() < 1e-6);
-        assert!(brain.jump_shot.unwrap().dodge_started_at.is_some());
+        let committed = brain.jump_shot.unwrap();
+        assert!(committed.dodge_started_at.is_some());
+        assert!((controller.pitch + committed.dodge_direction.x).abs() < 1e-6);
+        assert!((controller.yaw - committed.dodge_direction.y).abs() < 1e-6);
     }
 
     #[test]
