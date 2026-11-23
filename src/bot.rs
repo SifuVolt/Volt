@@ -4053,6 +4053,25 @@ mod tests {
     }
 
     #[test]
+    fn vulnerable_opponent_fallback_requires_close_ball_and_bad_facing() {
+        let me = car(0, 0, Vector::new(0.0, -1000.0, 17.0));
+        let ball = BallState {
+            location: Vector::new(0.0, -500.0, 150.0),
+            velocity: Vector::ZERO,
+        };
+        let mut foe = car(1, 1, Vector::new(0.0, -300.0, 17.0));
+        foe.orientation = Matrix3::new(0.0, std::f32::consts::FRAC_PI_2, 0.0);
+        assert!(opponent_is_vulnerable(
+            me, ball, &[me, foe], Vector::new(0.0, -5120.0, 300.0),
+        ));
+
+        let far_me = car(0, 0, Vector::new(0.0, -3000.0, 17.0));
+        assert!(!opponent_is_vulnerable(
+            far_me, ball, &[far_me, foe], Vector::new(0.0, -5120.0, 300.0),
+        ));
+    }
+
+    #[test]
     fn one_player_is_always_the_challenger() {
         let only = car(2, 0, Vector::ZERO);
         let roles = assign_roles(&[only], BallState::default(), -1.0).unwrap();
