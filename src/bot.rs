@@ -737,7 +737,7 @@ impl BotBrain {
             return self.run_grid_defense(me, cars, ball, game_time, plan.decision);
         }
 
-        self.drive_to(me, plan, game_time, ball)
+        self.drive_to(me, plan, game_time, ball, prediction)
     }
 
     fn run_kickoff_dodge(
@@ -2122,7 +2122,7 @@ impl BotBrain {
         controller
     }
 
-    fn drive_to(&mut self, car: CarState, plan: Plan, game_time: f32, ball: BallState) -> ControllerState {
+    fn drive_to(&mut self, car: CarState, plan: Plan, game_time: f32, ball: BallState, prediction: &BallTrajectory) -> ControllerState {
         if plan.decision == Decision::Boost {
             let Some(pad) = self.boost_target else {
                 return ControllerState::default();
@@ -2446,7 +2446,7 @@ impl BotBrain {
                     targets: jump.targets,
                 };
                 self.jump_shot = Some(state);
-                return self.run_jump_shot(car, ball, state, game_time);
+                return self.run_jump_shot(car, ball, prediction, state, game_time);
             }
 
             let runtime_reachable = runtime_ground_reachability(
@@ -5516,7 +5516,7 @@ mod tests {
                     targets: ShotTargets { left: Vector::ZERO, right: Vector::ZERO },
         };
 
-        let controller = brain.run_jump_shot(me, BallState { location: state.ball, velocity: state.ball_velocity }, state, 1.10);
+        let controller = brain.run_jump_shot(me, BallState { location: state.ball, velocity: state.ball_velocity }, &BallTrajectory { slices: Vec::new() }, state, 1.10);
         assert!(controller.boost);
         assert!(controller.throttle > 0.0);
     }
