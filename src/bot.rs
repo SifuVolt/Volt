@@ -504,6 +504,7 @@ impl BotBrain {
             );
             if !me.airborne {
                 self.ball_recovery = false;
+                self.defense_recovery_target = None;
             }
             return controller;
         }
@@ -552,6 +553,7 @@ impl BotBrain {
             if aerial.finished {
                 self.aerial_shot = None;
                 if me.airborne {
+                    self.defense_recovery_target = None;
                     self.ball_recovery = true;
                     return GridDefense::ball_recovery_controller(
                         me, match_state.gravity.z,
