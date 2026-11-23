@@ -4762,10 +4762,11 @@ mod tests {
                     targets: ShotTargets { left: Vector::ZERO, right: Vector::ZERO },
         };
 
+        let expected_dodge = me.local_location(state.ball).flatten().normalize();
         let controller = brain.run_jump_shot(me, state, 1.10);
         assert!(controller.jump);
-        assert_eq!(controller.pitch, -1.0);
-        assert_eq!(controller.yaw, 0.0);
+        assert!((controller.pitch + expected_dodge.x).abs() < 1e-6);
+        assert!((controller.yaw - expected_dodge.y).abs() < 1e-6);
         assert!(brain.jump_shot.unwrap().dodge_started_at.is_some());
     }
 
@@ -4822,7 +4823,7 @@ mod tests {
                     targets: ShotTargets { left: Vector::ZERO, right: Vector::ZERO },
         };
 
-        let controller = brain.run_jump_shot(me, state, 1.50);
+        let controller = brain.run_jump_shot(me, state, 1.90);
         assert!(!controller.jump);
         assert!(brain.jump_shot.is_none());
     }
