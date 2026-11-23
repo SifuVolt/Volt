@@ -1072,7 +1072,7 @@ impl BotBrain {
         let intercept = candidate_to_intercept(me, candidate, self.shot_targets);
         let is_ground = shot_type == ShotType::Ground;
         Some(Plan {
-            decision: if is_ground { Decision::GroundShot } else { Decision::JumpShot },
+            decision: Decision::GroundChallenge,
             target: intercept.approach,
             target_speed: MAX_SPEED,
             shot: if is_ground { Some(intercept) } else { None },
