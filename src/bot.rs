@@ -604,16 +604,6 @@ impl BotBrain {
 
         // A newly reachable wall approach replaces ordinary ground/jump
         // setups, but never a launched aerial, flip, or recovery.
-        if matches!(plan.decision, Decision::EmergencyChallenge | Decision::Goalkeeper | Decision::Transition)
-            && self.aerial_shot.as_ref().is_some_and(|shot| !shot.aerialing)
-        {
-            self.aerial_shot = None;
-        }
-        if plan.decision == Decision::WallDrive
-            && self.aerial_shot.as_ref().is_some_and(|shot| !shot.aerialing)
-        {
-            self.aerial_shot = None;
-        }
 
         // Aerial aborts in the Python routine stack push ball_recovery,
         // which is distinct from ordinary recovery because it may boost
@@ -758,6 +748,12 @@ impl BotBrain {
                 }
                 self.jump_shot = Some(state);
             }
+        }
+
+        // A Python jump_shot is a committed routine-stack entry. Once it
+        // exists, new defensive/transition plans cannot steal its controller.
+        if let Some(state) = self.jump_shot {
+            return self.run_jump_shot(me, ball, prediction, state, game_time);
         }
 
         if self.jump_shot.is_none()
