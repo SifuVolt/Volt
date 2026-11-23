@@ -9,6 +9,7 @@ pub mod mechanics;
 pub mod kickoff;
 pub mod teamplay;
 pub mod bot;
+pub mod brain;
 mod control;
 mod defense;
 mod math;
