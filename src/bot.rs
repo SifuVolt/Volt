@@ -1541,6 +1541,25 @@ impl BotBrain {
         if is_challenger {
             let aim = shot_aim_point(ball.location, side, me.airborne);
             let fast_intercept_zone = transition_followup_active || (ball_depth > 0.0 && ball_depth <= 1280.0);
+            if fast_intercept_zone {
+                if let Some(plan) = self.fast_intercept_plan(
+                    me, cars, ball, prediction, game_time, opponent_goal, roles, urgent_save,
+                ) {
+                    return plan;
+                }
+                self.yield_teamplay_opportunity();
+                return Plan {
+                    decision: Decision::Transition,
+                    target: Vector::new(
+                        if me.location.x == 0.0 { 0.0 } else { me.location.x.signum() * 900.0 },
+                        side * 5050.0,
+                        0.0,
+                    ),
+                    target_speed: 1700.0,
+                    shot: None,
+                    jump: None,
+                };
+            }
             let mut candidate = if fast_intercept_zone {
                 find_fast_intercept(
                     me, prediction, shot_targets, match_state.gravity, self.boost_accel,
