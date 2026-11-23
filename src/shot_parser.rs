@@ -450,5 +450,6 @@ mod tests {
         let result=parse_slice_for_shot(&c,Vector::new(0.0,0.0,900.0),1.8,92.75,991.6667,Vector::new(0.0,0.0,-650.0),false,false,false,true,true);
         assert!(result.found);
         assert_eq!(result.shot_type,Some(ShotType::Aerial));
+        assert!((result.time - 1.8).abs() < 1e-6);
     }
 }
