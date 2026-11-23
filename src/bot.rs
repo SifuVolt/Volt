@@ -106,6 +106,7 @@ struct JumpShotState {
     shot_direction: Vector,
     contact_face: &'static str,
     quick: bool,
+    patience_applied: bool,
     dodge_started_at: Option<f32>,
     dodge_direction: Vector,
     side_mode: bool,
@@ -214,6 +215,70 @@ pub struct BotBrain {
     last_goalie_role_time: f32,
     was_airborne: bool,
     last_landing_time: f32,
+}
+
+fn shot_patience_adjustment(
+    car: CarState,
+    slices: &[BallSlice],
+    game_time: f32,
+    intercept_time: f32,
+    goal_y: f32,
+) -> Option<(f32, BallSlice)> {
+    if slices.is_empty() {
+        return None;
+    }
+
+    let current_time = (intercept_time - game_time).max(0.0);
+    let start = ((current_time * 120.0).round() as isize - 1)
+        .clamp(0, slices.len() as isize - 1) as usize;
+    if start >= slices.len() - 1 {
+        return None;
+    }
+
+    let current = slices[start];
+    let current_pos = current.location;
+    let current_vel = current.velocity;
+    let sign_x = if current_pos.x < 0.0 {
+        -1.0
+    } else if current_pos.x > 0.0 {
+        1.0
+    } else {
+        0.0
+    };
+    let alignment_wait = current_pos.x.abs() < 3000.0
+        && current_pos.x.abs() - 890.0 + 92.75 * 2.0_f32.sqrt()
+            > (current_pos.y - goal_y).abs()
+        && current_vel.x * sign_x < 0.0;
+    let falling_wait = current_pos.z > 180.0 && current_vel.z < -80.0;
+    if !alignment_wait && !falling_wait {
+        return None;
+    }
+
+    let speed = car.velocity.flatten().magnitude();
+    let estimated_speed = (speed + 650.0).clamp(1000.0, 2300.0);
+    let max_index = (slices.len() - 1).min(600);
+    for (i, future) in slices.iter().copied().enumerate().take(max_index + 1).skip(start + 1) {
+        let future_time = (i + 1) as f32 / 120.0;
+        if future_time <= current_time + 0.15 {
+            continue;
+        }
+        let pos = future.location;
+        let vel = future.velocity;
+        let distance = car.location.flat_distance(pos);
+        if distance / estimated_speed > future_time + 0.15 {
+            continue;
+        }
+
+        let aligned = alignment_wait
+            && pos.x.abs() - 890.0 + 92.75 * 2.0_f32.sqrt()
+                <= (pos.y - goal_y).abs();
+        let fallen = falling_wait && pos.z <= 180.0 && vel.z <= 80.0;
+        if aligned || fallen {
+            return Some((game_time + future_time, future));
+        }
+    }
+
+    None
 }
 
 impl BotBrain {
@@ -591,6 +656,25 @@ impl BotBrain {
                     }
                     self.jump_shot = Some(state);
                 }
+            }
+        }
+
+        if let Some(mut state) = self.jump_shot {
+            if !state.patience_applied {
+                let foe_goal_y = -team_side(me.team) * 5120.0;
+                if let Some((new_intercept_time, later_slice)) = shot_patience_adjustment(
+                    me,
+                    &prediction.slices,
+                    game_time,
+                    state.intercept_time,
+                    foe_goal_y,
+                ) {
+                    state.intercept_time = new_intercept_time;
+                    state.ball = later_slice.location;
+                    state.ball_velocity = later_slice.velocity;
+                    state.patience_applied = true;
+                }
+                self.jump_shot = Some(state);
             }
         }
 
