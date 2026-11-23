@@ -171,12 +171,9 @@ impl AerialShot {
                     + car.up() * car.hitbox.offset.z;
                 target_location =
                     self.ball - shot_direction * approach_distance - hitbox_offset;
+                target_location.z -= AERIAL_CONTACT_DROP;
             }
         }
-
-        // The nose should meet the lower-middle of the ball (halfway from
-        // centre to bottom), not aim through the exact centre.
-        target_location.z -= AERIAL_CONTACT_DROP;
 
         if self.ceiling {
             target_location.z -= 92.0;
@@ -656,7 +653,9 @@ fn contact_geometry(
     let hitbox_offset = car.forward() * car.hitbox.offset.x
         + car.right() * car.hitbox.offset.y
         + car.up() * car.hitbox.offset.z;
-    let target_location = slice.location - shot_direction * approach_distance - hitbox_offset;
+    let mut target_location = slice.location - shot_direction * approach_distance - hitbox_offset;
+    // Aim the nose at the lower-middle of the ball, halfway from centre to bottom.
+    target_location.z -= AERIAL_CONTACT_DROP;
     (target_location, shot_direction)
 }
 
