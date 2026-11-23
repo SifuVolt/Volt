@@ -2252,266 +2252,41 @@ impl BotBrain {
             if jump.shot_type == ShotType::DoubleJump {
                 return self.drive_double_jump(car, jump, game_time);
             }
-            let t = jump.time;
-            let time_remaining = t.clamp(0.000001, 6.0);
-            let jump_time = get_jump_time(
-                jump.ball.z - car.location.z,
-                car.velocity.z,
-                self.match_state.gravity.z,
-            ).time as f32;
+
+            // Python pushes jump_shot as soon as the parser finds a viable
+            // candidate. The routine owns the entire approach phase; it is
+            // not created only after the car has already reached its launch
+            // window. This keeps one intercept, one patience decision and one
+            // live contact target across the full approach.
             let side = jump.side_shot;
-            let side_mode = side.is_some();
-
-            // Python jump_shot recomputes its outgoing shot direction and
-            // hitbox-centre target before every approach-drive decision. The
-            // parser's candidate vector is not the live routine's final
-            // direction: blend the goal ray with Party Cannon's predicted
-            // post-contact ray, apply the jump wall correction, then rebuild
-            // the hitbox-aware front-face target exactly as run_jump_shot does.
-            let mut approach = jump.approach;
-            let mut shot_direction = jump.shot_direction;
-            if !side_mode {
-                let goal_aim = relative_goal_aim_point(car, jump.ball, jump.targets);
-                let slice = BallSlice {
-                    time: t.max(0.001),
-                    location: jump.ball,
-                    velocity: jump.ball_velocity,
-                };
-                let (_, predicted_shot) =
-                    party_cannon_contact_geometry(car, slice, goal_aim, self.match_state.gravity);
-                let goal_shot = (goal_aim - jump.ball).flatten().normalize();
-                let predicted_shot = predicted_shot.flatten().normalize();
-                let blended = if goal_shot.magnitude() > 0.001
-                    && predicted_shot.magnitude() > 0.001
-                {
-                    (goal_shot * 0.65 + predicted_shot * 0.35).normalize()
-                } else {
-                    goal_shot
-                };
-                let (adjusted, wall_normal, _) =
-                    wall_shot_adjust_jump(jump.ball, blended);
-                shot_direction = adjusted;
-
-                let standoff = 92.75 + car.hitbox.length * 0.5;
-                let nominal_target = jump.ball - shot_direction * standoff;
-                let world_hitbox_offset = car.forward() * car.hitbox.offset.x
-                    + car.right() * car.hitbox.offset.y
-                    + car.up() * car.hitbox.offset.z;
-                let hitbox_target = nominal_target - world_hitbox_offset;
-                let mut offset_target = contact_approach_from_label(
-                    jump.ball, shot_direction, jump.contact_face, standoff,
-                ).map_or(hitbox_target, |refreshed| {
-                    refreshed + hitbox_target - nominal_target
-                });
-
-                if let Some(normal) = wall_normal {
-                    let tangent = shot_direction - normal * shot_direction.dot(normal);
-                    if tangent.magnitude() > 0.001 {
-                        offset_target = offset_target - tangent.normalize() * 25.0;
-                    }
-                    if normal.z.abs() < 0.95 {
-                        offset_target.z = jump.ball.z
-                            + (offset_target.z - jump.ball.z).clamp(-120.0, 120.0);
-                        offset_target = offset_target
-                            - self.match_state.gravity
-                                * (0.5 * jump_time * jump_time);
-                    }
-                }
-
-                if wall_normal.is_none() {
-                    if let Some((selected_target, _label)) = party_cannon_jump_front_contact(
-                        car, jump.ball, shot_direction, t,
-                        self.match_state.gravity, false, None,
-                    ) {
-                        offset_target = selected_target;
-                    }
-                }
-                approach = offset_target;
-            }
-
-            // This is the Python jump_shot approach calculation in the same
-            // order: measure distance before field clamping, then clamp the
-            // target used by defaultDrive.
-            let mut final_target = approach.flatten();
-            let tj = t - jump_time * 1.15;
-            if tj > 0.0 && !side_mode {
-                final_target = shot_approach_target(
-                    car, jump.ball, final_target, shot_direction, tj,
-                );
-            }
-            let distance_before_field_cap = final_target.flat_distance(car.location);
-            final_target = cap_in_field(&car, final_target);
-            let local_final_target = car.local_location(final_target);
-            let local_offset_target = car.local_location(approach.flatten());
-            let local_ball = car.local_location(jump.ball);
-            let mut distance_remaining = if car.airborne {
-                local_offset_target.x
-            } else {
-                distance_before_field_cap
-            };
-            distance_remaining -= car.hitbox.length / 3.0;
-
-            let mut speed_required = distance_remaining / time_remaining;
-            let ball_speed_toward_shot = ball.velocity.dot(jump.shot_direction);
-            if speed_required < 1900.0
-                && car.boost > 50.0
-                && t > 2.0
-                && distance_remaining > 2560.0
-                && ball_speed_toward_shot > 1000.0
-            {
-                speed_required *= 0.75;
-            }
-
-            let current_forward_speed = car.local_velocity().x;
-            let power_dodge_window = t < 0.35
-                && t > 0.10
-                && local_ball.x > 0.0
-                && current_forward_speed > 700.0;
-            let mut drive_speed = speed_required;
-            if power_dodge_window {
-                drive_speed = drive_speed.max(current_forward_speed.min(1200.0));
-            }
-
-            // Exact Python defaultDrive call. No additional reverse policy,
-            // arbitrary heading speed cap, or unconditional powerslide.
-            let output = default_drive(
-                &car,
-                DriveInput {
-                    target_speed: drive_speed,
-                    local_target: local_final_target,
-                    upside_down: false,
-                    up: None,
-                    handbrake: false,
-                    boost_accel: self.boost_accel,
-                },
-            );
-            let velocity = if output.car_speed.abs() < 0.001 {
-                1.0
-            } else {
-                output.car_speed
-            };
-
-            let future_velocity = car.velocity + self.match_state.gravity * t;
-            let local_future_velocity = car.local(future_velocity.flatten());
-            let impulse = dodge_impulse(car.velocity, MAX_SPEED);
-            let denominator = velocity + impulse;
-            let time_to_target = if denominator.abs() > 0.001 {
-                distance_remaining / denominator
-            } else {
-                f32::INFINITY
-            };
-
-            let aligned = local_offset_target.y.abs() < 92.0
-                && local_future_velocity.x
-                    >= local_offset_target.x - car.hitbox.length / 3.0
-                && local_offset_target.x > 0.0;
-            let close_enough = velocity.abs() < 100.0
-                && distance_remaining < car.hitbox.length / 2.0;
-
-            // Match Python's ordering: start the jump as soon as the
-            // alignment/contact window is reached. Runtime reachability is an
-            // abort condition after that, not an extra launch prerequisite.
-            let side_ready = side_mode
-                && distance_remaining < 180.0
-                && t <= jump_time * 1.08;
-            let normal_ready = (close_enough || aligned)
-                && t <= jump_time * 1.08;
-
-            if !car.airborne && (side_ready || normal_ready) {
-                let shot_direction = side.map_or(shot_direction, |s| s.shot_direction);
-                let state = JumpShotState {
-                    started_at: game_time,
-                    intercept_time: game_time + t,
-                    ball: jump.ball,
-                    ball_velocity: jump.ball_velocity,
-                    approach,
-                    shot_direction,
-                    contact_face: jump.contact_face,
-                    contact_face_label: None,
-                    needed_jump_time: get_jump_time(
-                        jump.ball.z - car.location.z,
-                        car.velocity.z,
-                        self.match_state.gravity.z,
-                    ).time as f32,
-                    jumping: false,
-                    jump_time: None,
-                    quick: t <= 0.45,
-                    counter: 0,
-                    patience_applied: false,
-                    dodge_started_at: None,
-                    dodge_direction: Vector::new(1.0, 0.0, 0.0),
-                    side_mode,
-                    side_sign: side.map_or(1.0, |s| s.side_sign),
-                    side_lateral_distance: side.map_or(0.0, |s| s.lateral_distance),
-                    targets: jump.targets,
-                };
-                self.jump_shot = Some(state);
-                return self.run_jump_shot(car, ball, prediction, state, game_time);
-            }
-
-            let runtime_reachable = runtime_ground_reachability(
-                t,
-                self.boost_accel,
-                &car,
-                (final_target - car.location).normalize(),
-                distance_remaining,
-            ).is_some_and(|remaining| {
-                jump_shot_is_viable(
-                    remaining,
-                    self.match_state.gravity.z,
+            let state = JumpShotState {
+                started_at: game_time,
+                intercept_time: game_time + jump.time,
+                ball: jump.ball,
+                ball_velocity: jump.ball_velocity,
+                approach: jump.approach,
+                shot_direction: side.map_or(jump.shot_direction, |s| s.shot_direction),
+                contact_face: jump.contact_face,
+                contact_face_label: None,
+                needed_jump_time: get_jump_time(
+                    jump.ball.z - car.location.z,
                     car.velocity.z,
-                    car.hitbox.height,
-                    car.airborne,
-                    jump.approach.z,
-                    true,
-                )
-            });
-
-            if t <= jump_time
-                || (tj > 0.0 && distance_remaining > 50.0 && !runtime_reachable)
-            {
-                if car.airborne {
-                    let target = if car.velocity.magnitude() > 1.0 {
-                        car.location + car.velocity.normalize() * 1000.0
-                    } else {
-                        car.location + car.forward() * 1000.0
-                    };
-                    self.defense_recovery_target = Some(target);
-                    return GridDefense::recovery_controller(
-                        car, target, self.match_state.gravity.z,
-                    );
-                }
-                return ControllerState::default();
-            }
-
-            let angle_to_target = local_final_target.y.atan2(local_final_target.x).abs();
-            if !self.unlimited_boost
-                && car.boost < 48.0
-                && angle_to_target < 0.03
-                && velocity > 600.0
-                && time_to_target >= jump_time * 1.15 + 1.5
-            {
-                if self.match_state.gravity.z < -450.0 && time_to_target < 5.0 {
-                    let mut wave = crate::mechanics::WaveDash::new(Some(local_offset_target));
-                    let result = wave.tick(car, game_time);
-                    if !result.finished {
-                        self.wave_dash = Some(wave);
-                        return result.controller;
-                    }
-                } else {
-                    let flip = FlipState {
-                        started_at: game_time,
-                        direction: local_offset_target.flatten().normalize(),
-                        cancel: false,
-                    };
-                    self.ground_flip = Some(flip);
-                    return self.run_ground_flip(Some(car), game_time, flip);
-                }
-            }
-            if t <= jump_time {
-                return ControllerState::default();
-            }
-            return controller_from_drive(output, car);
+                    self.match_state.gravity.z,
+                ).time as f32,
+                jumping: false,
+                jump_time: None,
+                quick: jump.time <= 0.45,
+                counter: 0,
+                patience_applied: false,
+                dodge_started_at: None,
+                dodge_direction: Vector::new(1.0, 0.0, 0.0),
+                side_mode: side.is_some(),
+                side_sign: side.map_or(1.0, |s| s.side_sign),
+                side_lateral_distance: side.map_or(0.0, |s| s.lateral_distance),
+                targets: jump.targets,
+            };
+            self.jump_shot = Some(state);
+            return self.run_jump_shot(car, ball, prediction, state, game_time);
         }
 
         if let Some(shot) = plan.shot {
@@ -2965,6 +2740,21 @@ impl BotBrain {
             state.jump_time = Some(game_time);
             jump_elapsed = 0.0;
         }
+        // Python's shot_patience.adjust runs inside the routine, including
+        // the first frame after the shot is selected. Do not wait until the
+        // car reaches the jump window before allowing the intercept to move.
+        if !state.jumping && !state.patience_applied {
+            let foe_goal_y = -team_side(car.team) * 5120.0;
+            if let Some((new_time, later_slice)) = shot_patience_adjustment(
+                car, &prediction.slices, game_time, state.intercept_time, foe_goal_y,
+            ) {
+                state.intercept_time = new_time;
+                state.ball = later_slice.location;
+                state.ball_velocity = later_slice.velocity;
+                state.patience_applied = true;
+            }
+        }
+
         let t = state.intercept_time - game_time;
         let time_remaining = t.clamp(0.000001, 6.0);
 
