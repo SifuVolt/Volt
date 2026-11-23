@@ -61,6 +61,7 @@ pub struct AerialShot {
     pub dodge_jump: bool,
     pub side_wall_launched: bool,
     pub side_wall_active: bool,
+    pub ceiling: bool,
     pub finished: bool,
 }
 
@@ -106,6 +107,7 @@ impl AerialShot {
             dodge_jump: true,
             side_wall_launched: false,
             side_wall_active: false,
+            ceiling: car.location.z > 2044.0 - car.hitbox.height * 2.0 && !car.jumped,
             finished: false,
         };
         let single = aerial.boost_estimate(car, false, 0.0, candidate.slice.time, gravity, boost_accel);
@@ -116,6 +118,40 @@ impl AerialShot {
         aerial
     }
 
+    /// Refresh the committed aerial's contact from the latest absolute
+    /// prediction, matching Python Aerial.run's nearest-timestamp selection.
+    /// The intercept itself remains committed; only its predicted slice and
+    /// hitbox-aware contact geometry are refreshed.
+    pub fn refresh_prediction(
+        &mut self,
+        car: CarState,
+        prediction: &BallTrajectory,
+        game_time: f32,
+        goal: Vector,
+        gravity: Vector,
+    ) {
+        let time_remaining = self.intercept_time - game_time;
+        if prediction.slices.is_empty() || time_remaining <= 0.0 {
+            return;
+        }
+        let Some(slice) = prediction.slices.iter().copied().min_by(|a, b| {
+            (a.time - time_remaining).abs().total_cmp(&(b.time - time_remaining).abs())
+        }) else {
+            return;
+        };
+        self.ball = slice.location;
+        self.slice_velocity = slice.velocity;
+        self.slice_time = slice.time;
+        self.shot_target = goal;
+        let (mut target_location, shot_direction) =
+            contact_geometry(car, slice, goal, gravity);
+        self.ceiling = car.location.z > 2044.0 - car.hitbox.height * 2.0 && !car.jumped;
+        if self.ceiling {
+            target_location.z -= 92.0;
+        }
+        self.target_location = target_location;
+        self.shot_direction = shot_direction;
+    }
 
     fn run_side_wall_takeoff(
         &mut self,
@@ -226,7 +262,10 @@ impl AerialShot {
         gravity: Vector,
         boost_accel: f32,
     ) -> f32 {
-        let time = time_remaining.max(0.001);
+        if time_remaining <= 1.0 / 120.0 {
+            return 0.0;
+        }
+        let time = time_remaining;
         let (final_position, final_velocity) = if car.air_state == AirState::OnGround {
             jump_prediction(car, time, elapsed, double_jump, gravity)
         } else {
@@ -238,9 +277,10 @@ impl AerialShot {
         let delta = self.target_location - final_position;
         let direction = delta.normalize();
         let angle = delta.angle(car.forward()).max(0.0001);
-        let turn_time = 0.6 * (2.0 * (angle / 9.0).sqrt());
+        let turn_time = (0.6 * (2.0 * (angle / 9.0).sqrt()))
+            .min((time - 1.0 / 120.0).max(0.0));
         let tau1 = turn_time * (1.0 - 0.4 / angle).clamp(0.0, 1.0);
-        let available_time = (time - tau1).max(0.001);
+        let available_time = (time - tau1).max(1.0 / 120.0);
         let required_accel = 2.0 * delta.magnitude() / (available_time * available_time);
         let ratio = required_accel / (boost_accel + AIR_THROTTLE_ACCEL);
         let tau2 = time - available_time * (1.0 - ratio.clamp(0.0, 1.0)).sqrt();
@@ -845,6 +885,54 @@ mod tests {
         );
         assert!(result.is_some());
         assert!(result.unwrap().estimated_boost >= 0.0);
+    }
+
+    #[test]
+    fn committed_aerial_refreshes_to_the_nearest_live_prediction_slice() {
+        let car = car(Vector::ZERO, 100.0);
+        let candidate = AerialCandidate {
+            slice: BallSlice {
+                time: 2.0,
+                location: Vector::new(0.0, 0.0, 900.0),
+                velocity: Vector::ZERO,
+            },
+            shot_target: Vector::new(0.0, 5120.0, 300.0),
+            target_location: Vector::new(0.0, 0.0, 745.0),
+            shot_direction: Vector::new(0.0, 1.0, 0.0),
+            double_jump: false,
+            fast: false,
+            estimated_boost: 20.0,
+            score: 2.0,
+        };
+        let mut shot = AerialShot::new(
+            car, candidate, 1.0, Vector::new(0.0, 0.0, -650.0), 991.6667,
+        );
+        let prediction = BallTrajectory {
+            slices: vec![
+                BallSlice {
+                    time: 1.0,
+                    location: Vector::new(0.0, 0.0, 800.0),
+                    velocity: Vector::ZERO,
+                },
+                BallSlice {
+                    time: 1.5,
+                    location: Vector::new(200.0, 100.0, 950.0),
+                    velocity: Vector::new(0.0, 100.0, 0.0),
+                },
+                BallSlice {
+                    time: 2.0,
+                    location: Vector::new(500.0, 0.0, 1100.0),
+                    velocity: Vector::ZERO,
+                },
+            ],
+        };
+        shot.refresh_prediction(
+            car, &prediction, 1.5, Vector::new(0.0, 5120.0, 300.0),
+            Vector::new(0.0, 0.0, -650.0),
+        );
+        assert_eq!(shot.ball, Vector::new(200.0, 100.0, 950.0));
+        assert_eq!(shot.slice_velocity, Vector::new(0.0, 100.0, 0.0));
+        assert_eq!(shot.slice_time, 1.5);
     }
 
     #[test]
