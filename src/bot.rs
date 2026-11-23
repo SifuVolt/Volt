@@ -3541,11 +3541,8 @@ impl BotBrain {
         vf = vf + car.up() * (JUMP_ACCEL * tau);
         xf = xf + car.up() * (JUMP_ACCEL * tau * (t - 0.5 * tau));
 
-        // Match the Python jump_shot: hold the first jump for up to 0.20s,
-        // retaining it while the predicted vertical velocity is still below
-        // the contact target. Once it releases, count three release frames
-        // before the directional second press.
-        const DODGE_BUTTON_HOLD: f32 = 0.08;
+        // Match Python jump_shot's first-jump hold and three release frames.
+        // The directional dodge is a single fresh jump press, not a timed hold.
 
         let local_shot_direction = car
             .local(state.shot_direction.flatten())
@@ -3625,18 +3622,9 @@ impl BotBrain {
                 state.counter = 5;
             }
         } else if state.counter == 4 {
-            // Keep the dodge button and direction held briefly, then release.
-            // Do not re-trigger jump on later frames.
-            if state.dodge_started_at
-                .is_some_and(|started| game_time - started < DODGE_BUTTON_HOLD)
-            {
-                controller.jump = true;
-                controller.pitch = -state.dodge_direction.x;
-                controller.yaw = state.dodge_direction.y;
-                controller.roll = 0.0;
-            } else {
-                controller.jump = false;
-            }
+            // Python's counter-4 branch only marks the dodge as active.
+            // It does not keep jump/pitch/yaw held on subsequent packets.
+            state.dodging = true;
         } else if state.counter == 5 {
             self.jump_shot = None;
             return self.start_ball_recovery(car);
@@ -6061,14 +6049,16 @@ mod tests {
                     targets: ShotTargets { left: Vector::ZERO, right: Vector::ZERO },
         };
 
-        let normal = brain.run_jump_shot(me, BallState { location: state.ball, velocity: state.ball_velocity }, &BallTrajectory { slices: Vec::new() }, state, 1.01);
+        // First call is the actual launch frame: Python applies the initial
+        // jump impulse only when jump_elapsed == 0.
+        let normal = brain.run_jump_shot(me, BallState { location: state.ball, velocity: state.ball_velocity }, &BallTrajectory { slices: Vec::new() }, state, 1.0);
         assert!(normal.jump);
         assert_eq!(normal.pitch, 1.0);
         assert!(normal.yaw.abs() > 0.0);
         assert!(normal.roll < 0.0);
 
         let quick = JumpShotState { quick: true, ..state };
-        let fast = brain.run_jump_shot(me, BallState { location: quick.ball, velocity: quick.ball_velocity }, &BallTrajectory { slices: Vec::new() }, quick, 1.01);
+        let fast = brain.run_jump_shot(me, BallState { location: quick.ball, velocity: quick.ball_velocity }, &BallTrajectory { slices: Vec::new() }, quick, 1.0);
         assert!(fast.jump, "quick shots still perform the first jump");
         assert_ne!(fast.pitch, 1.0, "Python skips the S tilt for quick shots");
 
