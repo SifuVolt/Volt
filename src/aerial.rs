@@ -7,6 +7,7 @@
 
 use crate::{
     control::{default_drive, default_pd, DriveInput},
+    defense::GridDefense,
     math::Vector,
     prediction::{BallSlice, BallTrajectory},
     shot_physics::aerial_shot_is_viable,
@@ -48,6 +49,8 @@ pub struct AerialShot {
     pub up: Vector,
     pub start_boost: f32,
     pub double_jump: bool,
+    pub fast_aerial: bool,
+    pub backboard_mode: bool,
     pub jump_immediately: bool,
     pub aerialing: bool,
     pub elapsed: f32,
@@ -94,6 +97,8 @@ impl AerialShot {
             up,
             start_boost: car.boost,
             double_jump: false,
+            fast_aerial: candidate.fast,
+            backboard_mode: false,
             jump_immediately,
             aerialing: false,
             elapsed: 0.0,
@@ -139,18 +144,56 @@ impl AerialShot {
         }) else {
             return;
         };
+
         self.ball = slice.location;
         self.slice_velocity = slice.velocity;
         self.slice_time = slice.time;
         self.shot_target = goal;
-        let (mut target_location, shot_direction) =
-            contact_geometry(car, slice, goal, gravity);
         self.ceiling = car.location.z > 2044.0 - car.hitbox.height * 2.0 && !car.jumped;
+
+        let foe_goal_y = if car.team == 0 { 5120.0 } else { -5120.0 };
+        let foe_goal_center = Vector::new(0.0, foe_goal_y, 300.0);
+        let own_goal_center = Vector::new(0.0, -foe_goal_y, 300.0);
+
+        let (mut target_location, mut shot_direction) =
+            contact_geometry(car, slice, goal, gravity);
+
+        // Python Aerial.run replaces the normal attacking vector with a safe
+        // outward clear when the predicted contact is within 2600 units of
+        // our own goal, then applies the same wall correction and hitbox offset.
+        if self.ball.flatten().distance(own_goal_center.flatten()) < 2600.0 {
+            let clear_direction = (self.ball - own_goal_center).flatten().normalize();
+            if clear_direction.magnitude() > 0.001 {
+                let approach_distance = 92.75 + car.hitbox.length * 0.5;
+                shot_direction = wall_shot_adjust_aerial(
+                    self.ball, clear_direction, approach_distance,
+                ).0;
+                let hitbox_offset = car.forward() * car.hitbox.offset.x
+                    + car.right() * car.hitbox.offset.y
+                    + car.up() * car.hitbox.offset.z;
+                target_location =
+                    self.ball - shot_direction * approach_distance - hitbox_offset;
+            }
+        }
+
         if self.ceiling {
             target_location.z -= 92.0;
         }
         self.target_location = target_location;
         self.shot_direction = shot_direction;
+
+        // Backboard mode is only active for an airborne car when the ball is
+        // genuinely rebounding away from the opponent goal, not merely
+        // travelling toward the backboard.
+        let goal_direction = (foe_goal_center - self.ball).normalize();
+        let towards_goal = slice.velocity.dot(goal_direction);
+        self.backboard_mode = car.airborne
+            && (self.ball.y - foe_goal_center.y).abs() < 1100.0
+            && self.ball.z > 450.0
+            && self.ball.x.abs() < 3500.0
+            && towards_goal < -150.0
+            && 0.15 < time_remaining
+            && time_remaining < 2.0;
     }
 
     fn run_side_wall_takeoff(
@@ -361,33 +404,80 @@ impl AerialShot {
             }
         }
 
+        self.ceiling = car.location.z > 2044.0 - car.hitbox.height * 2.0 && !car.jumped;
         let time = time_remaining.max(0.001);
-        let final_position = if self.jumped {
-            car.location + car.velocity * time + gravity * (0.5 * time * time)
+        let (mut final_position, mut final_velocity) = if self.jumped {
+            (
+                car.location + car.velocity * time + gravity * (0.5 * time * time),
+                car.velocity + gravity * time,
+            )
         } else {
-            jump_prediction(car, time, self.elapsed, self.double_jump, gravity).0
+            jump_prediction(car, time, self.elapsed, self.double_jump, gravity)
         };
+
+        // Party Cannon's fast-aerial pitchback briefly tilts the nose up so
+        // forward boost contributes a vertical component. Its acceleration
+        // is included in the predicted contact position, not just the input.
+        let fast_pitchback = self.fast_aerial
+            && self.aerialing
+            && (0.02..=0.16).contains(&self.elapsed)
+            && time_remaining > 0.30
+            && self.target_location.z - final_position.z > 80.0
+            && car.boost > 0.0
+            && !self.backboard_mode
+            && !self.ceiling
+            && GridDefense::landing_plane(car.location, car.velocity, gravity.z) != 4;
+        if fast_pitchback {
+            let pitchback_time = time_remaining
+                .min(0.16 - self.elapsed)
+                .min(car.boost / BOOST_CONSUMPTION)
+                .max(0.0);
+            let pitchback_angle: f32 = 0.35;
+            let pitchback_direction = (
+                car.forward() * pitchback_angle.cos()
+                    + car.up() * pitchback_angle.sin()
+            ).normalize();
+            let acceleration = pitchback_direction * boost_accel;
+            final_velocity = final_velocity + acceleration * pitchback_time;
+            final_position = final_position
+                + acceleration * (pitchback_time * (time - 0.5 * pitchback_time));
+        }
+
         let offset = self.target_location - final_position;
         let offset_length = offset.magnitude();
-        let point_toward = if self.jumped {
-            self.ball - car.location
-        } else {
-            offset
-        };
-        let (_, pd) = default_pd(&car, car.local(point_toward), false, None);
-        controls.pitch = pd.pitch;
-        controls.yaw = pd.yaw;
-        controls.roll = pd.roll;
-
         let forward = car.forward();
         let forward_projection = offset.dot(forward) / time;
-        controls.boost = forward_projection
-            >= (boost_accel + AIR_THROTTLE_ACCEL) * delta_time.max(13.0 / 120.0)
-            && offset.angle(forward) < 0.4
-            && car.boost > 0.0;
-        controls.throttle = (forward_projection
-            / (AIR_THROTTLE_ACCEL * delta_time.max(1.0 / 120.0)))
-            .clamp(-1.0, 1.0);
+        if fast_pitchback {
+            controls.boost = true;
+            controls.throttle = 1.0;
+        } else {
+            controls.boost = forward_projection
+                >= (boost_accel + AIR_THROTTLE_ACCEL) * delta_time.max(13.0 / 120.0)
+                && offset.angle(forward) < 0.4
+                && car.boost > 0.0;
+            controls.throttle = (forward_projection
+                / (AIR_THROTTLE_ACCEL * delta_time.max(1.0 / 120.0)))
+                .clamp(-1.0, 1.0);
+        }
+
+        let aim_vector = if offset_length > 50.0 { offset } else { self.shot_direction };
+        let local_aim = car.local(aim_vector);
+        let (upside_down, up_reference) = if self.backboard_mode {
+            (self.ball.z < car.location.z - 80.0, None)
+        } else if GridDefense::landing_plane(car.location, car.velocity, gravity.z) == 4 {
+            (true, None)
+        } else {
+            let up = if self.jumped {
+                Vector::new(0.0, 0.0, 1.0)
+            } else {
+                (self.ball - car.location).normalize()
+            };
+            (false, Some(car.local(up)))
+        };
+        let (_, pd) = default_pd(&car, local_aim, upside_down, up_reference);
+        controls.pitch = if fast_pitchback { 1.0 } else { pd.pitch };
+        controls.yaw = pd.yaw;
+        controls.roll = pd.roll;
 
         if currently_double_jumping {
             controls.steer = 0.0;
