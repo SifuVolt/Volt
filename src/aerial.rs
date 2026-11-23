@@ -83,6 +83,12 @@ impl AerialShot {
         let jump_immediately = flat_velocity.angle(flat_target) < 0.6
             || flat_velocity.magnitude() < 500.0
             || car.air_state != AirState::OnGround;
+        let ceiling = car.location.z > 2044.0 - car.hitbox.height * 2.0 && !car.jumped;
+        let target_location = if ceiling {
+            candidate.target_location - Vector::new(0.0, 0.0, 92.0)
+        } else {
+            candidate.target_location
+        };
 
         let mut aerial = Self {
             started_at: game_time,
@@ -92,7 +98,7 @@ impl AerialShot {
             slice_velocity: candidate.slice.velocity,
             slice_time: candidate.slice.time,
             shot_target: candidate.shot_target,
-            target_location: candidate.target_location,
+            target_location,
             shot_direction: candidate.shot_direction,
             up,
             start_boost: car.boost,
@@ -112,7 +118,7 @@ impl AerialShot {
             dodge_jump: true,
             side_wall_launched: false,
             side_wall_active: false,
-            ceiling: car.location.z > 2044.0 - car.hitbox.height * 2.0 && !car.jumped,
+            ceiling,
             finished: false,
         };
         let single = aerial.boost_estimate(car, false, 0.0, candidate.slice.time, gravity, boost_accel);
@@ -1023,6 +1029,66 @@ mod tests {
         assert_eq!(shot.ball, Vector::new(200.0, 100.0, 950.0));
         assert_eq!(shot.slice_velocity, Vector::new(0.0, 100.0, 0.0));
         assert_eq!(shot.slice_time, 1.5);
+    }
+
+    #[test]
+    fn aerial_refresh_detects_a_real_backboard_rebound() {
+        let mut me = car(Vector::new(0.0, 0.0, 700.0), 80.0);
+        me.airborne = true;
+        me.jumped = true;
+        me.air_state = AirState::InAir;
+        let candidate = AerialCandidate {
+            slice: BallSlice {
+                time: 1.0,
+                location: Vector::new(0.0, 4200.0, 600.0),
+                velocity: Vector::new(0.0, -500.0, 0.0),
+            },
+            shot_target: Vector::new(0.0, 5120.0, 300.0),
+            target_location: Vector::new(0.0, 4000.0, 500.0),
+            shot_direction: Vector::new(0.0, 1.0, 0.0),
+            double_jump: false,
+            fast: false,
+            estimated_boost: 20.0,
+            score: 1.0,
+        };
+        let mut shot = AerialShot::new(
+            me, candidate, 1.0, Vector::new(0.0, 0.0, -650.0), 991.6667,
+        );
+        let prediction = BallTrajectory { slices: vec![candidate.slice] };
+        shot.refresh_prediction(
+            me, &prediction, 1.0, Vector::new(0.0, 5120.0, 300.0),
+            Vector::new(0.0, 0.0, -650.0),
+        );
+        assert!(shot.backboard_mode);
+    }
+
+    #[test]
+    fn aerial_refresh_uses_outward_clear_direction_near_own_goal() {
+        let me = car(Vector::new(0.0, -2500.0, 500.0), 80.0);
+        let candidate = AerialCandidate {
+            slice: BallSlice {
+                time: 1.0,
+                location: Vector::new(1000.0, -3500.0, 500.0),
+                velocity: Vector::ZERO,
+            },
+            shot_target: Vector::new(0.0, 5120.0, 300.0),
+            target_location: Vector::new(0.0, -3300.0, 400.0),
+            shot_direction: Vector::new(0.0, 1.0, 0.0),
+            double_jump: false,
+            fast: false,
+            estimated_boost: 20.0,
+            score: 1.0,
+        };
+        let mut shot = AerialShot::new(
+            me, candidate, 1.0, Vector::new(0.0, 0.0, -650.0), 991.6667,
+        );
+        let prediction = BallTrajectory { slices: vec![candidate.slice] };
+        shot.refresh_prediction(
+            me, &prediction, 1.0, Vector::new(0.0, 5120.0, 300.0),
+            Vector::new(0.0, 0.0, -650.0),
+        );
+        assert!(shot.shot_direction.x > 0.4);
+        assert!(shot.shot_direction.y > 0.4);
     }
 
     #[test]
