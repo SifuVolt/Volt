@@ -468,12 +468,6 @@ impl AerialShot {
         let offset = self.target_location - final_position;
         let offset_length = offset.magnitude();
         let forward = car.forward();
-        let forward_projection = if time_remaining > 0.0 {
-            offset.dot(forward) / time_remaining
-        } else {
-            0.0
-        };
-
         let aim_vector = if offset_length > 50.0 { offset } else { self.shot_direction };
         let local_aim = car.local(aim_vector);
         let (upside_down, up_reference) = if self.backboard_mode {
