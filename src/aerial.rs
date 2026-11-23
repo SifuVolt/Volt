@@ -1125,6 +1125,40 @@ mod tests {
     }
 
     #[test]
+    fn fast_intercept_aerial_uses_clib_slice_time_and_skips_expired_sample() {
+        let mut me = car(Vector::new(0.0, -1200.0, 17.0), 100.0);
+        me.orientation = Matrix3::new(0.0, std::f32::consts::FRAC_PI_2, 0.0);
+        let prediction = BallTrajectory {
+            slices: vec![
+                BallSlice {
+                    time: 1.0 / 120.0,
+                    location: Vector::new(0.0, 0.0, 900.0),
+                    velocity: Vector::ZERO,
+                },
+                BallSlice {
+                    time: 1.5,
+                    location: Vector::new(0.0, 0.0, 900.0),
+                    velocity: Vector::ZERO,
+                },
+            ],
+        };
+        let candidate = find_fast_aerial_candidate(
+            me,
+            &prediction,
+            Vector::new(0.0, 5120.0, 300.0),
+            Vector::new(0.0, 0.0, -650.0),
+            991.6667,
+            0.0,
+            6.0,
+            900.0,
+            f32::INFINITY,
+            true,
+        );
+        assert!(candidate.is_some());
+        assert!((candidate.unwrap().slice.time - 1.5).abs() < 1.0e-5);
+    }
+
+    #[test]
     fn committed_aerial_refreshes_to_the_nearest_live_prediction_slice() {
         let car = car(Vector::ZERO, 100.0);
         let candidate = AerialCandidate {
