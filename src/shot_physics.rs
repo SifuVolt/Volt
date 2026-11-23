@@ -499,4 +499,23 @@ mod tests {
         assert!(result.valid);
         assert!(result.fast);
     }
+    #[test]
+    fn runtime_jump_viability_matches_clib_safe_false_wrapper() {
+        // The Python CLib wrapper first checks generic ground reachability,
+        // then calls jump_shot_is_viable(..., safe=0). In that mode the
+        // vertical helper is deliberately only the 0.2s minimum gate.
+        assert!(jump_shot_is_viable(
+            0.2, -650.0, 0.0, 36.0, true, 900.0, false
+        ));
+        assert!(!jump_shot_is_viable(
+            0.199, -650.0, 0.0, 36.0, true, 900.0, false
+        ));
+        assert!(double_jump_shot_is_viable(
+            0.2, -650.0, 0.0, 18.0, true, 900.0, false
+        ));
+        assert!(!double_jump_shot_is_viable(
+            0.199, -650.0, 0.0, 18.0, true, 900.0, false
+        ));
+    }
+
 }
