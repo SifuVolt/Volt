@@ -2910,7 +2910,7 @@ impl BotBrain {
             // VirxERLU exposes hitbox offset in local forward/right/up axes;
             // convert it to world space exactly as Python Aerial does.
             let world_hitbox_offset = car.forward() * car.hitbox.offset.x
-                + car.right() * car.hitbox.offset.y
+                + car.up().cross(car.forward()) * car.hitbox.offset.y
                 + car.up() * car.hitbox.offset.z;
             let hitbox_target = nominal_target - world_hitbox_offset;
             let mut offset_target = contact_approach_from_label(
@@ -2940,19 +2940,6 @@ impl BotBrain {
                 }
             }
 
-            if wall_normal.is_none() {
-                if let Some((selected_target, label)) = party_cannon_jump_front_contact(
-                    car,
-                    state.ball,
-                    state.shot_direction,
-                    time_remaining,
-                    self.match_state.gravity,
-                    state.contact_face_label,
-                ) {
-                    offset_target = selected_target;
-                    state.contact_face_label = Some(label);
-                }
-            }
             state.approach = offset_target;
         }
 
@@ -4028,109 +4015,6 @@ fn relative_goal_aim_point(car:CarState,ball:Vector,targets:ShotTargets)->Vector
     center
 }
 
-fn party_cannon_jump_front_contact(
-    car: CarState,
-    ball: Vector,
-    shot_direction: Vector,
-    time_remaining: f32,
-    gravity: Vector,
-    previous_label: Option<&'static str>,
-) -> Option<(Vector, &'static str)> {
-    let shot_forward = shot_direction.flatten().normalize();
-    let car_forward = car.forward().normalize();
-    let mut car_up = car.up().normalize();
-    let car_right = car_forward.cross(car_up).normalize();
-    if shot_forward.magnitude() <= 0.001
-        || car_forward.magnitude() <= 0.001
-        || car_up.magnitude() <= 0.001
-        || car_right.magnitude() <= 0.001
-    {
-        return None;
-    }
-    car_up = car_right.cross(car_forward).normalize();
-
-    let orientation_horizon = time_remaining.max(0.0).min(0.18);
-    let omega = car.angular_velocity;
-    let angular_speed = omega.magnitude();
-    let mut impact_forward = car_forward;
-    let mut impact_up = car_up;
-    if angular_speed > 0.05 && orientation_horizon > 0.0 {
-        let axis = omega / angular_speed;
-        let angle = (angular_speed * orientation_horizon).min(0.65);
-        let cosine = angle.cos();
-        let sine = angle.sin();
-        impact_forward = (
-            car_forward * cosine
-                + axis.cross(car_forward) * sine
-                + axis * (axis.dot(car_forward) * (1.0 - cosine))
-        ).normalize();
-        impact_up = (
-            car_up * cosine
-                + axis.cross(car_up) * sine
-                + axis * (axis.dot(car_up) * (1.0 - cosine))
-        ).normalize();
-    }
-
-    let impact_right = impact_up.cross(impact_forward).normalize();
-    impact_up = impact_forward.cross(impact_right).normalize();
-    let half_length = car.hitbox.length * 0.5;
-    let half_width = car.hitbox.width * 0.5;
-    let half_height = car.hitbox.height * 0.5;
-    let world_hitbox_offset = impact_forward * car.hitbox.offset.x
-        + impact_right * car.hitbox.offset.y
-        + impact_up * car.hitbox.offset.z;
-
-    let candidates: [(&str, f32, f32); 7] = [
-        ("centre", 0.0, 0.0),
-        ("top_left", -half_width * 0.82, half_height * 0.82),
-        ("top_right", half_width * 0.82, half_height * 0.82),
-        ("left", -half_width * 0.88, 0.0),
-        ("right", half_width * 0.88, 0.0),
-        ("top", 0.0, half_height * 0.88),
-        ("bottom", 0.0, -half_height * 0.70),
-    ];
-
-    let impact_horizon = time_remaining.max(0.0).min(0.30);
-    let predicted_car = car.location
-        + car.velocity * impact_horizon
-        + gravity * (0.5 * impact_horizon * impact_horizon);
-    let mut scored: Vec<(f32, &'static str, Vector)> = Vec::with_capacity(candidates.len());
-
-    for (label, lateral_offset, vertical_offset) in candidates {
-        let front_point_offset = impact_forward * half_length
-            + impact_right * lateral_offset
-            + impact_up * vertical_offset
-            + world_hitbox_offset;
-        let predicted_contact_point = predicted_car + front_point_offset;
-        let incoming_normal = (ball - predicted_contact_point).normalize();
-        if incoming_normal.magnitude() <= 0.001 {
-            continue;
-        }
-        let shot_alignment = incoming_normal.dot(shot_forward);
-        let front_alignment = incoming_normal.dot(impact_forward);
-        let required_car_centre =
-            ball - shot_forward * 92.75 - front_point_offset;
-        let reach_cost = required_car_centre.distance(predicted_car);
-        let score = shot_alignment
-            + front_alignment.clamp(-1.0, 1.0) * 0.12
-            - reach_cost * 0.00020;
-        scored.push((score, label, required_car_centre));
-    }
-
-    if scored.is_empty() {
-        return None;
-    }
-    scored.sort_by(|a, b| b.0.total_cmp(&a.0));
-    let mut selected = scored[0];
-    if let Some(previous) = previous_label {
-        if let Some(previous_candidate) = scored.iter().copied().find(|entry| entry.1 == previous) {
-            if previous_candidate.0 >= selected.0 - 0.06 {
-                selected = previous_candidate;
-            }
-        }
-    }
-    Some((selected.2, selected.1))
-}
 
 fn contact_approach_from_label(ball:Vector,shot:Vector,label:&str,distance:f32)->Option<Vector> {
     let shot=shot.flatten().normalize();
@@ -5347,29 +5231,22 @@ mod tests {
     }
 
     #[test]
-    fn jump_shot_front_face_target_includes_world_hitbox_offset() {
+    fn jump_shot_hitbox_target_uses_python_ball_radius_and_hitbox_offset() {
         let mut me = car(0, 0, Vector::ZERO);
         me.hitbox.offset = Vector::new(10.0, 5.0, 3.0);
         let ball = Vector::new(500.0, 0.0, 0.0);
-        let (target, label) = party_cannon_jump_front_contact(
-            me,
-            ball,
-            Vector::new(1.0, 0.0, 0.0),
-            1.0,
-            Vector::ZERO,
-            None,
-        ).expect("front-face contact candidates");
-        assert_eq!(label, "centre");
-
-        let forward = me.forward().normalize();
-        let up = me.up().normalize();
-        let right = up.cross(forward).normalize();
-        let front_point_offset = forward * (me.hitbox.length * 0.5)
-            + forward * 10.0
-            + right * 5.0
-            + up * 3.0;
-        let expected = ball - forward * 92.75 - front_point_offset;
-        assert!((target - expected).magnitude() < 1e-3);
+        let direction = Vector::new(1.0, 0.0, 0.0);
+        let target = ball
+            - direction * (92.75 + me.hitbox.length * 0.5)
+            - me.forward() * 10.0
+            - me.up().cross(me.forward()) * 5.0
+            - me.up() * 3.0;
+        let standoff = 92.75 + me.hitbox.length * 0.5;
+        let nominal = ball - direction * standoff;
+        let offset = me.forward() * me.hitbox.offset.x
+            + me.up().cross(me.forward()) * me.hitbox.offset.y
+            + me.up() * me.hitbox.offset.z;
+        assert!((target - (nominal - offset)).magnitude() < 1e-4);
     }
 
     #[test]
