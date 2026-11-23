@@ -574,6 +574,39 @@ mod tests {
     fn test_car()->CarState {CarState{index:0,team:0,location:Vector::new(0.0,-1000.0,17.0),velocity:Vector::new(0.0,1200.0,0.0),orientation:Matrix3::new(0.0,1.5707963,0.0),angular_velocity:Vector::ZERO,demolished:false,airborne:false,supersonic:false,jumped:false,doublejumped:false,air_state:AirState::OnGround,has_jumped:false,has_double_jumped:false,has_dodged:false,dodge_timeout:0.0,dodge_elapsed:0.0,dodge_dir:Vector::ZERO,flip_reset_available:false,boost:50.0,hitbox:Hitbox{length:118.0,width:84.0,height:36.0,offset:Vector::ZERO}}}
     #[test]fn grid_jump_time_matches_source_polynomial(){assert!(grid_jump_time(200.0,false).is_some());assert!(grid_jump_time(350.0,true).is_some());assert!(grid_jump_time(5.0,true).is_some());}
     #[test]fn grid_profile_has_601_120hz_samples(){let(d,v)=grid_profile(test_car());assert_eq!(d.len(),601);assert_eq!(v.len(),601);assert!(d[600]>d[0]);}
+    #[test]
+    fn untargeted_score_prefers_approach_from_behind_ball() {
+        let behind = test_car();
+        let ball = Vector::new(0.0, 0.0, 180.0);
+        let good = score_any(behind, &[], ball, Vector::ZERO, ShotType::Ground, 1.0);
+        let mut wrong_side = behind;
+        wrong_side.location.y = 1000.0;
+        let poor = score_any(wrong_side, &[], ball, Vector::ZERO, ShotType::Ground, 1.0);
+        assert!(good < poor);
+    }
+
+    #[test]
+    fn untargeted_finder_returns_a_reachable_general_touch() {
+        let car = test_car();
+        let targets = ShotTargets {
+            left: Vector::new(-700.0, 5120.0, 350.0),
+            right: Vector::new(700.0, 5120.0, 350.0),
+        };
+        let prediction = BallTrajectory {
+            slices: (0..360).map(|i| BallSlice {
+                time: i as f32 / 120.0,
+                location: Vector::new(0.0, 0.0, 150.0),
+                velocity: Vector::ZERO,
+            }).collect(),
+        };
+        let candidate = find_best_any_shot(
+            car, &[], &prediction, targets, Vector::new(0.0, 0.0, -650.0),
+            991.6667, 0.0, -999.0, false, 3.0,
+        );
+        assert!(candidate.is_some());
+        assert!(candidate.unwrap().score.is_finite());
+    }
+
     #[test]fn candidate_scan_only_returns_finite_source_scored_candidates(){
         let car=test_car();let tg=ShotTargets{left:Vector::new(-700.0,5120.0,350.0),right:Vector::new(700.0,5120.0,350.0)};
         let pred=BallTrajectory{slices:(0..360).map(|i|BallSlice{time:i as f32/120.0,location:Vector::new(0.0,0.0,100.0),velocity:Vector::ZERO}).collect()};
