@@ -2254,20 +2254,87 @@ impl BotBrain {
             let side = jump.side_shot;
             let side_mode = side.is_some();
 
+            // Python jump_shot recomputes its outgoing shot direction and
+            // hitbox-centre target before every approach-drive decision. The
+            // parser's candidate vector is not the live routine's final
+            // direction: blend the goal ray with Party Cannon's predicted
+            // post-contact ray, apply the jump wall correction, then rebuild
+            // the hitbox-aware front-face target exactly as run_jump_shot does.
+            let mut approach = jump.approach;
+            let mut shot_direction = jump.shot_direction;
+            if !side_mode {
+                let goal_aim = relative_goal_aim_point(car, jump.ball, jump.targets);
+                let slice = BallSlice {
+                    time: t.max(0.001),
+                    location: jump.ball,
+                    velocity: jump.ball_velocity,
+                };
+                let (_, predicted_shot) =
+                    party_cannon_contact_geometry(car, slice, goal_aim, self.match_state.gravity);
+                let goal_shot = (goal_aim - jump.ball).flatten().normalize();
+                let predicted_shot = predicted_shot.flatten().normalize();
+                let blended = if goal_shot.magnitude() > 0.001
+                    && predicted_shot.magnitude() > 0.001
+                {
+                    (goal_shot * 0.65 + predicted_shot * 0.35).normalize()
+                } else {
+                    goal_shot
+                };
+                let (adjusted, wall_normal, _) =
+                    wall_shot_adjust_jump(jump.ball, blended);
+                shot_direction = adjusted;
+
+                let standoff = 92.75 + car.hitbox.length * 0.5;
+                let nominal_target = jump.ball - shot_direction * standoff;
+                let world_hitbox_offset = car.forward() * car.hitbox.offset.x
+                    + car.right() * car.hitbox.offset.y
+                    + car.up() * car.hitbox.offset.z;
+                let hitbox_target = nominal_target - world_hitbox_offset;
+                let mut offset_target = contact_approach_from_label(
+                    jump.ball, shot_direction, jump.contact_face, standoff,
+                ).map_or(hitbox_target, |refreshed| {
+                    refreshed + hitbox_target - nominal_target
+                });
+
+                if let Some(normal) = wall_normal {
+                    let tangent = shot_direction - normal * shot_direction.dot(normal);
+                    if tangent.magnitude() > 0.001 {
+                        offset_target = offset_target - tangent.normalize() * 25.0;
+                    }
+                    if normal.z.abs() < 0.95 {
+                        offset_target.z = jump.ball.z
+                            + (offset_target.z - jump.ball.z).clamp(-120.0, 120.0);
+                        offset_target = offset_target
+                            - self.match_state.gravity
+                                * (0.5 * jump_time * jump_time);
+                    }
+                }
+
+                if wall_normal.is_none() {
+                    if let Some((selected_target, _label)) = party_cannon_jump_front_contact(
+                        car, jump.ball, shot_direction, t,
+                        self.match_state.gravity, false, None,
+                    ) {
+                        offset_target = selected_target;
+                    }
+                }
+                approach = offset_target;
+            }
+
             // This is the Python jump_shot approach calculation in the same
             // order: measure distance before field clamping, then clamp the
             // target used by defaultDrive.
-            let mut final_target = jump.approach.flatten();
+            let mut final_target = approach.flatten();
             let tj = t - jump_time * 1.15;
             if tj > 0.0 && !side_mode {
                 final_target = shot_approach_target(
-                    car, jump.ball, final_target, jump.shot_direction, tj,
+                    car, jump.ball, final_target, shot_direction, tj,
                 );
             }
             let distance_before_field_cap = final_target.flat_distance(car.location);
             final_target = cap_in_field(&car, final_target);
             let local_final_target = car.local_location(final_target);
-            let local_offset_target = car.local_location(jump.approach.flatten());
+            let local_offset_target = car.local_location(approach.flatten());
             let local_ball = car.local_location(jump.ball);
             let mut distance_remaining = if car.airborne {
                 local_offset_target.x
@@ -2343,13 +2410,13 @@ impl BotBrain {
                 && t <= jump_time * 1.08;
 
             if !car.airborne && (side_ready || normal_ready) {
-                let shot_direction = side.map_or(jump.shot_direction, |s| s.shot_direction);
+                let shot_direction = side.map_or(shot_direction, |s| s.shot_direction);
                 let state = JumpShotState {
                     started_at: game_time,
                     intercept_time: game_time + t,
                     ball: jump.ball,
                     ball_velocity: jump.ball_velocity,
-                    approach: jump.approach,
+                    approach,
                     shot_direction,
                     contact_face: jump.contact_face,
                     contact_face_label: None,
