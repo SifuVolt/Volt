@@ -48,6 +48,7 @@ pub struct AerialShot {
     pub up: Vector,
     pub double_jump: bool,
     pub fast_aerial: bool,
+    pub jump_type_fast: bool,
     pub backboard_mode: bool,
     pub aerialing: bool,
     pub elapsed: f32,
@@ -92,6 +93,7 @@ impl AerialShot {
             up: car.up(),
             double_jump: candidate.fast,
             fast_aerial: candidate.fast,
+            jump_type_fast: false,
             backboard_mode: false,
             aerialing: false,
             elapsed: 0.0,
@@ -273,6 +275,7 @@ impl AerialShot {
         self.side_wall_launched = true;
         self.side_wall_active = false;
         self.aerialing = true;
+        self.jump_type_fast = self.fast_aerial;
         self.started_at = game_time;
         self.elapsed = 0.0;
         self.up = car.up();
@@ -364,6 +367,7 @@ impl AerialShot {
                 self.jumped = true;
             } else {
                 self.started_at = game_time;
+                self.jump_type_fast = self.fast_aerial;
                 self.jumped = false;
                 self.first_jump_impulse_applied = false;
                 self.double_jump_complete = false;
@@ -399,7 +403,7 @@ impl AerialShot {
             final_position = final_position
                 + up * (JUMP_ACCEL * tau * (time_remaining - 0.5 * tau));
 
-            if self.fast_aerial {
+            if self.jump_type_fast {
                 if car.doublejumped {
                     self.double_jump_complete = true;
                 }
@@ -421,10 +425,10 @@ impl AerialShot {
 
             if jump_elapsed <= JUMP_DURATION {
                 controls.jump = true;
-            } else if self.fast_aerial && self.jump_release_frames < 3 {
+            } else if self.jump_type_fast && self.jump_release_frames < 3 {
                 self.jump_release_frames += 1;
                 controls.jump = false;
-            } else if self.fast_aerial && self.second_jump_frames < 3 {
+            } else if self.jump_type_fast && self.second_jump_frames < 3 {
                 self.second_jump_frames += 1;
                 controls.jump = true;
                 self.dodging = true;
@@ -438,7 +442,7 @@ impl AerialShot {
         }
 
         self.ceiling = car.location.z > 2044.0 - car.hitbox.height * 2.0 && !car.jumped;
-        let fast_pitchback = self.fast_aerial
+        let fast_pitchback = self.jump_type_fast
             && !self.jumped
             && 0.02 <= jump_elapsed
             && jump_elapsed <= 0.16
