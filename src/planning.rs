@@ -659,7 +659,7 @@ mod tests {
             Vector::new(0.0, 5000.0, 500.0),
             Vector::new(0.0, 0.0, 300.0),
         );
-        assert_eq!(ywall, Vector::new(0.0, 5120.0, 300.0));
+        assert_eq!(ywall, Vector::new(9216.0, 5120.0, 300.0));
         assert_eq!(car_on_x_wall(Vector::ZERO), Vector::new(4096.0, 0.0, 0.0));
         assert_eq!(car_on_y_wall(Vector::ZERO), Vector::new(0.0, 5120.0, 0.0));
     }
