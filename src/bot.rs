@@ -1938,9 +1938,9 @@ impl BotBrain {
             551.0
         } else if self.unlimited_boost || me.airborne {
             150.0
-            } else {
-                350.0
-            };
+        } else {
+            350.0
+        };
         if !urgent_save && self.ground_flip.is_none() && self.jump_shot.is_none() {
             if fast_intercept_zone && (me.airborne || game_time - self.last_landing_time > 0.5) {
                 if let Some(candidate) = find_fast_aerial_candidate(
