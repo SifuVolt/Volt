@@ -354,14 +354,17 @@ impl BotBrain {
         roles: Option<TeamRoles>,
         urgent_save: bool,
     ) {
-        let distance = me.location.distance(candidate.ball);
-        let local_ball = me.local_location(candidate.ball);
+        // Python find_teamplay_opportunity scores the live ball, not the
+        // future contact slice. The future slice is used only for the receive
+        // plan sent to the transition player.
+        let distance = me.location.distance(ball.location);
+        let local_ball = me.local_location(ball.location);
         let facing_angle = local_ball.y.atan2(local_ball.x).abs();
-        let approach = (candidate.ball - me.location).flatten().normalize();
+        let approach = (ball.location - me.location).flatten().normalize();
         let receive_aim = if (candidate.parser.targets.left - candidate.parser.targets.right).magnitude() > 1.0 {
             (candidate.parser.targets.left + candidate.parser.targets.right) * 0.5
         } else { goal };
-        let goal_direction = (receive_aim - candidate.ball).flatten().normalize();
+        let goal_direction = (goal - ball.location).flatten().normalize();
         let alignment = if approach.magnitude() > 0.001 && goal_direction.magnitude() > 0.001 {
             approach.dot(goal_direction).clamp(-1.0, 1.0)
         } else { 1.0 };
@@ -387,16 +390,18 @@ impl BotBrain {
     fn set_teamplay_aerial(
         &mut self,
         me: CarState,
+        ball: BallState,
         candidate: AerialCandidate,
+        goal: Vector,
         aim: Vector,
         roles: Option<TeamRoles>,
         urgent_save: bool,
     ) {
-        let distance = me.location.distance(candidate.slice.location);
-        let local_ball = me.local_location(candidate.slice.location);
+        let distance = me.location.distance(ball.location);
+        let local_ball = me.local_location(ball.location);
         let facing = local_ball.y.atan2(local_ball.x).abs();
-        let approach = (candidate.slice.location - me.location).flatten().normalize();
-        let goal_direction = (aim - candidate.slice.location).flatten().normalize();
+        let approach = (ball.location - me.location).flatten().normalize();
+        let goal_direction = (goal - ball.location).flatten().normalize();
         let alignment = if approach.magnitude() > 0.001 && goal_direction.magnitude() > 0.001 {
             approach.dot(goal_direction).clamp(-1.0, 1.0)
         } else { 1.0 };
@@ -914,14 +919,25 @@ impl BotBrain {
         match_state: MatchState,
         shot_targets: ShotTargets,
     ) -> Plan {
+        let committed_shot_active = self.jump_shot.is_some()
+            || self.double_jump_shot.is_some()
+            || self.aerial_shot.is_some()
+            || self.wall_drive_candidate.is_some();
         self.aerial_candidate = None;
         self.wall_drive_candidate = None;
-        self.teamplay_status = if me.boost < 18.0 { "LOW_BOOST" } else { "NO_SHOT" }.to_owned();
-        self.teamplay_score = 0.0;
-        self.teamplay_contact_time = 10.0;
-        self.teamplay_cover_released = false;
-        self.teamplay_cover_owner = None;
-        self.teamplay_receive = None;
+        if committed_shot_active {
+            // Python update_teamplay keeps cover released while a shot
+            // routine remains on the stack, even when the finder temporarily
+            // returns no replacement candidate.
+            self.teamplay_cover_released = true;
+        } else {
+            self.teamplay_status = if me.boost < 18.0 { "LOW_BOOST" } else { "NO_SHOT" }.to_owned();
+            self.teamplay_score = 0.0;
+            self.teamplay_contact_time = 10.0;
+            self.teamplay_cover_released = false;
+            self.teamplay_cover_owner = None;
+            self.teamplay_receive = None;
+        }
         let side = team_side(me.team);
         let opponents: Vec<CarState> = cars
             .iter()
@@ -1389,7 +1405,7 @@ impl BotBrain {
                     self.shot_search_horizon(game_time), ball.location.z,
                     max_height, true,
                 ) {
-                    self.set_teamplay_aerial(me, candidate, aim, roles, urgent_save);
+                    self.set_teamplay_aerial(me, ball, candidate, opponent_goal, aim, roles, urgent_save);
                     self.aerial_candidate = Some(candidate);
                     return Plan {
                         decision: Decision::AerialChallenge,
