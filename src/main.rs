@@ -6,6 +6,7 @@ pub mod shot_physics;
 pub mod shot_parser;
 pub mod shot_planner;
 pub mod mechanics;
+pub mod kickoff;
 pub mod teamplay;
 pub mod bot;
 mod control;
