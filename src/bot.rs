@@ -2665,7 +2665,10 @@ impl BotBrain {
                 if t <= 0.0
                     || (t > 0.35 && distance_remaining > 50.0 && !runtime_reachable)
                 {
-                    return ControllerState::default();
+                    // Python calls defaultDrive before its viability check.
+                    // Popping the routine does not undo the controller values
+                    // already written by defaultDrive for this frame.
+                    return controller_from_drive(output, car);
                 }
             }
             if !self.unlimited_boost
@@ -2886,7 +2889,9 @@ impl BotBrain {
             true,
         );
         if t <= jump_time || (tj > 0.0 && distance_remaining > 50.0 && !double_jump_viable) {
-            return ControllerState::default();
+            // Python double_jump.run executes defaultDrive before its
+            // reachability/timeout exit. Preserve that frame's drive controls.
+            return controller_from_drive(output, car);
         }
 
         if !self.unlimited_boost
@@ -3305,7 +3310,9 @@ impl BotBrain {
                         car, recovery_target, self.match_state.gravity.z,
                     );
                 }
-                return ControllerState::default();
+                // Python defaultDrive has already populated the controller
+                // before jump_shot_is_viable rejects and pops this routine.
+                return controller_from_drive(drive, car);
             }
 
             if !self.unlimited_boost
