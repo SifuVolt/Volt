@@ -794,6 +794,12 @@ fn pass_targets(me: CarState, cars: &[CarState]) -> Option<ShotTargets> {
     })
 }
 
+/// Expose Volt's teammate lead window so the separate aerial parser can
+/// evaluate the same pass target when no ground/jump parser candidate exists.
+pub fn pass_shot_targets(me: CarState, cars: &[CarState]) -> Option<ShotTargets> {
+    pass_targets(me, cars)
+}
+
 /// Last-resort pass candidate from tools.find_pass_shot.
 pub fn find_best_pass_shot(
     me: CarState,
