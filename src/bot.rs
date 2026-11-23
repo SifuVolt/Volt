@@ -1362,6 +1362,19 @@ impl BotBrain {
                 };
             }
         }
+        if transition_followup_active && selected.is_none() {
+            return Plan {
+                decision: Decision::Transition,
+                target: Vector::new(
+                    if me.location.x == 0.0 { 0.0 } else { me.location.x.signum() * 900.0 },
+                    side * 5050.0,
+                    0.0,
+                ),
+                target_speed: 1700.0,
+                shot: None,
+                jump: None,
+            };
+        }
         Plan {
             decision: Decision::GroundChallenge,
             target: selected
