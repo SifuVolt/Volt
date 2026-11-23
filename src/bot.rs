@@ -3328,8 +3328,8 @@ impl BotBrain {
     ) -> ControllerState {
         let mut jump_elapsed = state.jump_time.map_or(0.0, |started| (game_time - started).max(0.0));
         if state.jumping && state.jump_time.is_none() {
-            // Python starts its jump timer on the first frame of the jumping
-            // branch, so that frame receives the initial jump impulse.
+            // Python's else branch begins on the packet after jumping was
+            // set. Start the timer here so this is the first jump-impulse frame.
             state.jump_time = Some(game_time);
             jump_elapsed = 0.0;
         }
@@ -3613,11 +3613,12 @@ impl BotBrain {
                     distance_remaining, velocity, drive.target_speed,
                     aligned, side_ready, runtime_reachable,
                 );
-                // Python falls through into the airborne controller on this
-                // same packet. Starting the flight controller one tick later
-                // loses 1/120 s at the exact launch window.
+                // Python sets jumping in the approach branch, but its
+                // flight controller is the matching else branch. Preserve
+                // this packet's defaultDrive output; flight starts next tick.
                 state.jumping = true;
-                state.jump_time = Some(game_time);
+                self.jump_shot = Some(state);
+                return controller_from_drive(drive, car);
             } else {
                 if (side_ready || normal_ready) && !runtime_reachable {
                     println!(
