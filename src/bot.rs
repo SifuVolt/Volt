@@ -2507,7 +2507,7 @@ impl BotBrain {
 
         if let Some(jump) = plan.jump {
             if jump.shot_type == ShotType::DoubleJump {
-                return self.drive_double_jump(car, jump, game_time);
+                return self.drive_double_jump(car, jump, prediction, game_time);
             }
 
             // Python pushes jump_shot as soon as the parser finds a viable
@@ -2794,14 +2794,28 @@ impl BotBrain {
         &mut self,
         car: CarState,
         shot: GroundIntercept,
+        prediction: &BallTrajectory,
         game_time: f32,
     ) -> ControllerState {
-        let t = shot.time;
-        let goal_aim = relative_goal_aim_point(car, shot.ball, shot.targets);
-        let shot_direction = (goal_aim - shot.ball).flatten().normalize();
-        let offset_target = contact_approach_from_label(
-            shot.ball, shot_direction, shot.contact_face, 92.75,
-        ).unwrap_or(shot.ball - shot_direction * 120.0);
+        // Port double_jump._select_patient_intercept: begin at the selected
+        // candidate, wait for the first later reachable double-jump slice,
+        // and delay a poor opponent-back-wall angle until it enters the
+        // central shooting lane.
+        let (t, ball) = patient_double_jump_intercept(
+            car,
+            prediction,
+            shot.targets,
+            shot.time,
+            foe_goal(team_side(car.team)).y,
+        )
+        .map_or((shot.time, shot.ball), |(time, location)| (time, location));
+
+        // Python double_jump uses the ball-radius standoff (best_shot_value)
+        // and its goal-directed shot vector. It does not inherit the parser's
+        // jump-shot front-face label.
+        let goal_aim = relative_goal_aim_point(car, ball, shot.targets);
+        let shot_direction = (goal_aim - ball).flatten().normalize();
+        let offset_target = ball - shot_direction * 92.75;
 
         let required_height = (offset_target.z - car.location.z).max(0.0);
         let Some(jump_time) = grid_jump_time(required_height, true) else {
@@ -2820,7 +2834,7 @@ impl BotBrain {
         let angle_to_target = local_target.y.atan2(local_target.x).abs();
         let distance_remaining = final_target.flat_distance(car.location)
             - car.hitbox.length / 3.0;
-        let local_ball = car.local_location(shot.ball);
+        let local_ball = car.local_location(ball);
         let direction_sign = if angle_to_target >= 1.6
             && car.local_velocity().x <= 1000.0
             && local_ball.x < -250.0
@@ -2861,7 +2875,7 @@ impl BotBrain {
             let state = DoubleJumpState {
                 started_at: game_time,
                 intercept_time: game_time + t,
-                ball: shot.ball,
+                ball,
                 offset_target,
                 shot_direction,
                 jump_time,
@@ -4399,6 +4413,89 @@ fn candidate_to_intercept(car:CarState,candidate:ShotCandidate,targets:ShotTarge
 
 /// Volt's relative goal aim: use a higher central target while the ball
 /// remains in our half, then return to the normal ground-shot height.
+/// Python double_jump._select_patient_intercept, including its goal-mouth
+/// angle delay. Prediction times are relative to the current game tick.
+fn patient_double_jump_intercept(
+    car: CarState,
+    prediction: &BallTrajectory,
+    targets: ShotTargets,
+    initial_time: f32,
+    goal_y: f32,
+) -> Option<(f32, Vector)> {
+    let slices = &prediction.slices;
+    if slices.is_empty() {
+        return None;
+    }
+
+    let start_time = initial_time.max(1.0 / 120.0);
+    let end_time = 5.0_f32.min(slices.last()?.time);
+
+    let clamped_approach = |ball: Vector| {
+        let toward_ball = (ball - car.location).normalize();
+        let left = (targets.left - ball).normalize();
+        let right = (targets.right - ball).normalize();
+        if toward_ball.magnitude() < 1.0 {
+            left
+        } else {
+            toward_ball.clamp_2d(left, right)
+        }
+    };
+
+    let reachable = |ball: Vector, direction: Vector| {
+        let contact_z = ball.z - direction.z * 92.75;
+        let required_height = (contact_z - car.location.z).max(0.0);
+        grid_jump_time(required_height, true).is_some()
+    };
+
+    let first = slices.iter().position(|slice| slice.time >= start_time)?;
+    let mut selected = None;
+    for (index, slice) in slices.iter().enumerate().skip(first) {
+        if slice.time > end_time {
+            break;
+        }
+        let direction = clamped_approach(slice.location);
+        if reachable(slice.location, direction) {
+            selected = Some(index);
+            break;
+        }
+    }
+    let mut index = selected?;
+    let selected_slice = slices[index];
+    let selected_ball = selected_slice.location;
+    let selected_velocity = selected_slice.velocity;
+    let x_sign = if selected_ball.x < 0.0 {
+        -1.0
+    } else if selected_ball.x > 0.0 {
+        1.0
+    } else {
+        0.0
+    };
+    let needs_alignment_delay = selected_ball.x.abs() < 3000.0
+        && selected_ball.x.abs() - 890.0 + 92.75 * 2.0_f32.sqrt()
+            > (selected_ball.y - goal_y).abs()
+        && selected_velocity.x * x_sign < 0.0;
+
+    if needs_alignment_delay {
+        for later in (index + 1)..slices.len() {
+            let slice = slices[later];
+            if slice.time > end_time {
+                break;
+            }
+            let direction = clamped_approach(slice.location);
+            let aligned = slice.location.x.abs() - 890.0
+                + 92.75 * 2.0_f32.sqrt()
+                <= (slice.location.y - goal_y).abs();
+            if aligned && reachable(slice.location, direction) {
+                index = later;
+                break;
+            }
+        }
+    }
+
+    let result = slices[index];
+    Some((result.time, result.location))
+}
+
 fn relative_goal_aim_point(car:CarState,ball:Vector,targets:ShotTargets)->Vector {
     let mut center=if (targets.left-targets.right).magnitude()>1.0 {
         (targets.left+targets.right)*0.5
