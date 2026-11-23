@@ -26,7 +26,8 @@ const MAX_SPEED: f32 = 2300.0;
 const BOOST_ACCEL: f32 = 991.6667;
 const JUMP_SPEED: f32 = 291.6667;
 const JUMP_ACCEL: f32 = 1458.3333;
-const JUMP_SHOT_TILT_HOLD: f32 = 0.06;
+const JUMP_MAX_DURATION: f32 = 0.20;
+const JUMP_MINIMUM_HOLD: f32 = 0.06;
 const MIN_AIR_BOOST_TIME: f32 = 1.0 / 30.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -3535,20 +3536,15 @@ impl BotBrain {
         }
         // The simulated held-jump acceleration must match the actual input
         // duration used by the explicit jump-shot sequence below.
-        let tau = (JUMP_SHOT_TILT_HOLD - jump_elapsed).max(0.0);
+        let hf = vf.z;
+        let tau = (JUMP_MAX_DURATION - jump_elapsed).max(0.0);
         vf = vf + car.up() * (JUMP_ACCEL * tau);
         xf = xf + car.up() * (JUMP_ACCEL * tau * (t - 0.5 * tau));
 
-        // The jump-shot movement is a deliberate three-part input sequence:
-        // 1) hold the first jump while pitching the nose back (S),
-        // 2) release jump for one full physics tick,
-        // 3) press jump again with a forward/directional pitch to dodge.
-        //
-        // RLBot sends button state every tick; a false jump state is required
-        // between the first jump and the dodge so the second press is a new edge.
-        // Keep the existing counter and timestamps rather than introducing a
-        // second routine/state machine.
-        const JUMP_RELEASE: f32 = 1.0 / 120.0;
+        // Match the Python jump_shot: hold the first jump for up to 0.20s,
+        // retaining it while the predicted vertical velocity is still below
+        // the contact target. Once it releases, count three release frames
+        // before the directional second press.
         const DODGE_BUTTON_HOLD: f32 = 0.08;
 
         let local_shot_direction = car
@@ -3557,18 +3553,25 @@ impl BotBrain {
             .normalize();
         let (_, pd) = default_pd(&car, local_shot_direction, false, None);
 
-        // Keep steering/yaw from the shot-direction PD, but force S while
-        // the jump shot is in its setup phase. This applies to quick shots too:
-        // otherwise the bot can skip the nose-up posture entirely.
-        if state.counter < 4 {
+        // Exact Python orientation rule: defaultPD aims the shot, then S
+        // (positive pitch = nose up) is held only for a non-quick airborne
+        // ball that is above the car. Keep defaultPD yaw and its paired roll.
+        if state.counter < 3 {
             controller.steer = pd.steer;
-            controller.pitch = 1.0;
+            controller.pitch = pd.pitch;
             controller.yaw = pd.yaw;
-            controller.roll = if pd.yaw.abs() > 0.08 {
-                -0.20 * pd.yaw.signum()
-            } else {
-                0.0
-            };
+            controller.roll = pd.roll;
+            let ball_is_airborne = state.ball.z > 130.0;
+            let ball_is_above_car = state.ball.z > car.location.z + 65.0;
+            let hold_s = ball_is_airborne && ball_is_above_car && !state.quick;
+            if hold_s {
+                controller.pitch = 1.0;
+                controller.roll = if pd.yaw.abs() > 0.08 {
+                    -0.20 * pd.yaw.signum()
+                } else {
+                    0.0
+                };
+            }
         }
 
         let delta_x = state.approach - xf;
@@ -3586,22 +3589,6 @@ impl BotBrain {
             if delta_v.abs() > throttle_accel * MIN_AIR_BOOST_TIME {
                 controller.throttle =
                     (delta_v / (throttle_accel * MIN_AIR_BOOST_TIME)).clamp(-1.0, 1.0);
-            }
-        }
-
-        // First jump: hold for a short, fixed window while pitching back.
-        // Then explicitly release for one 120 Hz tick before the dodge press.
-        if state.counter < 3 {
-            if jump_elapsed < JUMP_SHOT_TILT_HOLD {
-                controller.jump = true;
-            } else if jump_elapsed < JUMP_SHOT_TILT_HOLD + JUMP_RELEASE {
-                controller.jump = false;
-            } else {
-                state.counter = 3;
-                println!(
-                    "[JUMP SHOT PHASE] player={} phase=tilt_complete elapsed={:.3} T={:.3}",
-                    car.index, jump_elapsed, t,
-                );
             }
         }
 
@@ -3653,6 +3640,25 @@ impl BotBrain {
         } else if state.counter == 5 {
             self.jump_shot = None;
             return self.start_ball_recovery(car);
+        }
+
+        // Python jump_shot's original first-jump hold and release counter.
+        // hf is captured after the launch impulse and before held-jump accel,
+        // exactly as in the Python routine.
+        if state.counter < 3 {
+            if jump_elapsed <= JUMP_MAX_DURATION
+                && (jump_elapsed <= JUMP_MINIMUM_HOLD || hf <= state.approach.z)
+            {
+                controller.jump = true;
+            } else {
+                state.counter += 1;
+                if state.counter == 1 {
+                    println!(
+                        "[JUMP SHOT PHASE] player={} phase=jump_released elapsed={:.3} hf={:.1} target_z={:.1}",
+                        car.index, jump_elapsed, hf, state.approach.z,
+                    );
+                }
+            }
         }
 
         if state.counter == 5 {
@@ -6024,7 +6030,7 @@ mod tests {
     }
 
     #[test]
-    fn jump_shot_always_uses_s_tilt_including_quick_shots() {
+    fn jump_shot_uses_python_s_tilt_and_three_release_frames() {
         let mut brain = BotBrain::new();
         // Put the car inside the calculated front-contact window so this test
         // exercises the second jump press, rather than the runtime distance gate.
@@ -6062,24 +6068,44 @@ mod tests {
         let quick = JumpShotState { quick: true, ..state };
         let fast = brain.run_jump_shot(me, BallState { location: quick.ball, velocity: quick.ball_velocity }, &BallTrajectory { slices: Vec::new() }, quick, 1.01);
         assert!(fast.jump, "quick shots still perform the first jump");
-        assert_eq!(fast.pitch, 1.0, "quick shots must also pitch back before flipping");
+        assert_ne!(fast.pitch, 1.0, "Python skips the S tilt for quick shots");
 
-        let release = brain.run_jump_shot(
+        let release_1 = brain.run_jump_shot(
             me,
             BallState { location: state.ball, velocity: state.ball_velocity },
             &BallTrajectory { slices: Vec::new() },
             state,
             1.0625,
         );
-        assert!(!release.jump, "the first jump must be released before the dodge");
-        assert_eq!(release.pitch, 1.0, "keep the nose tilted back during the release frame");
+        assert!(!release_1.jump, "first release frame must be unpressed");
+        assert_eq!(brain.jump_shot.unwrap().counter, 1);
+
+        let release_2 = brain.run_jump_shot(
+            me,
+            BallState { location: state.ball, velocity: state.ball_velocity },
+            &BallTrajectory { slices: Vec::new() },
+            state,
+            1.08,
+        );
+        assert!(!release_2.jump, "second release frame must be unpressed");
+        assert_eq!(brain.jump_shot.unwrap().counter, 2);
+
+        let release_3 = brain.run_jump_shot(
+            me,
+            BallState { location: state.ball, velocity: state.ball_velocity },
+            &BallTrajectory { slices: Vec::new() },
+            state,
+            1.09,
+        );
+        assert!(!release_3.jump, "third release frame must be unpressed");
+        assert_eq!(brain.jump_shot.unwrap().counter, 3);
 
         let dodge = brain.run_jump_shot(
             me,
             BallState { location: state.ball, velocity: state.ball_velocity },
             &BallTrajectory { slices: Vec::new() },
             state,
-            1.08,
+            1.10,
         );
         assert!(dodge.jump, "the forward dodge is a fresh second jump press");
         assert_eq!(brain.jump_shot.unwrap().counter, 4, "the sequence must enter the dodge phase");
