@@ -10,7 +10,9 @@ use crate::{
     defense::GridDefense,
     math::Vector,
     prediction::{BallSlice, BallTrajectory},
-    shot_physics::aerial_shot_is_viable,
+    shot_physics::{aerial_shot_is_viable, ShotType},
+    shot_parser::{parse_slice_for_shot_with_target, ShotTargets},
+    shot_planner::score_aerial_candidate,
     state::CarState,
 };
 use rlbot::flat::ControllerState;
@@ -729,52 +731,135 @@ pub fn find_aerial_candidate(
     car: CarState,
     prediction: &BallTrajectory,
     goal: Vector,
-    opponents: &[CarState],
+    targets: ShotTargets,
+    cars: &[CarState],
     gravity: Vector,
     boost_accel: f32,
+    game_time: f32,
+    kickoff_contest_until: f32,
+    min_height: f32,
+    max_height: f32,
+    horizon: f32,
+    unlimited_boost: bool,
 ) -> Option<AerialCandidate> {
-    if prediction.slices.is_empty() || car.boost <= 0.0 {
+    if prediction.slices.is_empty() || (!unlimited_boost && car.boost <= 0.0) {
         return None;
     }
+
     let mut best: Option<AerialCandidate> = None;
-    for slice in prediction.slices.iter().copied().filter(|slice| {
-        (0.45..=3.5).contains(&slice.time) && slice.location.z >= 350.0
-    }) {
-        let (target_location, shot_direction) = contact_geometry(car, slice, goal, gravity);
-        let validation = aerial_shot_is_viable(
-            &car,
-            target_location,
-            slice.time,
-            gravity,
-            boost_accel,
-            true,
-        );
-        if !validation.valid {
+    let mut last_sample = -999.0_f32;
+    for slice in prediction.slices.iter().copied() {
+        let time = slice.time;
+        if time < 0.10 {
             continue;
         }
-        let fastest_opponent = opponents.iter()
-            .map(|opponent| opponent_eta(*opponent, slice.location))
-            .fold(f32::INFINITY, f32::min);
-        let race_penalty = if fastest_opponent + 0.08 < slice.time {
-            ((slice.time - fastest_opponent) / slice.time.max(0.1)).clamp(0.0, 1.0) * 0.22
-        } else {
-            0.0
-        };
-        let local_target = car.local_location(target_location);
-        let alignment_penalty = car.forward().angle(local_target) * 0.035;
-        let boost_penalty = (validation.validation.boost_estimate as f32 / car.boost.max(1.0)) * 0.10;
-        let score = slice.time + race_penalty + alignment_penalty + boost_penalty
-            + if validation.fast { 0.025 } else { 0.0 };
+        if time > horizon.min(6.0) {
+            break;
+        }
+        let sample_interval = if time < 1.5 { 0.05 } else { 0.10 };
+        if time - last_sample + 1.0e-5 < sample_interval {
+            continue;
+        }
+        last_sample = time;
+
+        if slice.location.y.abs() > 5212.75 {
+            break;
+        }
+        if !(min_height < slice.location.z && slice.location.z < max_height) {
+            continue;
+        }
+
+        let time_remaining = time - 1.0 / 120.0;
+        if time_remaining <= 0.0 {
+            continue;
+        }
+
+        // Python calls parse_slice_for_shot_with_target with only the aerial
+        // flag enabled. Keep that C-library reachability test separate from
+        // Party Cannon's later hitbox-aware execution target.
+        let mut parsed = parse_slice_for_shot_with_target(
+            &car,
+            slice.location,
+            slice.velocity,
+            time_remaining,
+            92.75,
+            boost_accel,
+            gravity,
+            targets,
+            false,
+            false,
+            false,
+            true,
+            true,
+            false,
+        );
+        if !parsed.found || parsed.shot_type != Some(ShotType::Aerial) {
+            continue;
+        }
+
+        // Exact Volt post-launch reserve for aerials from
+        // _shot_post_launch_boost_reserve(). Re-run the same parser with the
+        // reduced approach budget, rather than estimating a separate race ETA.
+        if !unlimited_boost {
+            let height = (slice.location.z - 92.75 - car.location.z).max(0.0);
+            let distance_3d = car.location.distance(slice.location);
+            let distance_factor = ((distance_3d - 250.0) / 1000.0).clamp(0.0, 1.0);
+            let height_factor = (height / 700.0).clamp(0.0, 1.0);
+            let reserve = (car.boost * 0.18).clamp(2.0, 15.0)
+                * distance_factor
+                * height_factor;
+            if reserve > 0.25 {
+                let approach_budget = car.boost - reserve;
+                if approach_budget < -0.01 {
+                    continue;
+                }
+                let mut budgeted_car = car;
+                budgeted_car.boost = approach_budget.max(0.0).trunc();
+                let next = parse_slice_for_shot_with_target(
+                    &budgeted_car,
+                    slice.location,
+                    slice.velocity,
+                    time_remaining,
+                    92.75,
+                    boost_accel,
+                    gravity,
+                    targets,
+                    false,
+                    false,
+                    false,
+                    true,
+                    true,
+                    false,
+                );
+                if !next.found || next.shot_type != Some(ShotType::Aerial) {
+                    continue;
+                }
+                parsed = next;
+            }
+        }
+
+        let (target_location, shot_direction) = contact_geometry(car, slice, goal, gravity);
+        let score = score_aerial_candidate(
+            car,
+            cars,
+            slice.location,
+            slice.velocity,
+            time_remaining,
+            targets,
+            gravity.z,
+            game_time < kickoff_contest_until,
+        );
+        let estimate = aerial_shot_is_viable(
+            &car, target_location, time_remaining, gravity, boost_accel, true,
+        );
         let candidate = AerialCandidate {
             slice,
             shot_target: goal,
             target_location,
             shot_direction,
-            // CLib's fast-aerial branch includes the second jump impulse;
-            // execute the matching three-frame release and second-jump hold.
-            double_jump: validation.fast,
-            fast: validation.fast,
-            estimated_boost: validation.validation.boost_estimate as f32,
+            double_jump: parsed.fast,
+            fast: parsed.fast,
+            estimated_boost: estimate.validation.boost_estimate as f32,
             score,
         };
         if best.is_none_or(|current| candidate.score < current.score) {
@@ -783,7 +868,6 @@ pub fn find_aerial_candidate(
     }
     best
 }
-
 
 /// Exact Party Cannon WallShot.adjust_jump correction used by jump_shot.
 /// Only the four vertical side walls participate; floor and ceiling contacts
