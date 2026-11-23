@@ -125,6 +125,17 @@ First establish frame-by-frame parity for the inputs and outputs. In
 particular, a correct steering function cannot compensate for a wrong
 contact target, wrong time-to-intercept, or wrong requested speed.
 
+### Jump-shot launch frame
+
+A source comparison found a concrete one-frame control-flow regression:
+Python sets `self.jumping = True` during the pre-launch branch, then continues
+through the same `run()` call into its flight controller. Rust previously
+returned the ground-drive controller immediately after setting
+`state.jumping`, delaying the first jump/flight controls by one 120 Hz tick.
+The Rust launch branch now records `jump_time = game_time` and falls through
+into the flight controller on that same packet. This is a source-order fix;
+it still requires the full Cargo suite and in-game verification.
+
 ### Runtime stalls
 
 The adapter logs missing frame decoding and inactive match phases as
