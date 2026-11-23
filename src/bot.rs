@@ -17,6 +17,8 @@ use crate::{
     shot_planner::{find_best_shot, grid_jump_time, ShotCandidate},
     state::{BallState, BoostPadState, CarState, MatchState},
 };
+use std::collections::HashMap;
+use crate::state::TeamplayMessage;
 use rlbot::flat::ControllerState;
 
 const BALL_RADIUS: f32 = 92.75;
@@ -50,6 +52,7 @@ enum Decision {
     GroundChallenge,
     AerialChallenge,
     WallDrive,
+    TransitionBump,
     Goalkeeper,
     Transition,
 }
@@ -169,6 +172,20 @@ pub struct BotBrain {
     aerial_candidate: Option<AerialCandidate>,
     aerial_shot: Option<AerialShot>,
     wall_drive_candidate: Option<WallDrivePlan>,
+    teammate_comms: HashMap<usize, TeamplayMessage>,
+    teamplay_status: String,
+    teamplay_score: f32,
+    teamplay_contact_time: f32,
+    teamplay_cover_released: bool,
+    teamplay_cover_owner: Option<usize>,
+    teamplay_receive: Option<(Vector, Vector, Vector)>,
+    transition_attacker: Option<usize>,
+    transition_contact_at: f32,
+    transition_hit_time: Option<f32>,
+    transition_last_ball: Option<BallState>,
+    transition_followup_until: f32,
+    transition_last_target: Option<Vector>,
+    transition_bump_cooldown_until: f32,
 }
 
 impl BotBrain {
@@ -199,11 +216,85 @@ impl BotBrain {
             aerial_candidate: None,
             aerial_shot: None,
             wall_drive_candidate: None,
+            teammate_comms: HashMap::new(),
+            teamplay_status: "NO_SHOT".to_owned(),
+            teamplay_score: 0.0,
+            teamplay_contact_time: 10.0,
+            teamplay_cover_released: false,
+            teamplay_cover_owner: None,
+            teamplay_receive: None,
+            transition_attacker: None,
+            transition_contact_at: -999.0,
+            transition_hit_time: None,
+            transition_last_ball: None,
+            transition_followup_until: -999.0,
+            transition_last_target: None,
+            transition_bump_cooldown_until: -999.0,
         }
     }
 
     pub fn set_unlimited_boost(&mut self, unlimited: bool) {
         self.unlimited_boost = unlimited;
+    }
+
+    pub fn set_teammate_comms(&mut self, messages: &HashMap<usize, TeamplayMessage>) {
+        self.teammate_comms.clone_from(messages);
+    }
+
+ 
+    fn set_teamplay_shot(
+        &mut self,
+        me: CarState,
+        ball: BallState,
+        candidate: ShotCandidate,
+        goal: Vector,
+        roles: Option<TeamRoles>,
+    ) {
+        let distance = me.location.distance(candidate.ball);
+        let local_ball = me.local_location(candidate.ball);
+        let facing_angle = local_ball.y.atan2(local_ball.x).abs();
+        let approach = (candidate.ball - me.location).flatten().normalize();
+        let goal_direction = (goal - candidate.ball).flatten().normalize();
+        let alignment = if approach.magnitude() > 0.001 && goal_direction.magnitude() > 0.001 {
+            approach.dot(goal_direction).clamp(-1.0, 1.0)
+        } else { 1.0 };
+        let shooting_penalty = (1.0 - alignment) * 14.0;
+        let mut score = 78.0
+            - candidate.time.min(4.0) * 7.0
+            - facing_angle.min(std::f32::consts::PI) * 7.0
+            - (distance / 3000.0).min(1.0) * 10.0
+            - shooting_penalty;
+        if me.boost < 25.0 { score -= 4.0; }
+        self.teamplay_status = "SHOT_FOUND".to_owned();
+        self.teamplay_score = score.clamp(0.0, 100.0);
+        self.teamplay_contact_time = candidate.time.clamp(0.0, 10.0);
+        self.teamplay_cover_released = true;
+        self.teamplay_cover_owner = roles.and_then(|r| if r.goalie != r.challenger { Some(r.goalie) } else { None });
+        let _ = ball;
+        self.teamplay_receive = receive_plan(candidate.ball, goal);
+    }
+
+    pub fn teamplay_message(&self, now: f32) -> TeamplayMessage {
+        let (receive, direction, contact) = self.teamplay_receive
+            .map(|(receive, direction, contact)| (Some(receive), Some(direction), Some(contact)))
+            .unwrap_or((None, None, None));
+        TeamplayMessage {
+            status: self.teamplay_status.clone(),
+            shot_type: if matches!(self.teamplay_status.as_str(), "SHOT_FOUND" | "ANY_SHOT_FOUND" | "WALL_PASS") {
+                self.teamplay_status.clone()
+            } else { "NO_SHOT".to_owned() },
+            score: self.teamplay_score,
+            contact_time: self.teamplay_contact_time,
+            received_at: now,
+            cover_owner: self.teamplay_cover_owner,
+            cover_released: self.teamplay_cover_released,
+            receive_x: receive.map(|v| v.x),
+            receive_y: receive.map(|v| v.y),
+            receive_dir_x: direction.map(|v| v.x),
+            receive_dir_y: direction.map(|v| v.y),
+            contact_x: contact.map(|v| v.x),
+            contact_y: contact.map(|v| v.y),
+        }
     }
 
     pub fn new_with_boost_accel(boost_accel: f32) -> Self {
@@ -553,6 +644,12 @@ impl BotBrain {
     ) -> Plan {
         self.aerial_candidate = None;
         self.wall_drive_candidate = None;
+        self.teamplay_status = if me.boost < 18.0 { "LOW_BOOST" } else { "NO_SHOT" }.to_owned();
+        self.teamplay_score = 0.0;
+        self.teamplay_contact_time = 10.0;
+        self.teamplay_cover_released = false;
+        self.teamplay_cover_owner = None;
+        self.teamplay_receive = None;
         let side = team_side(me.team);
         let opponents: Vec<CarState> = cars
             .iter()
@@ -661,12 +758,26 @@ impl BotBrain {
         // The Python bot elects the challenger and deepest defender from
         // the same ball-dependency scores in every team size. Do not use a
         // separate 2v2 distance heuristic.
-        let is_challenger = if living_teammates.len() <= 1 {
+        let transition_followup_active = self.transition_followup_until > game_time;
+        let is_challenger = transition_followup_active || if living_teammates.len() <= 1 {
             true
         } else {
             roles.map(|role| role.challenger == me.index).unwrap_or(false)
         };
         let is_goalie = roles.map(|r| r.goalie == me.index).unwrap_or(false);
+        self.teamplay_cover_owner = roles.and_then(|r| {
+            if r.goalie != r.challenger { Some(r.goalie) } else { None }
+        });
+
+        if urgent_save {
+            self.teamplay_status = "DEFEND".to_owned();
+            self.teamplay_score = 100.0;
+            self.teamplay_contact_time = if is_challenger {
+                (me.location.distance(ball.location) / (me.velocity.magnitude() + 1000.0).max(900.0))
+                    .clamp(0.12, 2.0)
+            } else { 10.0 };
+            self.teamplay_cover_released = true;
+        }
 
         if urgent_save && is_challenger {
             return Plan {
@@ -705,15 +816,112 @@ impl BotBrain {
             };
         }
 
-        if roles
-            .and_then(|r| r.transition)
-            .is_some_and(|index| index == me.index)
+        if roles.and_then(|r| r.transition).is_some_and(|index| index == me.index)
+            && !transition_followup_active
         {
-            let x_sign = if me.location.x == 0.0 {
-                1.0
+            let attacker = roles.map(|r| r.challenger);
+            let attacker_message = attacker.and_then(|index| self.teammate_comms.get(&index));
+            let active_attack = attacker_message.is_some_and(|message| {
+                game_time - message.received_at <= 0.65
+                    && message.cover_released
+                    && matches!(message.status.as_str(), "SHOT_FOUND" | "ANY_SHOT_FOUND" | "WALL_PASS")
+                    && (ball_depth < 1280.0 || message.status == "WALL_PASS")
+            }) && !urgent_save;
+
+            if active_attack {
+                let attacker_index = attacker.unwrap();
+                let attacker_car = cars.iter().copied().find(|car| car.index == attacker_index && !car.demolished);
+                if self.transition_attacker != Some(attacker_index) {
+                    self.transition_attacker = Some(attacker_index);
+                    self.transition_hit_time = None;
+                    self.transition_last_ball = Some(ball);
+                    self.transition_contact_at = attacker_message.unwrap().received_at
+                        + attacker_message.unwrap().contact_time;
+                    self.transition_last_target = None;
+                }
+                if let Some(previous) = self.transition_last_ball {
+                    let velocity_change = (ball.velocity - previous.velocity).magnitude();
+                    let ball_shift = ball.location.flat_distance(previous.location);
+                    if self.transition_hit_time.is_none()
+                        && (velocity_change > 450.0
+                            || (game_time >= self.transition_contact_at + 0.12 && ball_shift > 100.0)
+                            || game_time >= self.transition_contact_at + 0.28)
+                    {
+                        self.transition_hit_time = Some(game_time);
+                    }
+                }
+                self.transition_last_ball = Some(ball);
+
+                if self.transition_hit_time.is_some_and(|hit| game_time >= hit + 0.18) {
+                    self.transition_followup_until = game_time + 1.2;
+                    self.transition_attacker = None;
+                    self.transition_hit_time = None;
+                    self.transition_last_ball = None;
+                    self.transition_last_target = None;
+                } else {
+                    if game_time >= self.transition_bump_cooldown_until {
+                        if let Some(attacker_car) = attacker_car {
+                            if let Some(defender) = transition_bump_target(
+                                me, attacker_car, ball, cars, opponent_goal,
+                            ) {
+                                self.transition_bump_cooldown_until = game_time + 2.25;
+                                let distance = me.location.flat_distance(defender.location);
+                                let speed = me.velocity.flatten().magnitude();
+                                let lead_time = (distance / (speed + 650.0).max(1100.0)).clamp(0.12, 0.55);
+                                return Plan {
+                                    decision: Decision::TransitionBump,
+                                    target: defender.location + defender.velocity.flatten() * lead_time,
+                                    target_speed: MAX_SPEED,
+                                    shot: None,
+                                    jump: None,
+                                };
+                            }
+                        }
+                    }
+
+                    let message = attacker_message.unwrap();
+                    let direction = if self.transition_hit_time.is_some() {
+                        let velocity = ball.velocity.flatten();
+                        if velocity.magnitude() >= 250.0 { velocity.normalize() }
+                        else { self.transition_last_ball.map(|b| b.velocity.flatten().normalize()).unwrap_or(Vector::new(0.0, -side, 0.0)) }
+                    } else if let (Some(dx), Some(dy)) = (message.receive_dir_x, message.receive_dir_y) {
+                        Vector::new(dx, dy, 0.0).normalize()
+                    } else if let Some(attacker_car) = attacker_car {
+                        attacker_car.forward().flatten().normalize()
+                    } else {
+                        ball.velocity.flatten().normalize()
+                    };
+                    let direction = if direction.magnitude() < 0.1 { Vector::new(0.0, -side, 0.0) } else { direction };
+                    let mut target = if let (Some(x), Some(y)) = (message.receive_x, message.receive_y) {
+                        Vector::new(x, y, 0.0)
+                    } else {
+                        ball.location + direction * 1450.0
+                    };
+                    target.x = target.x.clamp(-3900.0, 3900.0);
+                    target.y = target.y.clamp(-4550.0, 4550.0);
+                    if let Some(previous) = self.transition_last_target {
+                        let shift = target - previous;
+                        if shift.magnitude() < 1100.0 {
+                            target = previous + shift * if self.transition_hit_time.is_some() { 0.58 } else { 0.38 };
+                        }
+                    }
+                    self.transition_last_target = Some(target);
+                    return Plan {
+                        decision: Decision::Transition,
+                        target,
+                        target_speed: 1700.0,
+                        shot: None,
+                        jump: None,
+                    };
+                }
             } else {
-                me.location.x.signum()
-            };
+                self.transition_attacker = None;
+                self.transition_hit_time = None;
+                self.transition_last_ball = None;
+                self.transition_last_target = None;
+            }
+
+            let x_sign = if me.location.x == 0.0 { 1.0 } else { me.location.x.signum() };
             return Plan {
                 decision: Decision::Transition,
                 target: Vector::new(x_sign * 900.0, side * 5050.0, 0.0),
@@ -748,6 +956,26 @@ impl BotBrain {
                 match_state.gravity, self.boost_accel, game_time,
                 self.kickoff_contest_until, urgent_save, true, self.unlimited_boost, self.shot_search_horizon(game_time),
             );
+            if let Some(candidate) = candidate {
+                self.set_teamplay_shot(me, ball, candidate, opponent_goal, roles);
+                if !should_commit_to_shot(
+                    me, cars, ball, roles, urgent_save, self.teamplay_score,
+                    candidate.time, &self.teammate_comms, game_time,
+                ) {
+                    self.teamplay_status = if me.boost < 18.0 { "LOW_BOOST" } else { "NO_SHOT" }.to_owned();
+                    self.teamplay_score = 0.0;
+                    self.teamplay_contact_time = 10.0;
+                    self.teamplay_cover_released = false;
+                    self.teamplay_receive = None;
+                    return Plan {
+                        decision: Decision::Transition,
+                        target: Vector::new(me.location.x.signum() * 900.0, side * 5050.0, 0.0),
+                        target_speed: 1700.0,
+                        shot: None,
+                        jump: None,
+                    };
+                }
+            }
             let selected = candidate.map(|candidate| candidate_to_intercept(me, candidate, shot_targets));
             let can_jump = candidate.is_some_and(|candidate| candidate.can_jump);
             let use_jump = selected.filter(|shot| shot.shot_type != ShotType::Ground || can_jump);
@@ -761,7 +989,15 @@ impl BotBrain {
                 ).filter(|candidate| {
                     selected.is_none_or(|shot| candidate.intercept_time < shot.time + 0.18)
                 }) {
+
                     self.wall_drive_candidate = Some(wall);
+                    self.teamplay_status = "WALL_PASS".to_owned();
+                    self.teamplay_score = self.teamplay_score.max(78.0);
+                    self.teamplay_contact_time = wall.intercept_time.clamp(0.0, 10.0);
+                    self.teamplay_cover_released = true;
+                    self.teamplay_receive = receive_plan(
+                        wall.ball_slice.location, opponent_goal,
+                    );
                     return Plan {
                         decision: Decision::WallDrive,
                         target: wall.ball_slice.location,
@@ -839,6 +1075,9 @@ impl BotBrain {
             match_state.gravity, self.boost_accel, game_time,
             self.kickoff_contest_until, urgent_save, true, self.unlimited_boost, self.shot_search_horizon(game_time),
         );
+        if let Some(candidate) = candidate {
+            self.set_teamplay_shot(me, ball, candidate, opponent_goal, roles);
+        }
         let selected = candidate.map(|candidate| candidate_to_intercept(me, candidate, shot_targets));
         let can_jump = candidate.is_some_and(|candidate| candidate.can_jump);
         let use_jump = selected.filter(|shot| shot.shot_type != ShotType::Ground || can_jump);
@@ -850,6 +1089,11 @@ impl BotBrain {
                 selected.is_none_or(|shot| candidate.intercept_time < shot.time + 0.18)
             }) {
                 self.wall_drive_candidate = Some(wall);
+                self.teamplay_status = "WALL_PASS".to_owned();
+                self.teamplay_score = self.teamplay_score.max(78.0);
+                self.teamplay_contact_time = wall.intercept_time.clamp(0.0, 10.0);
+                self.teamplay_cover_released = true;
+                self.teamplay_receive = receive_plan(wall.ball_slice.location, opponent_goal);
                 return Plan {
                     decision: Decision::WallDrive,
                     target: wall.ball_slice.location,
@@ -1785,6 +2029,88 @@ impl BotBrain {
 
         controller
     }
+}
+
+
+fn receive_plan(contact: Vector, aim: Vector) -> Option<(Vector, Vector, Vector)> {
+    let mut lane = (aim - contact).flatten();
+    if lane.magnitude() < 1.0 { return None; }
+    lane = lane.normalize();
+    let lane_distance = (contact.flat_distance(aim) * 0.28).clamp(350.0, 1050.0);
+    Some((contact + lane * lane_distance, lane, contact))
+}
+
+fn should_commit_to_shot(
+    me: CarState,
+    cars: &[CarState],
+    ball: BallState,
+    roles: Option<TeamRoles>,
+    urgent_save: bool,
+    my_score: f32,
+    my_contact_time: f32,
+    messages: &HashMap<usize, TeamplayMessage>,
+    game_time: f32,
+) -> bool {
+    if urgent_save { return true; }
+    let side = team_side(me.team);
+    let ball_is_our_side = ball.location.y * side > 640.0;
+    for friend in cars.iter().filter(|car| car.team == me.team && car.index != me.index && !car.demolished) {
+        let Some(message) = messages.get(&friend.index) else { continue; };
+        if game_time - message.received_at > 0.5 { continue; }
+        if message.status == "WALL_PASS" { return false; }
+        if message.status == "DEFEND" && ball_is_our_side
+            && roles.is_some_and(|role| role.challenger == friend.index) {
+            return false;
+        }
+        if !matches!(message.status.as_str(), "SHOT_FOUND" | "ANY_SHOT_FOUND") {
+            continue;
+        }
+        if message.cover_released { return false; }
+        let friend_depth = friend.location.y * side;
+        let my_depth = me.location.y * side;
+        let teammate_rotating_from_behind = friend_depth > my_depth + 250.0
+            && ball.location.y * side < 640.0;
+        if teammate_rotating_from_behind {
+            let clearly_better = my_score >= message.score + 12.0
+                && my_contact_time <= message.contact_time + 0.35;
+            if !clearly_better { return false; }
+            continue;
+        }
+        let teammate_has_better = message.score >= my_score + 8.0
+            && message.contact_time <= my_contact_time + 0.80;
+        let teammate_arrives_first = message.contact_time + 0.45 < my_contact_time
+            && message.score >= my_score - 8.0;
+        if teammate_has_better || teammate_arrives_first { return false; }
+    }
+    true
+}
+
+fn transition_bump_target(
+    me: CarState,
+    attacker: CarState,
+    ball: BallState,
+    cars: &[CarState],
+    foe_goal: Vector,
+) -> Option<CarState> {
+    if attacker.location.flat_distance(ball.location) > 1700.0 { return None; }
+    let goal_direction = (foe_goal - attacker.location).flatten().normalize();
+    if goal_direction.magnitude() < 0.001 { return None; }
+    let mut defenders = Vec::new();
+    for foe in cars.iter().copied().filter(|car| car.team != me.team && !car.demolished) {
+        let offset = (foe.location - attacker.location).flatten();
+        let progress = offset.dot(goal_direction);
+        if !(150.0..=3500.0).contains(&progress) { continue; }
+        let lateral = (offset - goal_direction * progress).magnitude();
+        if lateral > 650.0 || foe.location.flat_distance(ball.location) > 2600.0
+            || me.location.flat_distance(foe.location) > 4200.0 {
+            continue;
+        }
+        defenders.push(foe);
+    }
+    if defenders.is_empty() || defenders.len() > 2 { return None; }
+    defenders.into_iter().min_by(|a,b| {
+        a.location.flat_distance(ball.location).total_cmp(&b.location.flat_distance(ball.location))
+    })
 }
 
 /// Turn-aware drive execution used by ordinary navigation and shot setup.

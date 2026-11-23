@@ -327,10 +327,18 @@ impl GoalState {
 #[derive(Debug, Clone, PartialEq)]
 pub struct TeamplayMessage {
     pub status: String,
+    pub shot_type: String,
     pub score: f32,
     pub contact_time: f32,
     pub received_at: f32,
+    pub cover_owner: Option<usize>,
     pub cover_released: bool,
+    pub receive_x: Option<f32>,
+    pub receive_y: Option<f32>,
+    pub receive_dir_x: Option<f32>,
+    pub receive_dir_y: Option<f32>,
+    pub contact_x: Option<f32>,
+    pub contact_y: Option<f32>,
 }
 
 /// Persistent fields initialized by Volt's Bot.init() and VirxERLU.initialize().

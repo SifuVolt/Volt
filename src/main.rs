@@ -6,6 +6,7 @@ pub mod shot_physics;
 pub mod shot_parser;
 pub mod shot_planner;
 pub mod mechanics;
+pub mod teamplay;
 pub mod bot;
 mod control;
 mod defense;
@@ -28,6 +29,7 @@ use rlbot::{
         FieldInfo,
         GamePacket,
         MatchConfiguration,
+        MatchComm,
         PlayerInput,
     },
     util::{AgentEnvironment, PacketQueue},
@@ -46,6 +48,8 @@ struct VoltRustAgent {
     ball_prediction: Vec<AbsoluteBallSlice>,
     boost_pads: Vec<BoostPadState>,
     brain: BotBrain,
+    last_comms_signature: Vec<u8>,
+    last_comms_send_time: f32,
 }
 
 impl BotAgent for VoltRustAgent {
@@ -97,6 +101,31 @@ impl BotAgent for VoltRustAgent {
                 BoostPadState::from_field_info(index, pad)
             }).collect(),
             brain,
+            last_comms_signature: Vec::new(),
+            last_comms_send_time: -999.0,
+        }
+    }
+
+    fn on_match_comm(
+        &mut self,
+        match_comm: &MatchComm,
+        _packet_queue: &mut PacketQueue,
+    ) {
+        if match_comm.team != self.team
+            || !match_comm.team_only
+            || match_comm.index == self.index
+        {
+            return;
+        }
+        if let Some((sender, message)) = crate::teamplay::decode(
+            match_comm.index as usize,
+            match_comm.team,
+            self.team,
+            self.index as usize,
+            &match_comm.content,
+            self.match_state.time,
+        ) {
+            self.persistent.teammate_comms.insert(sender, message);
         }
     }
 
@@ -178,6 +207,11 @@ impl BotAgent for VoltRustAgent {
             return;
         }
 
+        self.persistent.teammate_comms.retain(|_, message| {
+            (game_time - message.received_at) <= 1.0
+        });
+        self.brain.set_teammate_comms(&self.persistent.teammate_comms);
+
         let controller: ControllerState = self.brain.tick(
             frame.me,
             &frame.cars,
@@ -191,6 +225,28 @@ impl BotAgent for VoltRustAgent {
                 right: self.foe_goal_shot.1,
             },
         );
+
+        let teamplay_message = self.brain.teamplay_message(game_time);
+        if let Some(content) = crate::teamplay::encode(
+            self.index as usize,
+            self.team,
+            &teamplay_message,
+        ) {
+            let changed = content != self.last_comms_signature;
+            let refresh_due = game_time - self.last_comms_send_time >= 0.25;
+            let rate_limit_clear = game_time - self.last_comms_send_time >= 0.10;
+            if rate_limit_clear && (changed || refresh_due) {
+                packet_queue.push(MatchComm {
+                    index: self.index,
+                    team: self.team,
+                    team_only: true,
+                    display: None,
+                    content: content.clone(),
+                });
+                self.last_comms_signature = content;
+                self.last_comms_send_time = game_time;
+            }
+        }
 
         packet_queue.push(PlayerInput {
             player_index: self.index,
