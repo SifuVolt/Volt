@@ -90,15 +90,17 @@ impl SpeedFlipKickoff {
 
                 if car.location.flat_distance(ball.location) < 1000.0 {
                     self.phase = 3;
-                    self.phase3_start_time = Some(game_time);
-                    self.phase3_start_ball = ball.location;
-                    self.phase3_start_velocity = ball.velocity;
-                    self.phase3_flip_start = Some(game_time);
                 }
             }
             // Python phase 3: drive through the ball and use a one-frame
             // jump, three-frame release, one-frame forward dodge sequence.
             3 => {
+                if self.phase3_start_time.is_none() {
+                    self.phase3_start_time = Some(game_time);
+                    self.phase3_start_ball = ball.location;
+                    self.phase3_start_velocity = ball.velocity;
+                    self.phase3_flip_start = Some(game_time);
+                }
                 let local_ball = car.local_location(ball.location);
                 let (_, pd) = default_pd(&car, local_ball, false, None);
                 controller.steer = pd.steer;
