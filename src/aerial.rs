@@ -350,7 +350,10 @@ impl AerialShot {
             return controls;
         }
 
-        if !self.side_wall_launched && !self.jumped && !self.dodging {
+        // Python only attempts the side-wall route before the aerial
+        // jump sequence starts; once aerialing owns the car, never re-enter
+        // the wall-drive phase on subsequent packets.
+        if !self.aerialing && !self.side_wall_launched && !self.jumped && !self.dodging {
             if let Some(wall_controls) =
                 self.run_side_wall_takeoff(car, game_time, time_remaining, boost_accel)
             {
