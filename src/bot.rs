@@ -2012,6 +2012,11 @@ impl BotBrain {
             && yaw_error < 0.85
             && output.handbrake != Some(true);
         output.boost = Some(needs_boost);
+        if needs_boost {
+            // Python wall_approach explicitly overrides defaultThrottle's
+            // throttle to full when the wall route has a valid boost window.
+            output.throttle = Some(1.0);
+        }
         let mut controller = controller_from_drive(output, car);
         let time_remaining = plan.intercept_time;
 
