@@ -6084,7 +6084,7 @@ mod tests {
             me,
             BallState { location: state.ball, velocity: state.ball_velocity },
             &BallTrajectory { slices: Vec::new() },
-            state,
+            brain.jump_shot.unwrap(),
             1.22,
         );
         assert!(!release_2.jump, "second release frame must be unpressed");
@@ -6094,7 +6094,7 @@ mod tests {
             me,
             BallState { location: state.ball, velocity: state.ball_velocity },
             &BallTrajectory { slices: Vec::new() },
-            state,
+            brain.jump_shot.unwrap(),
             1.23,
         );
         assert!(!release_3.jump, "third release frame must be unpressed");
@@ -6104,7 +6104,7 @@ mod tests {
             me,
             BallState { location: state.ball, velocity: state.ball_velocity },
             &BallTrajectory { slices: Vec::new() },
-            state,
+            brain.jump_shot.unwrap(),
             1.24,
         );
         assert!(dodge.jump, "the forward dodge is a fresh second jump press");
