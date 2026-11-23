@@ -568,6 +568,55 @@ fn opponent_eta(opponent: CarState, target: Vector) -> f32 {
         + (1.0 - facing) * 0.28
 }
 
+
+/// Fast-zone aerial scan from routines.fast_intercept_finder. It keeps the
+/// first normal aerial if one exists; otherwise it falls back to the first
+/// fast aerial whose live and predicted ball heights both clear 350 units.
+pub fn find_fast_aerial_candidate(
+    car: CarState,
+    prediction: &BallTrajectory,
+    goal: Vector,
+    gravity: Vector,
+    boost_accel: f32,
+    earliest_time: f32,
+    horizon: f32,
+    live_ball_height: f32,
+    max_height: f32,
+    can_aerial: bool,
+) -> Option<AerialCandidate> {
+    if !can_aerial || car.boost <= 0.0 || prediction.slices.is_empty() {
+        return None;
+    }
+    let mut first_fast = None;
+    for slice in prediction.slices.iter().copied() {
+        if slice.time < earliest_time.max(0.0) { continue; }
+        if slice.time > horizon.min(6.0) { break; }
+        if slice.location.z > max_height { continue; }
+        let (target_location, shot_direction) = contact_geometry(car, slice, goal, gravity);
+        let validation = aerial_shot_is_viable(
+            &car, target_location, slice.time, gravity, boost_accel, true,
+        );
+        if !validation.valid { continue; }
+        let candidate = AerialCandidate {
+            slice,
+            shot_target: goal,
+            target_location,
+            shot_direction,
+            double_jump: validation.fast,
+            fast: validation.fast,
+            estimated_boost: validation.validation.boost_estimate as f32,
+            score: slice.time + if validation.fast { 0.025 } else { 0.0 },
+        };
+        if !validation.fast {
+            return Some(candidate);
+        }
+        if slice.location.z > 350.0 && live_ball_height > 350.0 && first_fast.is_none() {
+            first_fast = Some(candidate);
+        }
+    }
+    first_fast
+}
+
 pub fn find_aerial_candidate(
     car: CarState,
     prediction: &BallTrajectory,

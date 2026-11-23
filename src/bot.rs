@@ -5,7 +5,7 @@
 //! timed shot execution all feed the live RLBot controller.
 
 use crate::{
-    aerial::{find_aerial_candidate, party_cannon_contact_geometry, wall_shot_adjust_jump, AerialCandidate, AerialShot},
+    aerial::{find_aerial_candidate, find_fast_aerial_candidate, party_cannon_contact_geometry, wall_shot_adjust_jump, AerialCandidate, AerialShot},
     control::{default_drive, default_pd, DriveInput},
     defense::GridDefense,
     math::{utils::cap_in_field, Vector},
@@ -208,6 +208,8 @@ pub struct BotBrain {
     emergency_save_zone_active: bool,
     power_clear: Option<PowerClearState>,
     last_goalie_role_time: f32,
+    was_airborne: bool,
+    last_landing_time: f32,
 }
 
 impl BotBrain {
@@ -256,6 +258,8 @@ impl BotBrain {
             emergency_save_zone_active: false,
             power_clear: None,
             last_goalie_role_time: -999.0,
+            was_airborne: false,
+            last_landing_time: -999.0,
         }
     }
 
@@ -306,6 +310,36 @@ impl BotBrain {
         self.teamplay_receive = receive_plan(candidate.ball, receive_aim);
     }
 
+
+    fn set_teamplay_aerial(
+        &mut self,
+        me: CarState,
+        candidate: AerialCandidate,
+        aim: Vector,
+        roles: Option<TeamRoles>,
+        urgent_save: bool,
+    ) {
+        let distance = me.location.distance(candidate.slice.location);
+        let local_ball = me.local_location(candidate.slice.location);
+        let facing = local_ball.y.atan2(local_ball.x).abs();
+        let approach = (candidate.slice.location - me.location).flatten().normalize();
+        let goal_direction = (aim - candidate.slice.location).flatten().normalize();
+        let alignment = if approach.magnitude() > 0.001 && goal_direction.magnitude() > 0.001 {
+            approach.dot(goal_direction).clamp(-1.0, 1.0)
+        } else { 1.0 };
+        let mut score = 78.0 - candidate.slice.time.min(4.0) * 7.0
+            - facing.min(3.14) * 7.0 - (distance / 3000.0).min(1.0) * 10.0
+            - (1.0 - alignment) * 14.0;
+        if me.boost < 25.0 { score -= 4.0; }
+        if urgent_save { score += 15.0; }
+        self.teamplay_status = "SHOT_FOUND".to_owned();
+        self.teamplay_score = score.clamp(0.0, 100.0);
+        self.teamplay_contact_time = candidate.slice.time.clamp(0.0, 10.0);
+        self.teamplay_cover_released = true;
+        self.teamplay_cover_owner = roles.and_then(|r| if r.goalie != r.challenger { Some(r.goalie) } else { None });
+        self.teamplay_receive = receive_plan(candidate.slice.location, aim);
+    }
+
     pub fn teamplay_message(&self, now: f32) -> TeamplayMessage {
         let (receive, direction, contact) = self.teamplay_receive
             .map(|(receive, direction, contact)| (Some(receive), Some(direction), Some(contact)))
@@ -350,6 +384,10 @@ impl BotBrain {
     ) -> ControllerState {
         self.match_state = match_state;
         self.shot_targets = shot_targets;
+        if self.was_airborne && !me.airborne {
+            self.last_landing_time = game_time;
+        }
+        self.was_airborne = me.airborne;
         if let Some(mut dash) = self.wave_dash {
             let result = dash.tick(me, game_time);
             if result.finished {
@@ -1125,6 +1163,29 @@ impl BotBrain {
                 }
             }
 
+            if fast_intercept_zone && !urgent_save
+                && (me.airborne || game_time - self.last_landing_time > 0.5)
+            {
+                let max_height = if living_teammates.len() == 1 && opponents.len() == 1 {
+                    1200.0
+                } else { f32::INFINITY };
+                if let Some(candidate) = find_fast_aerial_candidate(
+                    me, prediction, aim, match_state.gravity, self.boost_accel,
+                    0.10, self.shot_search_horizon(game_time), ball.location.z,
+                    max_height, true,
+                ) {
+                    self.set_teamplay_aerial(me, candidate, aim, roles, urgent_save);
+                    self.aerial_candidate = Some(candidate);
+                    return Plan {
+                        decision: Decision::AerialChallenge,
+                        target: candidate.target_location,
+                        target_speed: MAX_SPEED,
+                        shot: None,
+                        jump: None,
+                    };
+                }
+            }
+
             // Aerials compete with ground and single-jump contacts only after
             // the same team-role gate has elected this car to challenge.
             // The CLib reachability check enforces the real boost/speed budget.
@@ -1140,7 +1201,7 @@ impl BotBrain {
             } else if self.unlimited_boost || me.airborne {
                 150.0
             } else {
-                450.0
+                350.0
             };
             if !urgent_save && self.jump_shot.is_none() && self.ground_flip.is_none() {
                 if let Some(candidate) = find_aerial_candidate(
@@ -1236,6 +1297,52 @@ impl BotBrain {
                 return Plan {
                     decision: Decision::WallDrive,
                     target: wall.ball_slice.location,
+                    target_speed: MAX_SPEED,
+                    shot: None,
+                    jump: None,
+                };
+            }
+        }
+
+        let max_aerial_height = 1200.0;
+        let min_aerial_height = if me.location.z >= 2044.0 - me.hitbox.height * 1.1 {
+            551.0
+        } else if self.unlimited_boost || me.airborne {
+            150.0
+        } else {
+            350.0
+        };
+        if !urgent_save && self.ground_flip.is_none() && self.jump_shot.is_none() {
+            if fast_intercept_zone && (me.airborne || game_time - self.last_landing_time > 0.5) {
+                if let Some(candidate) = find_fast_aerial_candidate(
+                    me, prediction, aim, match_state.gravity, self.boost_accel,
+                    0.10, self.shot_search_horizon(game_time), ball.location.z,
+                    max_aerial_height, true,
+                ) {
+                    self.set_teamplay_aerial(me, candidate, aim, roles, urgent_save);
+                    self.aerial_candidate = Some(candidate);
+                    return Plan {
+                        decision: Decision::AerialChallenge,
+                        target: candidate.target_location,
+                        target_speed: MAX_SPEED,
+                        shot: None,
+                        jump: None,
+                    };
+                }
+            }
+            if let Some(candidate) = find_aerial_candidate(
+                me, prediction, aim, &opponents, match_state.gravity, self.boost_accel,
+            ).filter(|candidate| {
+                candidate.slice.location.z > min_aerial_height
+                    && candidate.slice.location.z < max_aerial_height
+                    && (!candidate.fast || (ball.location.z > 350.0 && candidate.slice.location.z > 350.0))
+                    && selected.is_none_or(|ground_or_jump| candidate.score + 0.05 < ground_or_jump.time)
+            }) {
+                self.set_teamplay_aerial(me, candidate, aim, roles, urgent_save);
+                self.aerial_candidate = Some(candidate);
+                return Plan {
+                    decision: Decision::AerialChallenge,
+                    target: candidate.target_location,
                     target_speed: MAX_SPEED,
                     shot: None,
                     jump: None,
