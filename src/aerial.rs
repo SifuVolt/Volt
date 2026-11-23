@@ -23,6 +23,8 @@ const JUMP_VEL: f32 = 291.667;
 const JUMP_ACCEL: f32 = 1458.333;
 const JUMP_DURATION: f32 = 0.2;
 const BOOST_CONSUMPTION: f32 = 33.333_333;
+// Aim the nose at the lower-middle of the ball instead of its centre.
+const AERIAL_CONTACT_DROP: f32 = 46.375;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct AerialCandidate {
@@ -171,6 +173,10 @@ impl AerialShot {
                     self.ball - shot_direction * approach_distance - hitbox_offset;
             }
         }
+
+        // The nose should meet the lower-middle of the ball (halfway from
+        // centre to bottom), not aim through the exact centre.
+        target_location.z -= AERIAL_CONTACT_DROP;
 
         if self.ceiling {
             target_location.z -= 92.0;
@@ -733,6 +739,7 @@ pub fn find_fast_aerial_candidate(
         return None;
     }
     let mut first_fast = None;
+    let mut first_normal = None;
     for slice in prediction.slices.iter().copied() {
         if slice.time < earliest_time.max(1.0 / 120.0) { continue; }
         if slice.time > horizon.min(6.0) { break; }
@@ -776,13 +783,27 @@ pub fn find_fast_aerial_candidate(
             score: slice.time + if parsed.fast { 0.025 } else { 0.0 },
         };
         if !parsed.fast {
-            return Some(candidate);
-        }
-        if slice.location.z > 350.0 && live_ball_height > 350.0 && first_fast.is_none() {
+            if first_normal.is_none() {
+                first_normal = Some(candidate);
+            }
+        } else if slice.location.z > 350.0
+            && live_ball_height > 350.0
+            && first_fast.is_none()
+        {
             first_fast = Some(candidate);
         }
     }
-    first_fast
+
+    // Choose the earliest reachable aerial. A later normal aerial must not
+    // suppress an earlier, valid fast aerial.
+    match (first_normal, first_fast) {
+        (Some(normal), Some(fast)) => {
+            Some(if fast.slice.time < normal.slice.time { fast } else { normal })
+        }
+        (Some(normal), None) => Some(normal),
+        (None, Some(fast)) => Some(fast),
+        (None, None) => None,
+    }
 }
 
 pub fn find_aerial_candidate(
@@ -1074,7 +1095,8 @@ mod tests {
             Vector::new(0.0, 5120.0, 300.0),
             Vector::new(0.0, 0.0, -650.0),
         );
-        assert!((target.distance(slice.location) - (92.75 + car_state.hitbox.length * 0.5)).abs() < 0.01);
+        let lower_middle = slice.location - Vector::new(0.0, 0.0, AERIAL_CONTACT_DROP);
+        assert!((target.distance(lower_middle) - (92.75 + car_state.hitbox.length * 0.5)).abs() < 0.01);
         assert!(direction.magnitude() > 0.99);
     }
 
