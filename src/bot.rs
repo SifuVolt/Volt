@@ -988,6 +988,98 @@ impl BotBrain {
         6.0
     }
 
+    fn fast_intercept_plan(
+        &mut self,
+        me: CarState,
+        cars: &[CarState],
+        ball: BallState,
+        prediction: &BallTrajectory,
+        game_time: f32,
+        opponent_goal: Vector,
+        roles: Option<TeamRoles>,
+        urgent_save: bool,
+    ) -> Option<Plan> {
+        let can_aerial = me.airborne || game_time - self.last_landing_time > 0.5;
+        let found = find_fast_intercept_candidate(
+            me,
+            prediction,
+            ball.location,
+            self.match_state.gravity,
+            self.boost_accel,
+            0.0,
+            self.shot_search_horizon(game_time),
+            self.unlimited_boost,
+            game_time < self.kickoff_contest_until,
+            can_aerial,
+        )?;
+        let slice = found.slice;
+        let parsed = found.parsed;
+        let shot_type = parsed.shot_type?;
+
+        if shot_type == ShotType::Aerial {
+            let aim = relative_goal_aim_point(me, ball.location, self.shot_targets);
+            let candidate = AerialCandidate {
+                slice,
+                shot_target: aim,
+                target_location: parsed.approach_target,
+                shot_direction: parsed.shot_vector,
+                double_jump: parsed.fast,
+                fast: parsed.fast,
+                estimated_boost: 0.0,
+                score: slice.time,
+            };
+            self.set_teamplay_aerial(
+                me, ball, candidate, opponent_goal, opponent_goal, roles, urgent_save, false,
+            );
+            if !should_commit_to_shot(
+                me, cars, ball, roles, urgent_save, self.teamplay_score,
+                self.teamplay_contact_time, &self.teammate_comms, game_time,
+            ) {
+                self.yield_teamplay_opportunity();
+                return None;
+            }
+            self.aerial_candidate = Some(candidate);
+            return Some(Plan {
+                decision: Decision::AerialChallenge,
+                target: candidate.target_location,
+                target_speed: MAX_SPEED,
+                shot: None,
+                jump: None,
+            });
+        }
+
+        let candidate = ShotCandidate {
+            time: slice.time,
+            ball: slice.location,
+            ball_velocity: slice.velocity,
+            approach: parsed.approach_target,
+            shot_direction: parsed.shot_vector,
+            shot_type,
+            targeted: false,
+            can_jump: shot_type != ShotType::Ground,
+            fast: parsed.fast,
+            score: slice.time,
+            parser: parsed,
+        };
+        self.set_teamplay_shot(me, ball, candidate, opponent_goal, roles, urgent_save);
+        if !should_commit_to_shot(
+            me, cars, ball, roles, urgent_save, self.teamplay_score,
+            self.teamplay_contact_time, &self.teammate_comms, game_time,
+        ) {
+            self.yield_teamplay_opportunity();
+            return None;
+        }
+        let intercept = candidate_to_intercept(me, candidate, self.shot_targets);
+        let is_ground = shot_type == ShotType::Ground;
+        Some(Plan {
+            decision: if is_ground { Decision::GroundShot } else { Decision::JumpShot },
+            target: intercept.approach,
+            target_speed: MAX_SPEED,
+            shot: if is_ground { Some(intercept) } else { None },
+            jump: if is_ground { None } else { Some(intercept) },
+        })
+    }
+
     fn choose_plan(
         &mut self,
         me: CarState,
