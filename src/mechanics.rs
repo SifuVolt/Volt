@@ -231,7 +231,7 @@ impl WaveDash {
         }
 
         self.step += 1;
-        MechanicsOutput { controller: output, finished: false }
+        MechanicsOutput { controller: output, finished: false, ..Default::default() }
     }
 }
 
@@ -316,5 +316,25 @@ mod tests {
         let grounded = car(Vector::ZERO, Vector::new(1000.0, 0.0, 0.0), false, Vector::new(0.0, 0.0, 1.0));
         let output = dash.tick(grounded, 0.0);
         assert_eq!(output.controller.throttle, -1.0);
+    }
+
+    #[test]
+    fn wave_dash_timeout_requests_the_python_recovery_handoff() {
+        let mut dash = WaveDash::new(Some(Vector::new(250.0, 900.0, 0.0)));
+        let airborne = car(
+            Vector::new(0.0, 0.0, 500.0),
+            Vector::new(500.0, 0.0, -100.0),
+            true,
+            Vector::new(0.0, 0.0, 1.0),
+        );
+        for tick in 0..4 {
+            let result = dash.tick(airborne, tick as f32 / 120.0);
+            assert!(!result.finished);
+            assert!(!result.recover);
+        }
+        let timeout = dash.tick(airborne, 2.1);
+        assert!(timeout.finished);
+        assert!(timeout.recover);
+        assert_eq!(timeout.recovery_target, Some(Vector::new(250.0, 900.0, 0.0)));
     }
 }
