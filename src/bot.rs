@@ -2763,16 +2763,20 @@ impl BotBrain {
             return self.run_half_flip(car, state, game_time, self.match_state.gravity.z);
         }
 
-        let mut target_speed = plan.target_speed;
-        if distance < 700.0 {
-            target_speed = target_speed.min(1200.0);
-        } else if angle > 1.7 {
-            target_speed = target_speed.min(1050.0);
-        } else if angle > 1.0 {
-            target_speed = target_speed.min(1650.0);
-        }
-
-        let output = controlled_drive(&car, target, target_speed, self.boost_accel);
+        // Python goto.run drives at 2300 through defaultDrive. The
+        // source throttle routine already applies its curvature-based turn
+        // limit; extra distance/heading caps here change the source behavior.
+        let output = default_drive(
+            &car,
+            DriveInput {
+                target_speed: plan.target_speed,
+                local_target,
+                upside_down: false,
+                up: None,
+                handbrake: false,
+                boost_accel: self.boost_accel,
+            },
+        );
 
         let controller = controller_from_drive(output, car);
 
@@ -2820,8 +2824,19 @@ impl BotBrain {
         { -1.0 } else { 1.0 };
 
         let speed_required = distance_remaining / t.clamp(0.000001, 6.0);
-        let output = controlled_drive(
-            &car, final_target, speed_required * direction_sign, self.boost_accel,
+        // Python double_jump.run calls defaultDrive with the already
+        // calculated local target. Do not route this through a separate
+        // speed/heading heuristic.
+        let output = default_drive(
+            &car,
+            DriveInput {
+                target_speed: speed_required * direction_sign,
+                local_target,
+                upside_down: false,
+                up: None,
+                handbrake: false,
+                boost_accel: self.boost_accel,
+            },
         );
         let mut velocity = output.car_speed;
         if velocity == 0.0 { velocity = 1.0; }
@@ -3620,62 +3635,6 @@ fn transition_bump_target(
     defenders.into_iter().min_by(|a,b| {
         a.location.flat_distance(ball.location).total_cmp(&b.location.flat_distance(ball.location))
     })
-}
-
-/// Turn-aware drive execution used by ordinary navigation and shot setup.
-/// At large heading errors it scrubs speed before continuing the turn, which
-/// prevents the bot from carrying full speed around a missed target in a loop.
-fn controlled_drive(
-    car: &CarState,
-    world_target: Vector,
-    requested_speed: f32,
-    boost_accel: f32,
-) -> crate::control::DriveOutput {
-    let local_target = car.local_location(world_target.flatten());
-    let distance = local_target.flatten().magnitude();
-    let angle = local_target.y.atan2(local_target.x).abs();
-    let forward_speed = car.local_velocity().x;
-    // If the target is well behind and the car has already scrubbed speed,
-    // reverse toward it instead of steering forward in a tight orbit. Mirror
-    // the local target so PD faces the nose away from the reverse travel line.
-    let reverse = angle > 2.35
-        && local_target.x < 0.0
-        && distance > 450.0
-        && forward_speed.abs() < 800.0;
-
-    let mut target_speed = requested_speed;
-    let drive_target = if reverse {
-        target_speed = -requested_speed.abs().clamp(350.0, 650.0);
-        -local_target
-    } else {
-        if distance < 260.0 {
-            target_speed = target_speed.min(450.0);
-        }
-        if angle > 2.45 {
-            target_speed = target_speed.min(350.0);
-        } else if angle > 1.85 {
-            target_speed = target_speed.min(600.0);
-        } else if angle > 1.25 {
-            target_speed = target_speed.min(1000.0);
-        } else if angle > 0.80 {
-            target_speed = target_speed.min(1500.0);
-        }
-        local_target
-    };
-
-    default_drive(
-        car,
-        DriveInput {
-            target_speed,
-            local_target: drive_target,
-            upside_down: false,
-            up: None,
-            // Let defaultThrottle engage its radius/velocity-based powerslide
-            // only when a tight forward turn is physically appropriate.
-            handbrake: !reverse && angle > 1.05,
-            boost_accel,
-        },
-    )
 }
 
 fn controller_from_drive(output: crate::control::DriveOutput, car: CarState) -> ControllerState {
@@ -5513,14 +5472,6 @@ mod tests {
         assert_eq!(shot.time, 1.50);
         assert!(shot.ball.z > 190.0);
         assert_eq!(shot.approach.z, shot.ball.z);
-    }
-
-    #[test]
-    fn turn_aware_drive_reduces_speed_for_a_target_behind_the_car() {
-        let me = car(0, 0, Vector::ZERO);
-        let output = controlled_drive(&me, Vector::new(-1800.0, 0.0, 0.0), 2300.0, BOOST_ACCEL);
-        assert!(output.target_speed < 0.0);
-        assert_eq!(output.boost, Some(false));
     }
 
     #[test]
