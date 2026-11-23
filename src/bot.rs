@@ -568,6 +568,8 @@ impl BotBrain {
         if neutral && game_time - self.last_neutral_log_time >= 0.25 {
             let reason = if self.power_clear.is_some_and(|state| state.phase == 2) {
                 "power_clear_waiting_for_pop"
+            } else if self.ground_shot.is_some() {
+                "ground_shot_neutral_output"
             } else if self.jump_shot.is_some() {
                 "jump_shot_neutral_output"
             } else if self.aerial_shot.is_some() {
@@ -677,6 +679,7 @@ impl BotBrain {
         // Python evaluates boost collection before its rolling-ball clear.
         // If no boost route was selected, preserve that exact priority order.
         if plan.decision != Decision::Boost
+            && self.ground_shot.is_none()
             && self.jump_shot.is_none()
             && self.double_jump_shot.is_none()
             && self.pending_double_jump.is_none()
@@ -1152,7 +1155,8 @@ impl BotBrain {
     }
 
     fn shot_search_horizon(&self, game_time: f32) -> f32 {
-        let intercept = self.jump_shot.map(|s| s.intercept_time)
+        let intercept = self.ground_shot.map(|s| s.intercept_time)
+            .or_else(|| self.jump_shot.map(|s| s.intercept_time))
             .or_else(|| self.double_jump_shot.map(|s| s.intercept_time))
             .or_else(|| self.aerial_shot.map(|s| s.intercept_time));
         if let Some(intercept) = intercept {
@@ -1265,7 +1269,8 @@ impl BotBrain {
         match_state: MatchState,
         shot_targets: ShotTargets,
     ) -> Plan {
-        let committed_nonwall_shot_active = self.jump_shot.is_some()
+        let committed_nonwall_shot_active = self.ground_shot.is_some()
+            || self.jump_shot.is_some()
             || self.double_jump_shot.is_some()
             || self.pending_double_jump.is_some()
             || self.aerial_shot.is_some();
@@ -1423,7 +1428,8 @@ impl BotBrain {
 
         // Port the Python boost decisions before ordinary shot search.
         // Only an empty routine stack may divert to a pad.
-        let routine_stack_clear = self.jump_shot.is_none()
+        let routine_stack_clear = self.ground_shot.is_none()
+            && self.jump_shot.is_none()
             && self.double_jump_shot.is_none()
             && self.aerial_shot.is_none()
             && self.ground_flip.is_none()
