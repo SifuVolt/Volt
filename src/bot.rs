@@ -2066,6 +2066,12 @@ impl BotBrain {
                 let mut aerial = AerialShot::new(
                     car, candidate, game_time, self.match_state.gravity, self.boost_accel,
                 );
+                if aerial.fast_aerial
+                    && (aerial.ball.z <= 350.0 || ball.location.z <= 350.0)
+                {
+                    aerial.fast_aerial = false;
+                    aerial.double_jump = false;
+                }
                 let controls = aerial.run(
                     car, game_time, self.match_state.gravity, self.boost_accel, 0.0,
                 );
@@ -2355,6 +2361,12 @@ impl BotBrain {
                 let mut aerial = AerialShot::new(
                     car, candidate, game_time, self.match_state.gravity, self.boost_accel,
                 );
+                if aerial.fast_aerial
+                    && (aerial.ball.z <= 350.0 || ball.location.z <= 350.0)
+                {
+                    aerial.fast_aerial = false;
+                    aerial.double_jump = false;
+                }
                 let controls = aerial.run(
                     car, game_time, self.match_state.gravity, self.boost_accel,
                     drive.target_angles.yaw,
