@@ -3486,68 +3486,71 @@ impl BotBrain {
                     distance_remaining, velocity, drive.target_speed,
                     aligned, side_ready, runtime_reachable,
                 );
+                // Python falls through into the airborne controller on this
+                // same packet. Starting the flight controller one tick later
+                // loses 1/120 s at the exact launch window.
                 state.jumping = true;
-                state.jump_time = None;
-                self.jump_shot = Some(state);
-                return controller_from_drive(drive, car);
-            } else if (side_ready || normal_ready) && !runtime_reachable {
-                println!(
-                    "[JUMP SHOT LAUNCH BLOCKED] player={} T={:.3} needed_jump={:.3} distance={:.1} speed={:.1} target_speed={:.1} aligned={} side_ready={} boost={:.1}",
-                    car.index, t, state.needed_jump_time, distance_remaining,
-                    velocity, drive.target_speed, aligned, side_ready, car.boost,
-                );
-            }
-            if t <= state.needed_jump_time
-                || (t_j > 0.0 && distance_remaining > 50.0 && !runtime_reachable)
-            {
-                println!(
-                    "[JUMP SHOT ABORT] phase=approach reason={} T={:.3} Tj={:.3} distance={:.1} needed_jump={:.3} boost={:.0}",
-                    if t <= state.needed_jump_time { "time_expired" } else { "not_viable" },
-                    t, t_j, distance_remaining, state.needed_jump_time, car.boost,
-                );
-                self.jump_shot = None;
-                if car.airborne {
-                    let recovery_target = if car.velocity.magnitude() > 1.0 {
-                        car.location + car.velocity.normalize() * 1000.0
-                    } else {
-                        car.location + car.forward() * 1000.0
-                    };
-                    self.defense_recovery_target = Some(recovery_target);
-                    return GridDefense::recovery_controller(
-                        car, recovery_target, self.match_state.gravity.z,
+                state.jump_time = Some(game_time);
+            } else {
+                if (side_ready || normal_ready) && !runtime_reachable {
+                    println!(
+                        "[JUMP SHOT LAUNCH BLOCKED] player={} T={:.3} needed_jump={:.3} distance={:.1} speed={:.1} target_speed={:.1} aligned={} side_ready={} boost={:.1}",
+                        car.index, t, state.needed_jump_time, distance_remaining,
+                        velocity, drive.target_speed, aligned, side_ready, car.boost,
                     );
                 }
-                // Python defaultDrive has already populated the controller
-                // before jump_shot_is_viable rejects and pops this routine.
+                if t <= state.needed_jump_time
+                    || (t_j > 0.0 && distance_remaining > 50.0 && !runtime_reachable)
+                {
+                    println!(
+                        "[JUMP SHOT ABORT] phase=approach reason={} T={:.3} Tj={:.3} distance={:.1} needed_jump={:.3} boost={:.0}",
+                        if t <= state.needed_jump_time { "time_expired" } else { "not_viable" },
+                        t, t_j, distance_remaining, state.needed_jump_time, car.boost,
+                    );
+                    self.jump_shot = None;
+                    if car.airborne {
+                        let recovery_target = if car.velocity.magnitude() > 1.0 {
+                            car.location + car.velocity.normalize() * 1000.0
+                        } else {
+                            car.location + car.forward() * 1000.0
+                        };
+                        self.defense_recovery_target = Some(recovery_target);
+                        return GridDefense::recovery_controller(
+                            car, recovery_target, self.match_state.gravity.z,
+                        );
+                    }
+                    // Python defaultDrive has already populated the controller
+                    // before jump_shot_is_viable rejects and pops this routine.
+                    return controller_from_drive(drive, car);
+                }
+
+                if !self.unlimited_boost
+                    && car.boost < 48.0
+                    && angle_to_target < 0.03
+                    && velocity > 600.0
+                    && time_to_contact >= state.needed_jump_time * 1.15 + 1.5
+                {
+                    if self.match_state.gravity.z < -450.0 && time_to_contact < 5.0 {
+                        let mut wave = crate::mechanics::WaveDash::new(Some(local_offset_target));
+                        let result = wave.tick(car, game_time);
+                        if !result.finished {
+                            self.wave_dash = Some(wave);
+                            return result.controller;
+                        }
+                    } else {
+                        let flip = FlipState {
+                            started_at: game_time,
+                            direction: local_offset_target.flatten().normalize(),
+                            cancel: false,
+                        };
+                        self.ground_flip = Some(flip);
+                        return self.run_ground_flip(Some(car), game_time, flip);
+                    }
+                }
+
+                self.jump_shot = Some(state);
                 return controller_from_drive(drive, car);
             }
-
-            if !self.unlimited_boost
-                && car.boost < 48.0
-                && angle_to_target < 0.03
-                && velocity > 600.0
-                && time_to_contact >= state.needed_jump_time * 1.15 + 1.5
-            {
-                if self.match_state.gravity.z < -450.0 && time_to_contact < 5.0 {
-                    let mut wave = crate::mechanics::WaveDash::new(Some(local_offset_target));
-                    let result = wave.tick(car, game_time);
-                    if !result.finished {
-                        self.wave_dash = Some(wave);
-                        return result.controller;
-                    }
-                } else {
-                    let flip = FlipState {
-                        started_at: game_time,
-                        direction: local_offset_target.flatten().normalize(),
-                        cancel: false,
-                    };
-                    self.ground_flip = Some(flip);
-                    return self.run_ground_flip(Some(car), game_time, flip);
-                }
-            }
-
-            self.jump_shot = Some(state);
-            return controller_from_drive(drive, car);
         }
 
         // Python's jump_shot aborts only after the intercept has expired by
