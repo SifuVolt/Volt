@@ -2425,6 +2425,10 @@ impl BotBrain {
                 false,
                 Some(car.local(Vector::new(0.0, 0.0, 1.0))),
             );
+            // Python defaultPD writes all four orientation controls plus steer.
+            // Keep steer as well as airborne yaw: dropping it was a behavioural
+            // divergence from routines of volt.
+            controller.steer = pd.steer;
             controller.pitch = pd.pitch;
             controller.yaw = pd.yaw;
             controller.roll = pd.roll;
