@@ -426,6 +426,7 @@ impl BotBrain {
                     self.double_jump_shot = None;
                     self.aerial_shot = None;
                     self.power_clear = None;
+                    self.last_emergency_clear_time = game_time;
                     self.emergency_clear = Some(EmergencyClearState {
                         started_at: game_time,
                         target: None,
@@ -468,6 +469,11 @@ impl BotBrain {
 
         // A newly reachable wall approach replaces ordinary ground/jump
         // setups, but never a launched aerial, flip, or recovery.
+        if matches!(plan.decision, Decision::EmergencyChallenge | Decision::Goalkeeper | Decision::Transition)
+            && self.aerial_shot.as_ref().is_some_and(|shot| !shot.aerialing)
+        {
+            self.aerial_shot = None;
+        }
         if plan.decision == Decision::WallDrive {
             self.jump_shot = None;
             self.double_jump_shot = None;
@@ -919,10 +925,34 @@ impl BotBrain {
         }
 
         if urgent_save && is_challenger {
+            let car_depth = me.location.y * side;
+            let distance_to_ball = me.location.distance(ball.location);
+            let clear_now = (ball_depth > 4200.0 && car_depth > ball_depth)
+                || (game_time - self.last_emergency_clear_time >= 0.8
+                    && (ball_depth > 2500.0 || distance_to_ball < 1100.0));
+            if self.ground_flip.is_none()
+                && self.defense_flip.is_none()
+                && self.defense_recovery_target.is_none()
+                && self.aerial_shot.as_ref().is_none_or(|shot| !shot.aerialing)
+            {
+                self.jump_shot = None;
+                self.double_jump_shot = None;
+                self.aerial_shot = None;
+            }
+            if clear_now {
+                self.last_emergency_clear_time = game_time;
+                return Plan {
+                    decision: Decision::EmergencyChallenge,
+                    target: select_contact_approach(me, ball.location, shot_aim_point(ball.location, side, me.airborne)),
+                    target_speed: MAX_SPEED,
+                    shot: None,
+                    jump: None,
+                };
+            }
             return Plan {
-                decision: Decision::EmergencyChallenge,
-                target: select_contact_approach(me, ball.location, shot_aim_point(ball.location, side, me.airborne)),
-                target_speed: MAX_SPEED,
+                decision: if is_goalie { Decision::Goalkeeper } else { Decision::Transition },
+                target: Vector::new(0.0, side * 5050.0, 0.0),
+                target_speed: 1500.0,
                 shot: None,
                 jump: None,
             };
@@ -1725,7 +1755,10 @@ impl BotBrain {
             drive.controls.steer = (face_local.y.atan2(face_local.x) * 5.0).clamp(-1.0, 1.0);
             return controller_from_drive(drive, car);
         }
-        if plan.decision == Decision::EmergencyChallenge {
+        if plan.decision == Decision::EmergencyChallenge
+            && self.ground_flip.is_none()
+            && self.defense_flip.is_none()
+        {
             let state = self.emergency_clear.unwrap_or(EmergencyClearState {
                 started_at: game_time,
                 target: None,
