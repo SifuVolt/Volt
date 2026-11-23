@@ -19,7 +19,6 @@ pub struct SpeedFlipKickoff {
     phase3_flip_start: Option<f32>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct KickoffOutput {
     pub controller: ControllerState,
     pub start_speedflip: Option<f32>,
@@ -167,4 +166,75 @@ impl SpeedFlipKickoff {
 
 fn team_side(team: u32) -> f32 {
     if team == 0 { -1.0 } else { 1.0 }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::math::Matrix3;
+    use crate::state::Hitbox;
+    use rlbot::flat::AirState;
+
+    fn test_car(team: u32, location: Vector, velocity: Vector) -> CarState {
+        CarState {
+            index: 0,
+            team,
+            location,
+            velocity,
+            orientation: Matrix3::new(0.0, 0.0, 0.0),
+            angular_velocity: Vector::ZERO,
+            demolished: false,
+            airborne: false,
+            supersonic: false,
+            jumped: false,
+            doublejumped: false,
+            air_state: AirState::OnGround,
+            has_jumped: false,
+            has_double_jumped: false,
+            has_dodged: false,
+            dodge_timeout: 0.0,
+            dodge_elapsed: 0.0,
+            dodge_dir: Vector::ZERO,
+            flip_reset_available: false,
+            boost: 33.0,
+            hitbox: Hitbox::default(),
+        }
+    }
+
+    #[test]
+    fn kickoff_starts_speedflip_after_python_speed_and_distance_gates() {
+        let mut routine = SpeedFlipKickoff::default();
+        let car = test_car(
+            0,
+            Vector::new(0.0, 0.0, 17.0),
+            Vector::new(900.0, 0.0, 0.0),
+        );
+        let ball = BallState {
+            location: Vector::new(2500.0, 0.0, 92.75),
+            velocity: Vector::ZERO,
+        };
+        let output = routine.tick(car, ball, 1.0);
+        assert_eq!(output.start_speedflip, Some(1.0));
+        assert_eq!(routine.phase(), 1);
+        assert_eq!(output.controller.throttle, 1.0);
+    }
+
+    #[test]
+    fn kickoff_does_not_start_speedflip_before_both_python_gates() {
+        let mut routine = SpeedFlipKickoff::default();
+        let car = test_car(
+            0,
+            Vector::new(0.0, 0.0, 17.0),
+            Vector::new(700.0, 0.0, 0.0),
+        );
+        let ball = BallState {
+            location: Vector::new(2500.0, 0.0, 92.75),
+            velocity: Vector::ZERO,
+        };
+        let output = routine.tick(car, ball, 1.0);
+        assert_eq!(output.start_speedflip, None);
+        assert_eq!(routine.phase(), 0);
+        assert_eq!(output.controller.throttle, 1.0);
+        assert!(output.controller.boost);
+    }
 }
