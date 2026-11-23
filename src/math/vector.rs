@@ -276,6 +276,12 @@ mod tests {
     }
 
     #[test]
+    fn cap_is_component_wise_like_virxerlu_vector() {
+        let value = Vector::new(-300.0, 1000.0, 3000.0);
+        assert_eq!(value.cap(0.0, 2300.0), Vector::new(0.0, 1000.0, 2300.0));
+    }
+
+    #[test]
     fn rotation_preserves_height() {
         let v = Vector::new(1.0, 0.0, 5.0);
         let rotated = v.rotate(std::f32::consts::FRAC_PI_2);
