@@ -2,11 +2,11 @@
 //!
 //! The planner evaluates RLBot's collision-aware ball slices with the same
 //! boost-budget validation used by VirxERLU-CLib. Contact geometry follows
-//! Party Cannon's 155-unit nose offset and predicts the outgoing ball path
+//! Party Cannon's hitbox-aware nose offset and predicts the outgoing ball path
 //! before choosing the car's target point.
 
 use crate::{
-    control::default_pd,
+    control::{default_drive, default_pd, DriveInput},
     math::Vector,
     prediction::{BallSlice, BallTrajectory},
     shot_physics::aerial_shot_is_viable,
@@ -59,6 +59,7 @@ pub struct AerialShot {
     pub dodge_step: u8,
     pub dodge_input: Vector,
     pub dodge_jump: bool,
+    pub side_wall_launched: bool,
     pub finished: bool,
 }
 
@@ -102,6 +103,7 @@ impl AerialShot {
             dodge_step: 0,
             dodge_input: Vector::ZERO,
             dodge_jump: true,
+            side_wall_launched: false,
             finished: false,
         };
         let single = aerial.boost_estimate(car, false, 0.0, candidate.slice.time, gravity, boost_accel);
@@ -110,6 +112,104 @@ impl AerialShot {
         aerial.double_jump = double >= 0.0 && (double < single || single < 0.0);
         aerial.finished = !can_hit;
         aerial
+    }
+
+
+    fn run_side_wall_takeoff(
+        &mut self,
+        car: CarState,
+        time_remaining: f32,
+        boost_accel: f32,
+    ) -> Option<ControllerState> {
+        let ball = self.ball;
+        let wall_side = if ball.x >= 0.0 { 1.0 } else { -1.0 };
+        let wall_gap = 4096.0 - ball.x.abs() - 92.75;
+        if !(-5.0..=700.0).contains(&wall_gap) || ball.z < 300.0 {
+            return None;
+        }
+
+        let attached_wall = if car.location.x.abs() > 3500.0
+            && car.up().x.abs() > 0.65
+            && car.up().x * car.location.x < 0.0
+        {
+            Some(car.location.x.signum())
+        } else {
+            None
+        };
+        if car.airborne && attached_wall.is_none() {
+            return None;
+        }
+        if attached_wall.is_some_and(|side| side != wall_side) || time_remaining <= 0.35 {
+            return None;
+        }
+
+        let wall_x = wall_side * 3850.0;
+        let lane_y = self.target_location.y;
+        let climb_z = (ball.z - 185.0).clamp(180.0, 1900.0);
+        let (drive_target, attached) = if attached_wall.is_some() {
+            (Vector::new(wall_x, lane_y, climb_z), true)
+        } else {
+            (Vector::new(wall_x, ball.y, car.location.z.max(100.0)), false)
+        };
+        let local_target = car.local_location(drive_target);
+        let distance = car.location.distance(drive_target);
+        let time_for_drive = (time_remaining - 0.20).max(0.18);
+        let mut speed_required = (distance / time_for_drive).clamp(900.0, MAX_SPEED);
+        let local_angle = local_target.y.atan2(local_target.x).abs();
+        let turn_cap = if local_angle > 1.75 { 900.0 }
+            else if local_angle > 1.30 { 1200.0 }
+            else if local_angle > 0.80 { 1650.0 }
+            else { MAX_SPEED };
+        speed_required = speed_required.min(turn_cap);
+
+        let wall_up = Vector::new(-wall_side, 0.0, 0.0);
+        let mut drive = default_drive(
+            &car,
+            DriveInput {
+                target_speed: speed_required,
+                local_target,
+                upside_down: false,
+                up: if attached { Some(car.local(wall_up)) } else { None },
+                handbrake: false,
+                boost_accel,
+            },
+        );
+        let boost_angle = if attached { drive.target_angles.yaw.abs() } else { local_angle };
+        let needs_boost = car.boost > 0.0
+            && distance > 550.0
+            && car.velocity.magnitude() < speed_required - 100.0
+            && boost_angle < 0.65
+            && !drive.handbrake.unwrap_or(false);
+        drive.boost = Some(needs_boost);
+        if needs_boost { drive.throttle = Some(1.0); }
+
+        let mut controller = ControllerState::default();
+        controller.steer = drive.controls.steer;
+        controller.pitch = drive.controls.pitch;
+        controller.yaw = drive.controls.yaw;
+        controller.roll = drive.controls.roll;
+        controller.throttle = drive.throttle.unwrap_or(0.0);
+        controller.boost = drive.boost.unwrap_or(false);
+        controller.handbrake = drive.handbrake.unwrap_or(false);
+
+        if !attached { return Some(controller); }
+        let height_error = (car.location.z - climb_z).abs();
+        let lane_error = (car.location.y - lane_y).abs();
+        let launch_ready = (height_error < 190.0 && lane_error < 420.0)
+            || distance < 330.0
+            || (time_remaining < 0.55 && distance < 650.0);
+        if !launch_ready { return Some(controller); }
+
+        self.side_wall_launched = true;
+        self.jump_immediately = true;
+        self.aerialing = true;
+        self.elapsed = 0.0;
+        self.up = car.up();
+        self.jumped = false;
+        self.jump_release_frames = 0;
+        self.second_jump_frames = 0;
+        self.dodging = false;
+        None
     }
 
     fn boost_estimate(
@@ -165,6 +265,11 @@ impl AerialShot {
         let time_remaining = self.intercept_time - game_time;
         if self.finished {
             return controls;
+        }
+        if !self.aerialing && !self.side_wall_launched {
+            if let Some(wall_controls) = self.run_side_wall_takeoff(car, time_remaining, boost_accel) {
+                return wall_controls;
+            }
         }
         if self.dodging {
             return self.run_dodge(car, controls, delta_time);
@@ -393,21 +498,19 @@ fn contact_geometry(
         + ball_after_velocity * time_to_goal
         + gravity * (0.5 * time_to_goal * time_to_goal);
     let mut shot_direction = (goal - predicted_ball).normalize();
-    let mut target_location = slice.location - shot_direction * 155.0;
-
-    let (surface_point, normal) = nearest_surface(target_location);
-    let distance_from_surface = (target_location - surface_point).dot(normal);
-    if distance_from_surface < 50.0 {
-        let angle = ((distance_from_surface - 50.0) / 155.0).clamp(-1.0, 1.0).asin();
-        let flat_direction = shot_direction - normal * shot_direction.dot(normal);
-        shot_direction = (flat_direction.normalize() * angle.cos() + normal * angle.sin()).normalize();
-        target_location = slice.location - shot_direction * 155.0;
-    }
+    let approach_distance = 92.75 + car.hitbox.length * 0.5;
+    shot_direction = wall_shot_adjust_aerial(
+        slice.location, shot_direction, approach_distance,
+    ).0;
+    let hitbox_offset = car.forward() * car.hitbox.offset.x
+        + car.right() * car.hitbox.offset.y
+        + car.up() * car.hitbox.offset.z;
+    let target_location = slice.location - shot_direction * approach_distance - hitbox_offset;
     (target_location, shot_direction)
 }
 
-/// Expose Party Cannon's predicted outgoing shot and 155-unit hitbox
-/// target for the grounded jump-shot routine as well as aerial planning.
+/// Expose Party Cannon's predicted outgoing shot and hitbox-aware
+/// contact target for the grounded jump-shot routine as well as aerial planning.
 pub fn party_cannon_contact_geometry(
     car: CarState,
     slice: BallSlice,
@@ -417,15 +520,34 @@ pub fn party_cannon_contact_geometry(
     contact_geometry(car, slice, goal, gravity)
 }
 
-fn nearest_surface(location: Vector) -> (Vector, Vector) {
+fn nearest_wall(point: Vector) -> (Vector, Vector) {
     let candidates = [
-        (location.z.abs(), Vector::new(location.x, location.y, 0.0), Vector::new(0.0, 0.0, 1.0)),
-        ((2044.0 - location.z).abs(), Vector::new(location.x, location.y, 2044.0), Vector::new(0.0, 0.0, -1.0)),
-        ((4096.0 - location.x.abs()).abs(), Vector::new(location.x.signum() * 4096.0, location.y, location.z), Vector::new(-location.x.signum(), 0.0, 0.0)),
-        ((5120.0 - location.y.abs()).abs(), Vector::new(location.x, location.y.signum() * 5120.0, location.z), Vector::new(0.0, -location.y.signum(), 0.0)),
+        ((4096.0 - point.x).abs(), Vector::new(4096.0, point.y, point.z), Vector::new(-1.0, 0.0, 0.0)),
+        ((-4096.0 - point.x).abs(), Vector::new(-4096.0, point.y, point.z), Vector::new(1.0, 0.0, 0.0)),
+        ((5120.0 - point.y).abs(), Vector::new(point.x, 5120.0, point.z), Vector::new(0.0, -1.0, 0.0)),
+        ((-5120.0 - point.y).abs(), Vector::new(point.x, -5120.0, point.z), Vector::new(0.0, 1.0, 0.0)),
     ];
     let best = candidates.iter().min_by(|a, b| a.0.total_cmp(&b.0)).unwrap();
     (best.1, best.2)
+}
+
+/// Port of Party Cannon WallShot.adjust_aerial with the car's actual
+/// ball-radius-plus-half-hitbox standoff.
+pub fn wall_shot_adjust_aerial(
+    ball: Vector,
+    shot_direction: Vector,
+    approach_distance: f32,
+) -> (Vector, Option<Vector>, f32) {
+    let target = ball - shot_direction * approach_distance;
+    let (surface, normal) = nearest_wall(target);
+    let target_height = (target - surface).dot(normal);
+    if target_height >= 50.0 { return (shot_direction, None, target_height); }
+    let tangent = shot_direction - normal * shot_direction.dot(normal);
+    if tangent.magnitude() < 0.001 { return (shot_direction, None, target_height); }
+    let angle = ((target_height - 50.0) / approach_distance.max(1.0))
+        .clamp(-1.0, 1.0).asin();
+    let adjusted = (tangent.normalize() * angle.cos() + normal * angle.sin()).normalize();
+    (adjusted, Some(normal), target_height)
 }
 
 fn opponent_eta(opponent: CarState, target: Vector) -> f32 {
@@ -593,7 +715,32 @@ mod tests {
     }
 
     #[test]
-    fn party_cannon_contact_target_is_155_units_behind_ball() {
+    fn party_cannon_aerial_contact_uses_actual_hitbox_standoff_and_offset() {
+        let car = car(Vector::ZERO, 50.0);
+        let slice = BallSlice {
+            time: 1.0,
+            location: Vector::new(0.0, 1000.0, 500.0),
+            velocity: Vector::ZERO,
+        };
+        let (target, direction) = party_cannon_contact_geometry(
+            car, slice, Vector::new(0.0, 5120.0, 300.0), Vector::new(0.0, 0.0, -650.0),
+        );
+        assert!((target.distance(slice.location) - (92.75 + car.hitbox.length * 0.5)).abs() < 0.01);
+        assert!(direction.magnitude() > 0.99);
+    }
+
+    #[test]
+    fn party_cannon_wall_aerial_correction_uses_vertical_wall_clearance() {
+        let ball = Vector::new(4050.0, 0.0, 700.0);
+        let direction = Vector::new(0.0, 1.0, 0.0);
+        let (adjusted, normal, clearance) = wall_shot_adjust_aerial(ball, direction, 151.75);
+        assert!(normal.is_some());
+        assert!(adjusted.magnitude() > 0.99);
+        assert!(clearance < 50.0);
+    }
+
+    #[test]
+    fn party_cannon_contact_target_uses_hitbox_aware_standoff() {
         let slice = BallSlice {
             time: 1.5,
             location: Vector::new(0.0, 0.0, 900.0),
@@ -605,7 +752,7 @@ mod tests {
             Vector::new(0.0, 5120.0, 300.0),
             Vector::new(0.0, 0.0, -650.0),
         );
-        assert!((target.distance(slice.location) - 155.0).abs() < 0.01);
+        assert!((target.distance(slice.location) - (92.75 + car.hitbox.length * 0.5)).abs() < 0.01);
         assert!(direction.magnitude() > 0.99);
     }
 
