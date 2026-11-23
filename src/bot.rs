@@ -2297,15 +2297,18 @@ impl BotBrain {
             let time_remaining = t.clamp(0.000001, 6.0);
             let goal_aim = relative_goal_aim_point(car, shot.ball, shot.targets);
             let shot_vector = (goal_aim - shot.ball).flatten().normalize();
+            // Python ground_shot uses agent.best_shot_value (300 uu)
+            // for its setup point; 92.75 is the ball radius, not the car
+            // approach standoff.
             let offset_target = contact_approach_from_label(
-                shot.ball, shot_vector, shot.contact_face, 92.75,
-            ).unwrap_or(shot.ball - shot_vector * 92.75);
+                shot.ball, shot_vector, shot.contact_face, 300.0,
+            ).unwrap_or(shot.ball - shot_vector * 300.0);
 
             let local_ball = car.local_location(ball.location);
             let close_contact = local_ball.y.abs() < 92.75 + car.hitbox.width * 0.5
                 && local_ball.z.abs() < 92.75 + car.hitbox.height * 0.5;
             let mut final_target = if close_contact {
-                ball.location - shot_vector * 92.75
+                ball.location - shot_vector * 300.0
             } else {
                 let target = shot_approach_target(
                     car, shot.ball, offset_target.flatten(), shot_vector, t,
