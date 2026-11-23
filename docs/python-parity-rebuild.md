@@ -90,19 +90,28 @@ adjustment), runs `defaultDrive`, predicts arrival using dodge impulse, tests
 the source flip window, calls `ground_shot_is_viable`, and pops to recovery
 when the shot is no longer possible.
 
-Python's selector deliberately maps a low-ball `GROUND_SHOT` candidate to
-`jump_shot` when jumping is enabled; it uses the standalone `ground_shot`
-routine only when jumping is disabled. The Rust planner similarly routes most
-ground candidates through `JumpShotState`, but it hardcodes the allowed shot
-types instead of receiving the caller's `can_ground/can_jump/can_double_jump/
-can_aerial` settings.
+Python's normal `find_shot` selector maps parser types 0 and 1
+(ground/jump) to `jump_shot` whenever `can_jump` is enabled; it uses the
+standalone `ground_shot` for type 0 only when jumping is disabled. The
+separate `fast_intercept_finder` intentionally maps type 0 directly to
+`ground_shot` and type 1 to `jump_shot`. Rust has corresponding separate
+paths, but it still hardcodes much of the allowed shot-type availability
+instead of consistently receiving the caller's
+`can_ground/can_jump/can_double_jump/can_aerial` settings.
 
-The Rust live path now extracts the exact Python close-contact,
-distance-over-time, and speed-building calculation into
-`src/brain/ground_shot.rs`, with focused tests, and calls it from the live
-ground-shot path. This is not yet the complete persistent Python routine:
-intercept refresh, cached aim, patience state, stack ownership, and
-recovery/flip transitions still need to be ported around this calculation.
+The Rust live path now has a persistent `GroundShotState` for the
+standalone ground-shot path. It retains the absolute intercept time and
+original contact-face selection across finder gaps, refreshes the prediction
+slice using Python's rounded 120 Hz index, preserves the cached goal aim and
+one-shot patience adjustment, and keeps the active ground shot from being
+diverted into boost collection or a rolling-ball clear. The exact
+close-contact, distance-over-time, and speed-building calculation remains in
+`src/brain/ground_shot.rs`.
+
+This is still not a complete typed routine-stack port. The Rust brain keeps
+separate state fields, and root/child ownership, all replacement priorities,
+and the exact recovery/flip transitions still need a full parity audit and
+in-game validation.
 
 ### Selector and routine ownership
 
