@@ -5267,6 +5267,7 @@ mod tests {
             shot_direction: Vector::new(1.0, 0.0, 0.0),
             contact_face: "centre",
             contact_face_label: None,
+            goal_aim_point: None,
             needed_jump_time: 0.2,
             jumping: false,
             jump_time: None,
