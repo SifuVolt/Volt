@@ -107,6 +107,9 @@ struct JumpShotState {
     shot_direction: Vector,
     contact_face: &'static str,
     contact_face_label: Option<&'static str>,
+    needed_jump_time: f32,
+    jumping: bool,
+    jump_time: Option<f32>,
     quick: bool,
     counter: u8,
     patience_applied: bool,
@@ -2068,6 +2071,13 @@ impl BotBrain {
                 shot_direction: geometry.shot_direction,
                 contact_face: "centre",
                 contact_face_label: None,
+                needed_jump_time: get_jump_time(
+                    geometry.ball.z - car.location.z,
+                    car.velocity.z,
+                    self.match_state.gravity.z,
+                ).time as f32,
+                jumping: false,
+                jump_time: None,
                 quick: time_remaining <= 0.45,
                 counter: 0,
                 patience_applied: false,
@@ -2080,7 +2090,7 @@ impl BotBrain {
             };
             self.jump_shot = Some(state);
             self.wall_drive_candidate = None;
-            return self.run_jump_shot(car, state, game_time);
+            return self.run_jump_shot(car, ball, state, game_time);
         }
 
         if !car.airborne
@@ -2343,6 +2353,13 @@ impl BotBrain {
                     shot_direction,
                     contact_face: jump.contact_face,
                     contact_face_label: None,
+                    needed_jump_time: get_jump_time(
+                        jump.ball.z - car.location.z,
+                        car.velocity.z,
+                        self.match_state.gravity.z,
+                    ).time as f32,
+                    jumping: false,
+                    jump_time: None,
                     quick: t <= 0.45,
                     counter: 0,
                     patience_applied: false,
@@ -2861,10 +2878,11 @@ impl BotBrain {
     fn run_jump_shot(
         &mut self,
         car: CarState,
+        current_ball: BallState,
         mut state: JumpShotState,
         game_time: f32,
     ) -> ControllerState {
-        let jump_elapsed = (game_time - state.started_at).max(0.0);
+        let jump_elapsed = state.jump_time.map_or(0.0, |started| (game_time - started).max(0.0));
         let t = state.intercept_time - game_time;
         let time_remaining = t.clamp(0.000001, 6.0);
 
@@ -2963,6 +2981,127 @@ impl BotBrain {
         let local_target = car.local_location(state.approach).flatten();
         let contact_distance = car.location.distance(state.approach);
         let contact_limit = (92.75 + car.hitbox.length) * 1.02;
+
+        // Python's complete pre-launch phase: shape the approach, calculate
+        // the required arrival speed, and keep driving until the jump window.
+        // This must not be replaced by the airborne jump controller.
+        if !state.jumping {
+            let t_j = t - state.needed_jump_time * 1.15;
+            let mut final_target = state.approach.flatten();
+            if t_j > 0.0 && has_goal_targets && !state.side_mode {
+                final_target = shot_approach_target(
+                    car,
+                    state.ball,
+                    final_target,
+                    state.shot_direction,
+                    t_j,
+                );
+            }
+
+            let mut distance_remaining = car.location.flat_distance(final_target);
+            final_target = cap_in_field(&car, final_target);
+            let local_final_target = car.local_location(final_target);
+            let angle_to_target = local_final_target.y.atan2(local_final_target.x).abs();
+            let vf = car.velocity + self.match_state.gravity * t;
+            if car.airborne {
+                distance_remaining = car.local_location(state.approach.flatten()).x;
+            }
+            distance_remaining -= car.hitbox.length / 3.0;
+            let mut speed_required = distance_remaining / time_remaining;
+            let ball_speed_toward_shot = current_ball.velocity.dot(state.shot_direction);
+
+            if speed_required < 1900.0
+                && car.boost > 50.0
+                && t > 2.0
+                && distance_remaining > 2560.0
+                && ball_speed_toward_shot > 1000.0
+            {
+                speed_required *= 0.75;
+            }
+
+            let current_forward_speed = car.local_velocity().x;
+            let power_dodge_window = t < 0.35
+                && t > 0.1
+                && car.local_location(current_ball.location).x > 0.0
+                && current_forward_speed > 700.0;
+            let mut drive_speed = speed_required;
+            if power_dodge_window {
+                drive_speed = drive_speed.max(current_forward_speed.min(1200.0));
+            }
+
+            let drive = default_drive(
+                &car,
+                DriveInput {
+                    target_speed: drive_speed,
+                    local_target: local_final_target,
+                    upside_down: false,
+                    up: None,
+                    handbrake: false,
+                    boost_accel: self.boost_accel,
+                },
+            );
+            let velocity = if drive.car_speed.abs() < 0.001 {
+                1.0
+            } else {
+                drive.car_speed
+            };
+            let local_offset_target = car.local_location(state.approach.flatten());
+            let local_vf = car.local(vf.flatten());
+            let time_to_contact =
+                distance_remaining / (velocity + dodge_impulse(car.velocity, MAX_SPEED));
+
+            let side_ready = state.side_mode
+                && distance_remaining < 180.0
+                && t <= state.needed_jump_time * 1.08;
+            let close_enough = velocity.abs() < 100.0
+                && distance_remaining < car.hitbox.length * 0.5;
+            let aligned = local_offset_target.y.abs() < 92.0
+                && local_vf.x >= local_offset_target.x - car.hitbox.length / 3.0
+                && local_offset_target.x > 0.0;
+            let normal_ready = (close_enough || aligned)
+                && t <= state.needed_jump_time * 1.08;
+
+            if side_ready || normal_ready {
+                state.quick = t <= 0.45;
+                state.jumping = true;
+                state.jump_time = Some(game_time);
+                self.jump_shot = Some(state);
+                return controller_from_drive(drive, car);
+            }
+
+            if t <= state.needed_jump_time
+                || (t_j > 0.0
+                    && distance_remaining > 50.0
+                    && !jump_shot_is_viable(
+                        t,
+                        self.match_state.gravity.z,
+                        car.velocity.z,
+                        car.hitbox.height,
+                        car.airborne,
+                        state.approach.z,
+                        true,
+                    ))
+            {
+                self.jump_shot = None;
+                if car.airborne {
+                    let recovery_target = if car.velocity.magnitude() > 1.0 {
+                        car.location + car.velocity.normalize() * 1000.0
+                    } else {
+                        car.location + car.forward() * 1000.0
+                    };
+                    self.defense_recovery_target = Some(recovery_target);
+                    return GridDefense::recovery_controller(
+                        car, recovery_target, self.match_state.gravity.z,
+                    );
+                }
+                return ControllerState::default();
+            }
+
+            let _ = angle_to_target;
+            let _ = time_to_contact;
+            self.jump_shot = Some(state);
+            return controller_from_drive(drive, car);
+        }
 
         // Python's jump_shot aborts only after the intercept has expired by
         // 0.8s, or after it has landed without finding a dodge window.
@@ -5291,14 +5430,14 @@ mod tests {
                     targets: ShotTargets { left: Vector::ZERO, right: Vector::ZERO },
         };
 
-        let normal = brain.run_jump_shot(me, state, 1.01);
+        let normal = brain.run_jump_shot(me, BallState { location: state.ball, velocity: state.ball_velocity }, state, 1.01);
         assert!(normal.jump);
         assert_eq!(normal.pitch, 1.0);
         assert!(normal.yaw > 0.0);
         assert!(normal.roll < 0.0);
 
         let quick = JumpShotState { quick: true, ..state };
-        let fast = brain.run_jump_shot(me, quick, 1.01);
+        let fast = brain.run_jump_shot(me, BallState { location: quick.ball, velocity: quick.ball_velocity }, quick, 1.01);
         assert_ne!(fast.pitch, 1.0);
         assert_eq!(fast.roll, 0.0);
     }
