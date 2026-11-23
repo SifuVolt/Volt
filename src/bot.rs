@@ -190,6 +190,7 @@ pub struct BotBrain {
     pub boost_pads: Vec<BoostPadState>,
     last_kickoff_time: f32,
     kickoff_was_active: bool,
+    kickoff_speedflip: Option<crate::kickoff::SpeedFlipKickoff>,
     kickoff_ball_start: Option<Vector>,
     kickoff_contest_until: f32,
     ground_flip: Option<FlipState>,
@@ -312,6 +313,7 @@ impl BotBrain {
             boost_pads: Vec::new(),
             last_kickoff_time: -999.0,
             kickoff_was_active: false,
+            kickoff_speedflip: None,
             kickoff_ball_start: None,
             kickoff_contest_until: -999.0,
             ground_flip: None,
@@ -1134,8 +1136,10 @@ impl BotBrain {
             self.kickoff_complete = false;
             self.kickoff_ball_start = Some(ball.location);
             self.kickoff_contest_until = -999.0;
+            self.kickoff_speedflip = Some(crate::kickoff::SpeedFlipKickoff::default());
         } else if !kickoff_active {
             self.kickoff_complete = true;
+            self.kickoff_speedflip = None;
         }
         self.kickoff_was_active = kickoff_active;
 
@@ -2815,23 +2819,30 @@ impl BotBrain {
         let distance = local_target.flatten().magnitude();
         let angle = local_target.y.atan2(local_target.x).abs();
 
-        // generic_kickoff's final forward dodge, triggered only once the
-        // kicker is within the original 550-unit launch window.
-        if plan.decision == Decision::KickoffKicker
-            && !car.airborne
-            && distance < 550.0
-        {
-            let direction = car.local_location(Vector::new(
-                0.0,
-                -team_side(car.team) * 5120.0,
-                300.0,
-            )).flatten().normalize();
-            let state = KickoffDodgeState {
-                started_at: game_time,
-                direction,
-            };
-            self.kickoff_dodge = Some(state);
-            return self.run_kickoff_dodge(state, game_time);
+        // Python speedflip_kickoff owns the complete kickoff lifecycle:
+        // accelerate, push speed_flip, wait for landing, drive to the ball,
+        // then perform the short contact dodge and finish on touch/timeout.
+        if plan.decision == Decision::KickoffKicker {
+            let mut routine = self.kickoff_speedflip
+                .unwrap_or_else(crate::kickoff::SpeedFlipKickoff::default);
+            let output = routine.tick(car, ball, game_time);
+            if output.finished {
+                self.kickoff_speedflip = None;
+                self.kickoff_complete = true;
+                return output.controller;
+            }
+            self.kickoff_speedflip = Some(routine);
+            if let Some(direction) = output.start_speedflip {
+                let state = SpeedFlipState {
+                    step_start: game_time,
+                    step_index: 0,
+                    direction,
+                    use_boost: true,
+                };
+                self.speed_flip = Some(state);
+                return self.run_speed_flip(car, state, game_time);
+            }
+            return output.controller;
         }
 
         // Port of goto's one-speedflip-per-navigation-run gate.
