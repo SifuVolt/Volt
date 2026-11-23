@@ -1665,6 +1665,17 @@ impl BotBrain {
                 }
             }
         let selected_score = candidate.map(|shot| shot.score);
+        let teamplay_targeted = candidate.is_some_and(|shot| shot.targeted);
+        let aerial_targets = if pass_candidate_selected {
+            candidate.map(|shot| shot.parser.targets).unwrap_or(self.shot_targets)
+        } else {
+            self.shot_targets
+        };
+        let aerial_aim = if pass_candidate_selected {
+            (aerial_targets.left + aerial_targets.right) * 0.5
+        } else {
+            aim
+        };
         let selected = candidate.map(|candidate| candidate_to_intercept(me, candidate, shot_targets));
             let can_jump = candidate.is_some_and(|candidate| candidate.can_jump);
             let use_jump = selected.filter(|shot| shot.shot_type != ShotType::Ground || can_jump);
@@ -1700,33 +1711,28 @@ impl BotBrain {
                 }
             }
 
-            if fast_intercept_zone && !pass_candidate_selected && !urgent_save
+            if fast_intercept_zone && !urgent_save
                 && (me.airborne || game_time - self.last_landing_time > 0.5)
             {
                 let max_height = if living_teammates.len() == 1 && opponents.len() == 1 {
                     1200.0
                 } else { f32::INFINITY };
                 if let Some(candidate) = find_fast_aerial_candidate(
-                    me, prediction, aim, match_state.gravity, self.boost_accel,
+                    me, prediction, aerial_aim, match_state.gravity, self.boost_accel,
                     if transition_followup_active { 0.03 } else { 0.10 },
                     self.shot_search_horizon(game_time), ball.location.z,
                     max_height, true,
                 ) {
-                    self.set_teamplay_aerial(me, ball, candidate, opponent_goal, aim, roles, urgent_save, false);
-                    if should_commit_to_shot(
-                        me, cars, ball, roles, urgent_save, self.teamplay_score,
-                        self.teamplay_contact_time, &self.teammate_comms, game_time,
-                    ) {
-                        self.aerial_candidate = Some(candidate);
-                        return Plan {
-                            decision: Decision::AerialChallenge,
-                            target: candidate.target_location,
-                            target_speed: MAX_SPEED,
-                            shot: None,
-                            jump: None,
-                        };
-                    }
-                    self.yield_teamplay_opportunity();
+                    // The fast finder has already been tried as a teamplay
+                    // opportunity. This is the local run_logic fallback.
+                    self.aerial_candidate = Some(candidate);
+                    return Plan {
+                        decision: Decision::AerialChallenge,
+                        target: candidate.target_location,
+                        target_speed: MAX_SPEED,
+                        shot: None,
+                        jump: None,
+                    };
                 }
             }
 
@@ -1747,14 +1753,12 @@ impl BotBrain {
             } else {
                 350.0
             };
-            if !urgent_save && !pass_candidate_selected
-                && self.jump_shot.is_none() && self.ground_flip.is_none()
-            {
+            if !urgent_save && self.jump_shot.is_none() && self.ground_flip.is_none() {
                 if let Some(candidate) = find_aerial_candidate(
                     me,
                     prediction,
-                    aim,
-                    self.shot_targets,
+                    aerial_aim,
+                    aerial_targets,
                     cars,
                     match_state.gravity,
                     self.boost_accel,
@@ -1767,13 +1771,28 @@ impl BotBrain {
                 ).filter(|candidate| {
                     selected_score.is_none_or(|best_score| candidate.score < best_score)
                 }) {
-                    self.set_teamplay_aerial(
-                        me, ball, candidate, opponent_goal, aim, roles, urgent_save, true,
-                    );
-                    if should_commit_to_shot(
-                        me, cars, ball, roles, urgent_save, self.teamplay_score,
-                        self.teamplay_contact_time, &self.teammate_comms, game_time,
-                    ) {
+                    if teamplay_opportunity {
+                        self.set_teamplay_aerial(
+                            me, ball, candidate, opponent_goal, aerial_aim,
+                            roles, urgent_save, teamplay_targeted,
+                        );
+                        if should_commit_to_shot(
+                            me, cars, ball, roles, urgent_save, self.teamplay_score,
+                            self.teamplay_contact_time, &self.teammate_comms, game_time,
+                        ) {
+                            self.aerial_candidate = Some(candidate);
+                            return Plan {
+                                decision: Decision::AerialChallenge,
+                                target: candidate.target_location,
+                                target_speed: MAX_SPEED,
+                                shot: None,
+                                jump: None,
+                            };
+                        }
+                        self.yield_teamplay_opportunity();
+                    } else {
+                        // run_logic's untargeted/pass fallback is not a
+                        // teamplay claim; execute it without publishing SHOT_FOUND.
                         self.aerial_candidate = Some(candidate);
                         return Plan {
                             decision: Decision::AerialChallenge,
@@ -1783,7 +1802,6 @@ impl BotBrain {
                             jump: None,
                         };
                     }
-                    self.yield_teamplay_opportunity();
                 }
             }
 
