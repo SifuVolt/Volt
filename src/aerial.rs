@@ -1044,7 +1044,8 @@ mod tests {
         let (target, direction) = party_cannon_contact_geometry(
             car, slice, Vector::new(0.0, 5120.0, 300.0), Vector::new(0.0, 0.0, -650.0),
         );
-        assert!((target.distance(slice.location) - (92.75 + car.hitbox.length * 0.5)).abs() < 0.01);
+        let lower_middle = slice.location - Vector::new(0.0, 0.0, AERIAL_CONTACT_DROP);
+        assert!((target.distance(lower_middle) - (92.75 + car.hitbox.length * 0.5)).abs() < 0.01);
         assert!(direction.magnitude() > 0.99);
     }
 
