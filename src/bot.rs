@@ -422,6 +422,16 @@ impl BotBrain {
 
         let plan = self.choose_plan(me, cars, ball, prediction, game_time, match_state, shot_targets);
 
+        // A newly reachable wall approach replaces ordinary ground/jump
+        // setups, but never a launched aerial, flip, or recovery.
+        if plan.decision == Decision::WallDrive {
+            self.jump_shot = None;
+            self.double_jump_shot = None;
+            if self.aerial_shot.as_ref().is_some_and(|shot| !shot.aerialing) {
+                self.aerial_shot = None;
+            }
+        }
+
         // VirxERLU routines are stack-prioritized: a recovery pushed by
         // grid_defense remains active until the car regains wheel contact,
         // even if the strategic role changes during flight.
@@ -1091,12 +1101,11 @@ impl BotBrain {
 
             // Noob Black's unfolded wall-shot scan competes with ordinary
             // ground/jump contacts, but never displaces an urgent save.
-            if !urgent_save && self.jump_shot.is_none() && self.ground_flip.is_none() {
+            if !urgent_save && self.ground_flip.is_none() && self.defense_recovery_target.is_none()
+                && self.aerial_shot.as_ref().is_none_or(|shot| !shot.aerialing) {
                 if let Some(wall) = find_wall_drive(
                     &me, &prediction.slices, me.team, opponent_goal, 5.0,
-                ).filter(|candidate| {
-                    selected.is_none_or(|shot| candidate.intercept_time < shot.time + 0.18)
-                }) {
+                ) {
 
                     self.wall_drive_candidate = Some(wall);
                     self.teamplay_status = "WALL_PASS".to_owned();
@@ -1213,12 +1222,11 @@ impl BotBrain {
         let can_jump = candidate.is_some_and(|candidate| candidate.can_jump);
         let use_jump = selected.filter(|shot| shot.shot_type != ShotType::Ground || can_jump);
         let intercept = selected.filter(|shot| shot.shot_type == ShotType::Ground && !can_jump);
-        if self.jump_shot.is_none() && self.ground_flip.is_none() {
+        if self.ground_flip.is_none() && self.defense_recovery_target.is_none()
+            && self.aerial_shot.as_ref().is_none_or(|shot| !shot.aerialing) {
             if let Some(wall) = find_wall_drive(
                 &me, &prediction.slices, me.team, opponent_goal, 5.0,
-            ).filter(|candidate| {
-                selected.is_none_or(|shot| candidate.intercept_time < shot.time + 0.18)
-            }) {
+            ) {
                 self.wall_drive_candidate = Some(wall);
                 self.teamplay_status = "WALL_PASS".to_owned();
                 self.teamplay_score = self.teamplay_score.max(78.0);
