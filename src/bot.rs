@@ -438,7 +438,7 @@ impl BotBrain {
         self.teamplay_contact_time = candidate.slice.time.clamp(0.0, 10.0);
         self.teamplay_cover_released = true;
         self.teamplay_cover_owner = roles.and_then(|r| if r.goalie != r.challenger { Some(r.goalie) } else { None });
-        self.teamplay_receive = receive_plan(me, candidate.slice.location, aim);
+        self.teamplay_receive = receive_plan(me, candidate.slice.location, goal);
     }
 
     fn yield_teamplay_opportunity(&mut self) {
@@ -3369,9 +3369,9 @@ fn receive_plan(car: CarState, contact: Vector, aim: Vector) -> Option<(Vector, 
         return None;
     }
     lane = lane.normalize();
-    // Python scales the receiving lead from car-to-contact distance, not
-    // from the ball-to-goal distance.
-    let lane_distance = (car.location.distance(contact) * 0.28).clamp(350.0, 1050.0);
+    // Python's send_teamplay_comm scales the receive lead from the
+    // predicted contact-to-aim-point distance.
+    let lane_distance = (contact.flat_distance(aim) * 0.28).clamp(350.0, 1050.0);
     Some((contact + lane * lane_distance, lane, contact))
 }
 
@@ -5661,7 +5661,7 @@ mod tests {
             receive_plan(me, contact, aim).expect("valid receive lane");
         assert_eq!(stored_contact, contact);
         assert!((direction.y - 1.0).abs() < 1e-6);
-        assert!((receive.y - 350.0).abs() < 1e-4);
+        assert!((receive.y - 1050.0).abs() < 1e-4);
     }
 
     #[test]
