@@ -567,6 +567,7 @@ pub fn find_best_any_shot(
     boost_accel: f32,
     game_time: f32,
     kickoff_contest_until: f32,
+    elected_challenger: bool,
     unlimited_boost: bool,
     horizon: f32,
 ) -> Option<ShotCandidate> {
@@ -618,7 +619,7 @@ pub fn find_best_any_shot(
         if kind == ShotType::Aerial { continue; }
         if !useful(
             me, &foes, &friends, slice.location, remaining, kind,
-            game_time < kickoff_contest_until, !friends.is_empty(),
+            game_time < kickoff_contest_until, elected_challenger,
         ) { continue; }
 
         let mut value = score_any(me, &friends, slice.location, slice.velocity, kind, remaining);
@@ -661,7 +662,7 @@ pub fn find_best_any_shot(
                     && !( !unlimited_boost && me.boost <= 0.0 && grid.ball.z <= 105.0 )
                     && useful(
                         me, &foes, &friends, grid.ball, remaining, ShotType::DoubleJump,
-                        game_time < kickoff_contest_until, !friends.is_empty(),
+                        game_time < kickoff_contest_until, elected_challenger,
                     )
                 {
                     let mut value = score_any(
