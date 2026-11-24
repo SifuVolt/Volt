@@ -3033,15 +3033,14 @@ impl BotBrain {
             let t = shot.time;
             // Python ground_shot caches its goal aim from the live ball.
             // Keep that height/aim choice separate from the predicted contact.
+            // Python caches _relative_goal_aim_point for targeted and
+            // untargeted ground shots alike. With no parser target pair it
+            // uses foe_goal_shot and keeps the same side-based height rule.
             let parser_has_targets =
                 (shot.targets.left - shot.targets.right).magnitude() > 1.0;
-            let goal_aim = if parser_has_targets {
-                cached_ground_goal_aim_point(
-                    &mut self.ground_shot_goal_aim_point, car, ball.location, shot.targets,
-                )
-            } else {
-                foe_goal(team_side(car.team))
-            };
+            let goal_aim = cached_ground_goal_aim_point(
+                &mut self.ground_shot_goal_aim_point, car, ball.location, shot.targets,
+            );
             let shot_vector = shot.side_shot.map_or_else(
                 || {
                     if parser_has_targets {
