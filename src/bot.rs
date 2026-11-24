@@ -2969,7 +2969,7 @@ impl BotBrain {
             return self.run_jump_shot(car, ball, prediction, state, game_time);
         }
 
-        if let Some(shot) = plan.shot {
+        if let Some(mut shot) = plan.shot {
             if let Some(flip) = self.ground_flip {
                 return self.run_ground_flip(Some(car), game_time, flip);
             }
@@ -2979,11 +2979,42 @@ impl BotBrain {
             let goal_aim = cached_ground_goal_aim_point(
                 &mut self.ground_shot_goal_aim_point, car, ball.location, shot.targets,
             );
-            let shot_vector = (goal_aim - shot.ball).flatten().normalize();
-            // Python's agent.best_shot_value is 92.75 for ground_shot.
-            let offset_target = contact_approach_from_label(
-                shot.ball, shot_vector, shot.contact_face, 92.75,
-            ).unwrap_or(shot.ball - shot_vector * 92.75);
+            let shot_vector = shot.side_shot.map_or_else(
+                || (goal_aim - shot.ball).flatten().normalize(),
+                |side| side.shot_direction.flatten().normalize(),
+            );
+            shot.shot_direction = shot_vector;
+
+            // Refresh the same hitbox-aware contact geometry used when the
+            // candidate was selected. Preserve its face unless a neighbouring
+            // face is materially better for the new predicted ball position.
+            let (contact_point, offset_target, contact_face, contact_quality) =
+                if let Some(side) = shot.side_shot {
+                    let lateral = Vector::new(-shot_vector.y, shot_vector.x, 0.0).normalize();
+                    (
+                        shot.ball - lateral * BALL_RADIUS * side.side_sign,
+                        shot.ball - lateral * side.lateral_distance * side.side_sign,
+                        if side.side_sign < 0.0 { "left" } else { "right" },
+                        shot.contact_quality,
+                    )
+                } else {
+                    select_ball_contact(
+                        car,
+                        shot.ball,
+                        shot.ball_velocity,
+                        shot.targets,
+                        t,
+                        Some(shot.contact_face),
+                    )
+                };
+            shot.contact_point = contact_point;
+            shot.approach = offset_target;
+            shot.contact_face = contact_face;
+            shot.contact_quality = contact_quality;
+            if let Some(mut state) = self.ground_shot {
+                state.intercept = shot;
+                self.ground_shot = Some(state);
+            }
             let approach_target = shot_approach_target(
                 car, shot.ball, offset_target.flatten(), shot_vector, t,
             );
