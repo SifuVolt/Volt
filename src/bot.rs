@@ -3710,6 +3710,12 @@ impl BotBrain {
         // Python's jump_shot aborts only after the intercept has expired by
         // 0.8s, or after it has landed without finding a dodge window.
         if t <= -0.8 || (!car.airborne && state.counter >= 3) {
+            println!(
+                "[JUMP SHOT ABORT] phase=jump reason={} player={} T={:.3} airborne={} counter={} elapsed={:.3} car_z={:.1} vel_z={:.1} approach_z={:.1}",
+                if t <= -0.8 { "intercept_expired" } else { "landed_before_dodge" },
+                car.index, t, car.airborne, state.counter, jump_elapsed,
+                car.location.z, car.velocity.z, state.approach.z,
+            );
             self.jump_shot = None;
             // Python pops jump_shot and pushes recovery() unconditionally,
             // including when the car has already touched down. The recovery
