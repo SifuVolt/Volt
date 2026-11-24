@@ -5061,7 +5061,9 @@ fn contact_approach_from_label(ball:Vector,shot:Vector,label:&str,distance:f32)-
 
 fn shot_aim_point(ball: Vector, side: f32, airborne: bool) -> Vector {
     let goal = foe_goal(side);
-    let height = if ball.y * side <= 0.0 { 470.0 } else if airborne { 210.0 } else { 310.0 };
+    // side points toward our own goal. Use the higher central target
+    // while the ball is in our half, not while it is in the attacking half.
+    let height = if ball.y * side >= 0.0 { 470.0 } else if airborne { 210.0 } else { 310.0 };
     Vector::new(goal.x, goal.y, height)
 }
 
@@ -5791,7 +5793,7 @@ mod tests {
         let first = cached_ground_goal_aim_point(
             &mut cached, me, Vector::new(0.0, -1000.0, 100.0), targets,
         );
-        assert_eq!(first.z, 310.0);
+        assert_eq!(first.z, 470.0);
         let after_ball_crosses_midfield = cached_ground_goal_aim_point(
             &mut cached, me, Vector::new(0.0, 1000.0, 100.0), targets,
         );
@@ -5801,7 +5803,7 @@ mod tests {
         let next = cached_ground_goal_aim_point(
             &mut next_routine, me, Vector::new(0.0, 1000.0, 100.0), targets,
         );
-        assert_eq!(next.z, 470.0);
+        assert_eq!(next.z, 310.0);
     }
 
     #[test]
