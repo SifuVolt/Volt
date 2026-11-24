@@ -5502,7 +5502,7 @@ fn select_ground_contact_with_face(
         .unwrap_or(("centre", -shot_direction));
     let (label, normal) = selected;
     let contact_point = ball + normal * BALL_RADIUS;
-    let approach = cap_in_field(&car, (ball + normal * 120.0_f32.max(BALL_RADIUS)).flatten());
+    let approach = ball + normal * 120.0_f32.max(BALL_RADIUS);
     (approach, normal, score(normal), contact_point, label)
 }
 
