@@ -4911,10 +4911,8 @@ fn relative_goal_aim_point(car:CarState,ball:Vector,targets:ShotTargets)->Vector
         foe_goal(team_side(car.team))
     };
     center.z=300.0;
-    // team_side points from the field centre toward this car's own goal.
-    // A ball in our half therefore has the same sign as team_side; Python's
-    // side() helper uses the opposite (attack-direction) convention.
-    if ball.y*team_side(car.team)>=0.0 {
+    // Match Python side(team): -1 for blue and +1 for orange.
+    if ball.y*team_side(car.team)<=0.0 {
         center.z=470.0;
         return center;
     }
@@ -5061,9 +5059,8 @@ fn contact_approach_from_label(ball:Vector,shot:Vector,label:&str,distance:f32)-
 
 fn shot_aim_point(ball: Vector, side: f32, airborne: bool) -> Vector {
     let goal = foe_goal(side);
-    // side points toward our own goal. Use the higher central target
-    // while the ball is in our half, not while it is in the attacking half.
-    let height = if ball.y * side >= 0.0 { 470.0 } else if airborne { 210.0 } else { 310.0 };
+    // Preserve Python's side-based aim-height rule exactly.
+    let height = if ball.y * side <= 0.0 { 470.0 } else if airborne { 210.0 } else { 310.0 };
     Vector::new(goal.x, goal.y, height)
 }
 
@@ -5702,7 +5699,7 @@ mod tests {
     }
 
     #[test]
-    fn jump_goal_aim_height_uses_our_half_not_the_opponents_half() {
+    fn jump_goal_aim_height_matches_python_side_convention() {
         let targets = ShotTargets {
             left: Vector::new(-893.0, 5120.0, 300.0),
             right: Vector::new(893.0, 5120.0, 300.0),
@@ -5717,8 +5714,8 @@ mod tests {
         );
         assert!((blue_own_half.x).abs() < 1.0);
         assert!((blue_own_half.y - 5120.0).abs() < 1.0);
-        assert!((blue_own_half.z - 470.0).abs() < 1.0);
-        assert!((blue_opponent_half.z - 310.0).abs() < 1.0);
+        assert!((blue_own_half.z - 310.0).abs() < 1.0);
+        assert!((blue_opponent_half.z - 470.0).abs() < 1.0);
 
         let orange = car(1, 1, Vector::ZERO);
         let orange_own_half = relative_goal_aim_point(
@@ -5727,8 +5724,8 @@ mod tests {
         let orange_opponent_half = relative_goal_aim_point(
             orange, Vector::new(0.0, -1000.0, 150.0), targets,
         );
-        assert!((orange_own_half.z - 470.0).abs() < 1.0);
-        assert!((orange_opponent_half.z - 310.0).abs() < 1.0);
+        assert!((orange_own_half.z - 310.0).abs() < 1.0);
+        assert!((orange_opponent_half.z - 470.0).abs() < 1.0);
     }
 
     #[test]
@@ -5793,7 +5790,7 @@ mod tests {
         let first = cached_ground_goal_aim_point(
             &mut cached, me, Vector::new(0.0, -1000.0, 100.0), targets,
         );
-        assert_eq!(first.z, 470.0);
+        assert_eq!(first.z, 310.0);
         let after_ball_crosses_midfield = cached_ground_goal_aim_point(
             &mut cached, me, Vector::new(0.0, 1000.0, 100.0), targets,
         );
@@ -5803,7 +5800,7 @@ mod tests {
         let next = cached_ground_goal_aim_point(
             &mut next_routine, me, Vector::new(0.0, 1000.0, 100.0), targets,
         );
-        assert_eq!(next.z, 310.0);
+        assert_eq!(next.z, 470.0);
     }
 
     #[test]
