@@ -3754,20 +3754,6 @@ impl BotBrain {
                 }
             }
 
-            if wall_normal.is_none() {
-                if let Some((selected_target, label)) = party_cannon_jump_front_contact(
-                    car,
-                    state.ball,
-                    state.shot_direction,
-                    time_remaining,
-                    self.match_state.gravity,
-                    state.jumping,
-                    state.contact_face_label,
-                ) {
-                    offset_target = selected_target;
-                    state.contact_face_label = Some(label);
-                }
-            }
             state.approach = offset_target;
         }
 
@@ -4945,13 +4931,15 @@ fn assign_roles(cars: &[CarState], ball: BallState, side: f32) -> Option<TeamRol
 }
 
 
-/// Shared seven-point front-hitbox contact search used by live ground shots.
+/// Exact five-surface contact choice from Python tools.select_ball_contact.
+/// The label is selected from the car's current side of the predicted ball,
+/// then the routine rebuilds that same normal around each refreshed slice.
 fn select_ball_contact(
     car: CarState,
     ball: Vector,
-    ball_velocity: Vector,
+    _ball_velocity: Vector,
     targets: ShotTargets,
-    time: f32,
+    _time: f32,
     previous_face: Option<&'static str>,
 ) -> (Vector, Vector, &'static str, f32) {
     let target_center = (targets.left + targets.right) * 0.5;
@@ -4960,30 +4948,31 @@ fn select_ball_contact(
         shot_direction = Vector::new(0.0, -team_side(car.team), 0.0);
     }
 
-    let horizon = time.clamp(0.0, 0.18);
-    let Some(contact) = crate::contact::select_front_contact(
-        car,
-        ball,
-        ball_velocity,
-        shot_direction,
-        Vector::ZERO,
-        horizon,
-        horizon,
-        0.08,
-        true,
-        previous_face,
-    ) else {
-        let contact_point = ball - shot_direction * BALL_RADIUS;
-        let approach = ball - shot_direction * (BALL_RADIUS + car.hitbox.length * 0.5);
-        return (contact_point, approach, "centre", 0.0);
+    let lateral = Vector::new(-shot_direction.y, shot_direction.x, 0.0).normalize();
+    let car_from_ball = (car.location - ball).normalize();
+    let candidates: [(&'static str, Vector); 5] = [
+        ("centre", -shot_direction),
+        ("left", (-shot_direction + lateral * 0.55).normalize()),
+        ("right", (-shot_direction - lateral * 0.55).normalize()),
+        ("high", (-shot_direction + Vector::new(0.0, 0.0, 0.30)).normalize()),
+        ("low", (-shot_direction - Vector::new(0.0, 0.0, 0.30)).normalize()),
+    ];
+    let score = |normal: Vector| {
+        car_from_ball.dot(normal) * 0.75
+            + (-normal).dot(shot_direction) * 0.25
     };
-
-    (
-        contact.contact_point,
-        contact.approach,
-        contact.face,
-        contact.quality,
-    )
+    let selected = previous_face
+        .and_then(|face| candidates.iter().copied().find(|(label, _)| *label == face))
+        .or_else(|| {
+            candidates.iter().copied().max_by(|a, b| {
+                score(a.1).total_cmp(&score(b.1))
+            })
+        })
+        .unwrap_or(("centre", -shot_direction));
+    let (label, normal) = selected;
+    let contact_point = ball + normal * BALL_RADIUS;
+    let approach = ball + normal * 120.0_f32.max(BALL_RADIUS);
+    (contact_point, approach, label, score(normal))
 }
 
 fn select_side_shot(car:CarState,candidate:ShotCandidate,targets:ShotTargets)->Option<SideShotPlan> {
@@ -5494,25 +5483,26 @@ fn shot_lane_pressure(ball: Vector, aim: Vector, opponents: &[CarState]) -> f32 
 /// not just its current location. Side contacts are considered when they give
 /// a materially better approach while retaining a useful outgoing angle.
 
-/// Select a ground contact on the actual front face of the car's hitbox.
-/// This ports Volt's seven-point Party Cannon contact search, including
-/// short-horizon orientation extrapolation and the hitbox-centre offset.
+/// Python's five-surface ball-side contact selection. It intentionally does
+/// not extrapolate the hitbox orientation: Python selects the approach label
+/// from the current car-to-ball vector, then the shot routine rebuilds that
+/// normal around the latest prediction and applies the actual hitbox offset.
 fn select_ground_contact(
     car: CarState,
     ball: Vector,
-    ball_velocity: Vector,
+    _ball_velocity: Vector,
     aim: Vector,
-    time: f32,
+    _time: f32,
 ) -> (Vector, Vector, f32, Vector, &'static str) {
-    select_ground_contact_with_face(car, ball, ball_velocity, aim, time, None)
+    select_ground_contact_with_face(car, ball, Vector::ZERO, aim, 0.0, None)
 }
 
 fn select_ground_contact_with_face(
     car: CarState,
     ball: Vector,
-    ball_velocity: Vector,
+    _ball_velocity: Vector,
     aim: Vector,
-    time: f32,
+    _time: f32,
     previous_face: Option<&'static str>,
 ) -> (Vector, Vector, f32, Vector, &'static str) {
     let shot_direction = (aim - ball).flatten().normalize();
@@ -5520,35 +5510,31 @@ fn select_ground_contact_with_face(
         return (cap_in_field(&car, ball.flatten()), Vector::ZERO, 0.0, ball, "centre");
     }
 
-    let horizon = time.clamp(0.0, 0.18);
-    let Some(contact) = crate::contact::select_front_contact(
-        car,
-        ball,
-        ball_velocity,
-        shot_direction,
-        Vector::ZERO,
-        horizon,
-        horizon,
-        0.08,
-        true,
-        previous_face,
-    ) else {
-        return (
-            cap_in_field(&car, ball - shot_direction * 300.0),
-            -shot_direction,
-            0.0,
-            ball - shot_direction * BALL_RADIUS,
-            "centre",
-        );
+    let lateral = Vector::new(-shot_direction.y, shot_direction.x, 0.0).normalize();
+    let car_from_ball = (car.location - ball).normalize();
+    let candidates: [(&'static str, Vector); 5] = [
+        ("centre", -shot_direction),
+        ("left", (-shot_direction + lateral * 0.55).normalize()),
+        ("right", (-shot_direction - lateral * 0.55).normalize()),
+        ("high", (-shot_direction + Vector::new(0.0, 0.0, 0.30)).normalize()),
+        ("low", (-shot_direction - Vector::new(0.0, 0.0, 0.30)).normalize()),
+    ];
+    let score = |normal: Vector| {
+        car_from_ball.dot(normal) * 0.75
+            + (-normal).dot(shot_direction) * 0.25
     };
-
-    (
-        cap_in_field(&car, contact.approach.flatten()),
-        contact.normal,
-        contact.quality,
-        contact.contact_point,
-        contact.face,
-    )
+    let selected = previous_face
+        .and_then(|face| candidates.iter().copied().find(|(label, _)| *label == face))
+        .or_else(|| {
+            candidates.iter().copied().max_by(|a, b| {
+                score(a.1).total_cmp(&score(b.1))
+            })
+        })
+        .unwrap_or(("centre", -shot_direction));
+    let (label, normal) = selected;
+    let contact_point = ball + normal * BALL_RADIUS;
+    let approach = cap_in_field(&car, (ball + normal * 120.0_f32.max(BALL_RADIUS)).flatten());
+    (approach, normal, score(normal), contact_point, label)
 }
 
 fn ground_dodge_direction(
