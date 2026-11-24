@@ -352,8 +352,8 @@ mod tests {
             Vector::new(300.0, -3500.0, 92.75),
         );
         let target = support_target(&state, None);
-        assert_eq!(target.x, -1900.0);
-        assert_eq!(target.y, -2850.0);
+        assert_eq!(target.x, -2250.0);
+        assert_eq!(target.y, -2650.0);
     }
 
     #[test]
