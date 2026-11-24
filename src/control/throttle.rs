@@ -1,19 +1,21 @@
 use crate::math::Vector;
-use crate::physics::drive::{curvature, is_inside_turn_radius, throttle_acceleration, turn_radius};
+use crate::physics::drive::{is_inside_turn_radius, throttle_acceleration, turn_radius};
 
 use super::pd::OrientationAngles;
 
-/// Inputs required by Volt's Python defaultThrottle calculation.
-///
-/// Speeds and angular velocity use the same coordinate conventions as
-/// CarState: car_speed is local forward velocity, world_speed is total speed,
-/// and angular_velocity is local.
+const BRAKE_ACC: f32 = 3500.0;
+const COAST_ACC: f32 = 525.0;
+const REACTION_TIME: f32 = 0.04;
+const BRAKE_COAST_TRANSITION: f32 = -(0.45 * BRAKE_ACC + 0.55 * COAST_ACC);
+const COASTING_THROTTLE_TRANSITION: f32 = -0.5 * COAST_ACC;
+const MIN_WALL_SPEED: f32 = -0.5 * BRAKE_ACC;
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ThrottleInput {
     pub airborne: bool,
     pub car_speed: f32,
     pub world_speed: f32,
-    pub angular_velocity: Vector,
+    pub up_z: f32,
     pub target_speed: f32,
     pub target_angles: OrientationAngles,
     pub local_target: Option<Vector>,
@@ -23,8 +25,6 @@ pub struct ThrottleInput {
     pub boost_accel: f32,
 }
 
-/// Only populated controls are changed by defaultThrottle. None means the
-/// Python routine would leave that controller field untouched.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct ThrottleOutput {
     pub car_speed: f32,
@@ -36,91 +36,41 @@ pub struct ThrottleOutput {
 }
 
 fn sign(value: f32) -> f32 {
-    if value < 0.0 {
-        -1.0
-    } else if value > 0.0 {
-        1.0
-    } else {
-        0.0
-    }
+    if value < 0.0 { -1.0 } else if value > 0.0 { 1.0 } else { 0.0 }
 }
 
-/// Pure Rust port of Volt's Python defaultThrottle.
-///
-/// This does not mutate RLBot's controller or CarState. It returns only the
-/// controller fields changed by the Python routine. target_angles is required
-/// because the source routine reads its yaw angle unconditionally on ground.
+/// Direct port of VirxERLU's defaultThrottle used by Volt's Python
+/// defaultDrive. It deliberately preserves the source's brake/coast bands:
+/// coasting leaves throttle untouched instead of forcing a speed correction.
 pub fn default_throttle(input: ThrottleInput) -> ThrottleOutput {
     let mut output = ThrottleOutput {
         car_speed: input.car_speed,
         target_speed: input.target_speed,
         ..ThrottleOutput::default()
     };
-
     if input.airborne {
         return output;
     }
 
-    let mut target_speed = input.target_speed;
     let mut handbrake = input.handbrake;
     let mut steer = input.steer;
-
     if let Some(local_target) = input.local_target {
         let turn_rad = turn_radius(input.car_speed.abs());
-        let angular_velocity = input.angular_velocity;
-        let angular_speed = angular_velocity.magnitude();
-
-        let inside_turn = if local_target.y.abs() < turn_rad {
+        let inside_turn = if local_target.y.abs() < turn_rad || input.car_speed > 1410.0 {
             is_inside_turn_radius(turn_rad, local_target, sign(input.steer))
         } else {
             local_target.x.abs() < turn_rad
         };
-
-        handbrake = input.world_speed > 250.0
-            && input.world_speed < 1000.0
-            && inside_turn
-            && angular_speed >= (input.world_speed / 500.0).min(2.0);
+        handbrake = input.world_speed > 600.0 && inside_turn;
     }
 
     let mut angle_to_target = input.target_angles.yaw.abs();
-    if target_speed < 0.0 {
+    if input.target_speed < 0.0 {
         angle_to_target = std::f32::consts::PI - angle_to_target;
     }
 
-    // Party Cannon-style turn-speed limit from Volt's Python utility.
-    if let Some(local_target) = input.local_target {
-        if target_speed > 0.0 && local_target.x > 0.0 {
-            let target_distance_sq =
-                local_target.x * local_target.x + local_target.y * local_target.y;
-
-            if target_distance_sq > 350.0_f32.powi(2) {
-                let required_curvature =
-                    2.0 * local_target.y.abs() / target_distance_sq;
-
-                if required_curvature > 0.00015 {
-                    let mut turn_speed_limit = 0.0;
-                    let mut candidate_speed = 0.0;
-
-                    while candidate_speed <= 2300.0 {
-                        if curvature(candidate_speed) >= required_curvature {
-                            turn_speed_limit = candidate_speed;
-                            candidate_speed += 25.0;
-                        } else {
-                            break;
-                        }
-                    }
-
-                    target_speed = target_speed.min(turn_speed_limit.max(450.0));
-                }
-            }
-        }
-    }
-
     if handbrake {
-        if angle_to_target > 2.8 {
-            if target_speed.abs() > 950.0 {
-                target_speed = 950.0 * sign(target_speed);
-            }
+        if angle_to_target > 2.6 {
             steer = sign(input.steer);
             handbrake = false;
         } else {
@@ -128,69 +78,51 @@ pub fn default_throttle(input: ThrottleInput) -> ThrottleOutput {
         }
     }
 
-    let speed_error = target_speed - input.car_speed;
-    let acceleration = throttle_acceleration(input.car_speed);
-    let throttle = if acceleration != 0.0
-        && (target_speed < 1410.0 || speed_error < -acceleration / 10.0)
-    {
-        (speed_error / acceleration).clamp(-1.0, 1.0)
-    } else {
-        sign(if speed_error.abs() > 117.0 {
-            speed_error
+    let speed_error = input.target_speed - input.car_speed;
+    let mut acceleration = speed_error / REACTION_TIME;
+    if input.car_speed < 0.0 {
+        acceleration *= -1.0;
+    }
+
+    let mut brake_transition = BRAKE_COAST_TRANSITION;
+    let mut coast_transition = COASTING_THROTTLE_TRANSITION;
+    if input.up_z < 0.7 {
+        brake_transition = MIN_WALL_SPEED;
+        coast_transition = MIN_WALL_SPEED;
+    }
+
+    let throttle_accel = throttle_acceleration(input.car_speed);
+    let throttle_boost_transition = throttle_accel + 0.5 * input.boost_accel;
+
+    if acceleration <= brake_transition {
+        output.throttle = Some(-1.0);
+    } else if acceleration < coast_transition {
+        // Intentional coast band: Python leaves the controller throttle
+        // unchanged (normally zero) rather than applying a weak brake.
+    } else if acceleration <= throttle_boost_transition {
+        output.throttle = Some(if throttle_accel == 0.0 {
+            1.0
         } else {
-            target_speed
-        })
-    };
-
-    output.target_speed = target_speed;
-    output.throttle = Some(throttle);
-    output.handbrake = Some(handbrake);
-
-    if steer != input.steer {
-        output.steer = Some(steer);
-    } else if handbrake && input.steer != input.yaw {
-        // In the handbrake branch Python always assigns yaw to steer.
-        output.steer = Some(steer);
-    }
-
-    if !handbrake {
-        let available_distance = input
-            .local_target
-            .map(|target| (target.x * target.x + target.y * target.y).sqrt())
-            .unwrap_or(0.0);
-
-        let mut boostless_speed = input.car_speed.max(0.0);
-        let mut boostless_distance = 0.0;
-
-        if target_speed > 0.0 && available_distance > 0.0 {
-            for _ in 0..360 {
-                if boostless_speed >= target_speed - 50.0 {
-                    break;
-                }
-
-                let throttle_accel = throttle_acceleration(boostless_speed);
-                if throttle_accel <= 0.0 {
-                    break;
-                }
-
-                boostless_speed =
-                    target_speed.min(boostless_speed + throttle_accel / 120.0);
-                boostless_distance += boostless_speed / 120.0;
-
-                if boostless_distance >= available_distance {
-                    break;
-                }
-            }
+            (acceleration / throttle_accel).clamp(0.02, 1.0)
+        });
+    } else {
+        output.throttle = Some(1.0);
+        if !handbrake && speed_error > 0.0 && angle_to_target < 1.0 {
+            output.boost = Some(true);
         }
-
-        let boost_needed = target_speed > 0.0
-            && angle_to_target < 0.45
-            && speed_error > input.boost_accel / 20.0
-            && boostless_speed < target_speed - 50.0;
-
-        output.boost = Some(boost_needed);
     }
 
+    if input.car_speed < 0.0 {
+        if let Some(throttle) = output.throttle.as_mut() {
+            *throttle *= -1.0;
+        }
+    }
+
+    output.target_speed = input.target_speed;
+    output.handbrake = Some(handbrake);
+    if steer != input.steer || (handbrake && input.steer != input.yaw) {
+        output.steer = Some(steer);
+    }
     output
 }
 
@@ -203,7 +135,7 @@ mod tests {
             airborne: false,
             car_speed: 0.0,
             world_speed: 0.0,
-            angular_velocity: Vector::ZERO,
+            up_z: 1.0,
             target_speed: 1000.0,
             target_angles: OrientationAngles::default(),
             local_target: Some(Vector::new(2000.0, 0.0, 0.0)),
@@ -219,62 +151,84 @@ mod tests {
         let mut args = input();
         args.airborne = true;
         let result = default_throttle(args);
-
-        assert_eq!(result.car_speed, args.car_speed);
         assert_eq!(result.throttle, None);
-        assert_eq!(result.steer, None);
         assert_eq!(result.handbrake, None);
         assert_eq!(result.boost, None);
     }
 
     #[test]
-    fn throttle_uses_python_acceleration_curve() {
+    fn acceleration_uses_python_reaction_time_and_throttle_curve() {
         let result = default_throttle(input());
-        let expected = (1000.0 / throttle_acceleration(0.0)).min(1.0);
+        let expected = ((1000.0 / REACTION_TIME) / throttle_acceleration(0.0)).clamp(0.02, 1.0);
         assert_eq!(result.throttle, Some(expected));
     }
 
     #[test]
-    fn tight_turn_caps_requested_speed_using_curvature_table() {
+    fn python_coast_band_leaves_throttle_untouched() {
         let mut args = input();
-        args.target_speed = 1800.0;
-        args.local_target = Some(Vector::new(500.0, 500.0, 0.0));
-
+        args.car_speed = 1000.0;
+        args.target_speed = 990.0;
         let result = default_throttle(args);
-        assert!(result.target_speed < args.target_speed);
-        assert!(result.target_speed >= 450.0);
+        assert_eq!(result.throttle, None);
     }
 
     #[test]
-    fn aligned_boost_is_used_when_throttle_only_cannot_reach_target() {
+    fn strong_braking_uses_full_reverse_throttle() {
+        let mut args = input();
+        args.car_speed = 1000.0;
+        args.target_speed = 800.0;
+        let result = default_throttle(args);
+        assert_eq!(result.throttle, Some(-1.0));
+    }
+
+    #[test]
+    fn aligned_large_acceleration_uses_python_boost_branch() {
         let mut args = input();
         args.target_speed = 2200.0;
-        args.local_target = Some(Vector::new(100.0, 0.0, 0.0));
-
         let result = default_throttle(args);
+        assert_eq!(result.throttle, Some(1.0));
         assert_eq!(result.boost, Some(true));
     }
 
     #[test]
-    fn boost_is_not_used_when_target_angle_is_too_large() {
+    fn boost_is_withheld_when_not_facing_target() {
         let mut args = input();
         args.target_speed = 2200.0;
-        args.target_angles.yaw = 0.5;
-        args.local_target = Some(Vector::new(100.0, 0.0, 0.0));
-
+        args.target_angles.yaw = 1.1;
         let result = default_throttle(args);
-        assert_eq!(result.boost, Some(false));
+        assert_eq!(result.boost, None);
+        assert_eq!(result.throttle, Some(1.0));
     }
 
     #[test]
-    fn reverse_target_uses_reverse_alignment_angle() {
+    fn reverse_motion_flips_throttle_sign() {
         let mut args = input();
-        args.target_speed = -500.0;
-        args.target_angles.yaw = 0.0;
-        args.local_target = None;
-
+        args.car_speed = -500.0;
+        args.target_speed = -300.0;
         let result = default_throttle(args);
-        assert_eq!(result.boost, Some(false));
-        assert_eq!(result.throttle, Some(-500.0 / 1600.0));
+        assert!(result.throttle.unwrap() < 0.0);
+    }
+
+    #[test]
+    fn handbrake_uses_python_world_speed_gate() {
+        let mut args = input();
+        args.world_speed = 650.0;
+        args.local_target = Some(Vector::new(100.0, 0.0, 0.0));
+        args.steer = 1.0;
+        args.yaw = 0.4;
+        args.target_angles.yaw = 0.2;
+        let result = default_throttle(args);
+        assert_eq!(result.handbrake, Some(true));
+        assert_eq!(result.steer, Some(0.4));
+    }
+
+    #[test]
+    fn wall_drive_uses_wall_brake_threshold() {
+        let mut args = input();
+        args.up_z = 0.0;
+        args.car_speed = 1000.0;
+        args.target_speed = 900.0;
+        let result = default_throttle(args);
+        assert_eq!(result.throttle, None);
     }
 }
