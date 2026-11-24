@@ -27,7 +27,7 @@ const BOOST_ACCEL: f32 = 991.6667;
 const JUMP_SPEED: f32 = 291.6667;
 const JUMP_ACCEL: f32 = 1458.3333;
 const JUMP_MAX_DURATION: f32 = 0.20;
-const JUMP_MINIMUM_HOLD: f32 = 0.06;
+const JUMP_MINIMUM_HOLD: f32 = 0.10;
 const MIN_AIR_BOOST_TIME: f32 = 1.0 / 30.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -6301,6 +6301,54 @@ mod tests {
         assert!(!jump_shot_should_s_tilt(true, 200.0, 100.0));
         assert!(!jump_shot_should_s_tilt(false, 130.0, 0.0));
         assert!(!jump_shot_should_s_tilt(false, 150.0, 100.0));
+    }
+
+    #[test]
+    fn jump_shot_holds_first_jump_for_ten_hundredths_before_release() {
+        let mut brain = BotBrain::new();
+        let mut me = car(0, 0, Vector::new(100.0, -65.0, 0.0));
+        me.airborne = true;
+        me.air_state = AirState::InAir;
+        let state = JumpShotState {
+            started_at: 1.0,
+            intercept_time: 1.5,
+            ball: Vector::new(300.0, 0.0, 100.0),
+            ball_velocity: Vector::ZERO,
+            approach: Vector::new(200.0, 0.0, 0.0),
+            shot_direction: Vector::new(1.0, 0.0, 0.0),
+            contact_face: "centre",
+            contact_face_label: None,
+            goal_aim_point: Some(Vector::new(5120.0, 512.0, 300.0)),
+            needed_jump_time: 0.2,
+            jumping: true,
+            dodging: false,
+            jump_time: None,
+            quick: true,
+            counter: 0,
+            patience_applied: true,
+            dodge_started_at: None,
+            dodge_direction: Vector::new(1.0, 0.0, 0.0),
+            side_mode: false,
+            side_sign: 1.0,
+            side_lateral_distance: 0.0,
+            targets: ShotTargets { left: Vector::ZERO, right: Vector::ZERO },
+        };
+        let ball = BallState { location: state.ball, velocity: state.ball_velocity };
+        let prediction = BallTrajectory { slices: Vec::new() };
+
+        let launch = brain.run_jump_shot(me, ball, &prediction, state, 1.0);
+        assert!(launch.jump);
+
+        let held = brain.run_jump_shot(
+            me, ball, &prediction, brain.jump_shot.unwrap(), 1.09,
+        );
+        assert!(held.jump, "first jump should remain held through 0.10 seconds");
+
+        let released = brain.run_jump_shot(
+            me, ball, &prediction, brain.jump_shot.unwrap(), 1.11,
+        );
+        assert!(!released.jump, "first jump should release after the longer hold");
+        assert_eq!(brain.jump_shot.unwrap().counter, 1);
     }
 
     #[test]
