@@ -663,37 +663,6 @@ pub fn wall_shot_adjust_aerial(
     (adjusted, Some(normal), target_height)
 }
 
-fn opponent_eta(opponent: CarState, target: Vector) -> f32 {
-    if opponent.demolished {
-        return f32::INFINITY;
-    }
-    let delta = (target - opponent.location).flatten();
-    let distance = delta.magnitude();
-    let forward = opponent.forward().flatten().normalize();
-    let direction = delta.normalize();
-    let facing = if direction == Vector::ZERO || forward == Vector::ZERO {
-        0.0
-    } else {
-        forward.dot(direction).clamp(-1.0, 1.0)
-    };
-    let speed = opponent.velocity.flatten().magnitude();
-    distance / (speed + 650.0).clamp(850.0, 2100.0)
-        + (1.0 - facing) * 0.28
-}
-
-
-fn reject_low_fast_aerial(parsed: ParsedShot, predicted_height: f32, live_height: f32) -> ParsedShot {
-    if parsed.found
-        && parsed.shot_type == Some(ShotType::Aerial)
-        && parsed.fast
-        && (predicted_height <= 350.0 || live_height <= 350.0)
-    {
-        ParsedShot::default()
-    } else {
-        parsed
-    }
-}
-
 /// Fast-zone aerial scan from routines.fast_intercept_finder. It keeps the
 /// first normal aerial if one exists; otherwise it falls back to the first
 /// fast aerial whose live and predicted ball heights both clear 350 units.
