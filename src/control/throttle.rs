@@ -206,7 +206,7 @@ mod tests {
         args.car_speed = -500.0;
         args.target_speed = -300.0;
         let result = default_throttle(args);
-        assert!(result.throttle.unwrap() < 0.0);
+        assert_eq!(result.throttle, Some(1.0));
     }
 
     #[test]
