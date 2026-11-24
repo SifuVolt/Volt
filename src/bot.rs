@@ -628,7 +628,7 @@ impl BotBrain {
         if ball_in_goal_danger {
             if !self.emergency_save_zone_active {
                 self.emergency_save_zone_active = true;
-                if self.aerial_shot.as_ref().is_none_or(|shot| !shot.aerialing)
+                if self.aerial_shot.as_ref().is_none_or(|shot| !shot.aerialing && !shot.side_wall_active)
                     && self.ground_flip.is_none()
                     && self.defense_flip.is_none()
                     && self.defense_recovery_target.is_none()
@@ -1457,7 +1457,7 @@ impl BotBrain {
             if self.ground_flip.is_none()
                 && self.defense_flip.is_none()
                 && self.defense_recovery_target.is_none()
-                && self.aerial_shot.as_ref().is_none_or(|shot| !shot.aerialing)
+                && self.aerial_shot.as_ref().is_none_or(|shot| !shot.aerialing && !shot.side_wall_active)
             {
                 self.jump_shot = None;
                 self.double_jump_shot = None;
@@ -2061,7 +2061,7 @@ impl BotBrain {
         let intercept = selected.filter(|shot| shot.shot_type == ShotType::Ground && !can_jump);
         if self.ground_flip.is_none() && self.defense_flip.is_none()
             && self.defense_recovery_target.is_none()
-            && self.aerial_shot.as_ref().is_none_or(|shot| !shot.aerialing) {
+            && self.aerial_shot.as_ref().is_none_or(|shot| !shot.aerialing && !shot.side_wall_active) {
             if let Some(wall) = find_wall_drive(
                 &me, &prediction.slices, me.team, opponent_goal, 5.0,
             ) {
