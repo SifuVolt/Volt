@@ -1069,6 +1069,11 @@ impl StrikeExecutor {
         let Some(shot) = self.candidate else {
             return ControllerState::default();
         };
+        // Every parser candidate owns the target pair it was evaluated
+        // against. This is especially important for find_pass_shot: replacing
+        // its receiver lane with the normal goal posts here turns a pass back
+        // into an accidental shot at goal during execution.
+        let selected_targets = shot.parser.targets;
 
         if shot.time < -MAX_JUMP_SHOT_AGE {
             self.reset();
@@ -1084,12 +1089,12 @@ impl StrikeExecutor {
                 if shot.shot_type != ShotType::Ground {
                     let time = shot.time.clamp(0.000001, 6.0);
                     let (approach, direction, _) =
-                        Self::refreshed_jump_geometry(&car, shot, ball, targets, gravity, time);
+                        Self::refreshed_jump_geometry(&car, shot, ball, selected_targets, gravity, time);
                     self.current_jump_target = approach;
                     self.current_shot_direction = direction;
                 }
                 self.tick_ground_or_jump_approach(
-                    car, ball, shot, targets, gravity, boost_accel, now,
+                    car, ball, shot, selected_targets, gravity, boost_accel, now,
                 )
             }
             StrikePhase::JumpFlight => {
