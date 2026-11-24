@@ -333,7 +333,9 @@ pub fn find_best_shot(
         let t=slice.time;
         if t<0.10 {continue;}
         if t>horizon.min(6.0) {break;}
-        let interval=if urgent_save {0.025}else if t<1.5 {0.05}else{0.10};
+        // Rust can afford a denser 30-Hz ordinary scan; keep urgent
+        // saves at 40 Hz so the earliest defensive contact is not skipped.
+        let interval = if urgent_save { 0.025 } else { 1.0 / 30.0 };
         if t-last+1.0e-5<interval {continue;}
         last=t;
         if slice.location.y.abs()>5212.75 {break;}
@@ -555,7 +557,9 @@ pub fn find_best_any_shot(
         let time = slice.time;
         if time < 0.10 { continue; }
         if time > horizon.min(6.0) { break; }
-        let interval = if time < 1.5 { 0.05 } else { 0.10 };
+        // Refine ordinary candidate timing to 30 Hz; the 120-Hz
+        // trajectory is retained for exact slice/contact reconstruction.
+        let interval = 1.0 / 30.0;
         if time - last + 1.0e-5 < interval { continue; }
         last = time;
         if slice.location.y.abs() > 5212.75 { break; }
