@@ -794,7 +794,7 @@ pub fn grid_max_jump_height(double:bool)->f64 {
     let x=-(564.9931640625+extra)/(-325.0556640625*2.0);
     -325.0556640625*x*x+(564.9931640625+extra)*x-11.6591796875-292.0*25.0/120.0*if double {1.0}else{0.0}
 }
-pub fn grid_jump_time(height:f32,double:bool)->Option<f32> {
+pub pub(crate) fn grid_jump_time(height:f32,double:bool)->Option<f32> {
     let h=height as f64;
     let single=solve_quad(-325.0556640625,564.9931640625,-11.6591796875,h.min(grid_max_jump_height(false)),-1)?;
     if single>=24.0/120.0 {
