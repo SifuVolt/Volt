@@ -12,7 +12,10 @@ use crate::{
     prediction::{BallSlice, BallTrajectory},
     shot_physics::{aerial_shot_is_viable, ShotType},
     shot_parser::{parse_slice_for_shot_with_target, ShotTargets},
-    shot_planner::score_aerial_candidate,
+    shot_planner::{
+        parse_untargeted_aerial_budget, score_aerial_candidate,
+        score_untargeted_aerial_candidate,
+    },
     state::CarState,
 };
 use rlbot::flat::ControllerState;
@@ -798,14 +801,23 @@ pub fn find_aerial_candidate(
             true,
             false,
         );
-        if !parsed.found || parsed.shot_type != Some(ShotType::Aerial) {
-            continue;
+
+        // Python rejects a parser-classified fast aerial when either the
+        // predicted contact or the live ball is at/below 350 uu. Reclassifying
+        // it later inside Aerial.run is too late: its reachability was tested
+        // with fast-aerial launch physics.
+        if parsed.found
+            && parsed.shot_type == Some(ShotType::Aerial)
+            && parsed.fast
+            && (slice.location.z <= 350.0 || live_ball_height <= 350.0)
+        {
+            parsed = Default::default();
         }
 
-        // Exact Volt post-launch reserve for aerials from
-        // _shot_post_launch_boost_reserve(). Re-run the same parser with the
-        // reduced approach budget, rather than estimating a separate race ETA.
-        if !unlimited_boost {
+        // Reserve the same post-launch boost margin before accepting the
+        // targeted parser result. Only a normal targeted aerial suppresses
+        // Python's separate untargeted aerial check for this slice.
+        if parsed.found && parsed.shot_type == Some(ShotType::Aerial) && !unlimited_boost {
             let height = (slice.location.z - 92.75 - car.location.z).max(0.0);
             let distance_3d = car.location.distance(slice.location);
             let distance_factor = ((distance_3d - 250.0) / 1000.0).clamp(0.0, 1.0);
@@ -816,63 +828,126 @@ pub fn find_aerial_candidate(
             if reserve > 0.25 {
                 let approach_budget = car.boost - reserve;
                 if approach_budget < -0.01 {
-                    continue;
+                    parsed = Default::default();
+                } else {
+                    let mut budgeted_car = car;
+                    budgeted_car.boost = approach_budget.max(0.0).trunc();
+                    let next = parse_slice_for_shot_with_target(
+                        &budgeted_car,
+                        slice.location,
+                        slice.velocity,
+                        time_remaining,
+                        92.75,
+                        boost_accel,
+                        gravity,
+                        targets,
+                        false,
+                        false,
+                        false,
+                        true,
+                        true,
+                        false,
+                    );
+                    if next.found && next.shot_type == Some(ShotType::Aerial) {
+                        parsed = next;
+                    } else {
+                        parsed = Default::default();
+                    }
                 }
-                let mut budgeted_car = car;
-                budgeted_car.boost = approach_budget.max(0.0).trunc();
-                let next = parse_slice_for_shot_with_target(
-                    &budgeted_car,
-                    slice.location,
-                    slice.velocity,
-                    time_remaining,
-                    92.75,
-                    boost_accel,
-                    gravity,
-                    targets,
-                    false,
-                    false,
-                    false,
-                    true,
-                    true,
-                    false,
-                );
-                if !next.found || next.shot_type != Some(ShotType::Aerial) {
-                    continue;
-                }
-                parsed = next;
             }
         }
 
-        let (target_location, shot_direction) = contact_geometry(car, slice, goal, gravity);
-        let ordinary_score = score_aerial_candidate(
-            car,
-            cars,
-            slice.location,
-            slice.velocity,
-            time_remaining,
-            targets,
-            gravity.z,
-            game_time < kickoff_contest_until,
-        );
-        // Python find_shot save_mode ranks a parser-validated aerial by
-        // contact time plus the aerial complexity penalty; it does not trade
-        // an earlier save for a higher-quality attacking angle.
-        let score = aerial_candidate_rank(time_remaining, ordinary_score, urgent_save, parsed.fast);
-        let estimate = aerial_shot_is_viable(
-            &car, target_location, time_remaining, gravity, boost_accel, true,
-        );
-        let candidate = AerialCandidate {
-            slice,
-            shot_target: goal,
-            target_location,
-            shot_direction,
-            double_jump: parsed.fast,
-            fast: parsed.fast,
-            estimated_boost: estimate.validation.boost_estimate as f32,
-            score,
-        };
-        if best.is_none_or(|current| candidate.score < current.score) {
-            best = Some(candidate);
+        let normal_aerial_available = parsed.found
+            && parsed.shot_type == Some(ShotType::Aerial)
+            && !parsed.fast;
+
+        if parsed.found && parsed.shot_type == Some(ShotType::Aerial) {
+            let (target_location, shot_direction) =
+                contact_geometry(car, slice, goal, gravity);
+            let ordinary_score = score_aerial_candidate(
+                car,
+                cars,
+                slice.location,
+                slice.velocity,
+                time_remaining,
+                targets,
+                gravity.z,
+                game_time < kickoff_contest_until,
+            );
+            // Python find_shot's urgent target-directed score is based on
+            // shot type, not fast-aerial subtype: every aerial gets +0.025.
+            let score =
+                aerial_candidate_rank(time_remaining, ordinary_score, urgent_save, parsed.fast);
+            let estimate = aerial_shot_is_viable(
+                &car, target_location, time_remaining, gravity, boost_accel, true,
+            );
+            let candidate = AerialCandidate {
+                slice,
+                shot_target: goal,
+                target_location,
+                shot_direction,
+                double_jump: parsed.fast,
+                fast: parsed.fast,
+                estimated_boost: estimate.validation.boost_estimate as f32,
+                score,
+            };
+            if best.is_none_or(|current| candidate.score < current.score) {
+                best = Some(candidate);
+            }
+        }
+
+        // Python also runs parse_slice_for_shot (without a goal target) on
+        // this same slice unless a normal targeted aerial was available.
+        // This catches otherwise-valid upfield clears and high-ball touches
+        // that the goal-angle parser rejects.
+        if !normal_aerial_available && (unlimited_boost || car.boost > 0.0) {
+            let untargeted = parse_untargeted_aerial_budget(
+                car,
+                slice,
+                time_remaining,
+                gravity,
+                boost_accel,
+                unlimited_boost,
+            );
+            if untargeted.found
+                && untargeted.shot_type == Some(ShotType::Aerial)
+                && (!untargeted.fast
+                    || (slice.location.z > 350.0 && live_ball_height > 350.0))
+            {
+                let (target_location, shot_direction) =
+                    contact_geometry(car, slice, goal, gravity);
+                let score = if urgent_save {
+                    // In Python's no-target save fallback, normal aerials
+                    // receive no type penalty and fast aerials receive +.005.
+                    time_remaining + if untargeted.fast { 0.005 } else { 0.0 }
+                } else {
+                    score_untargeted_aerial_candidate(
+                        car,
+                        cars,
+                        slice.location,
+                        slice.velocity,
+                        time_remaining,
+                        game_time < kickoff_contest_until,
+                        untargeted.fast,
+                    )
+                };
+                let estimate = aerial_shot_is_viable(
+                    &car, target_location, time_remaining, gravity, boost_accel, true,
+                );
+                let candidate = AerialCandidate {
+                    slice,
+                    shot_target: goal,
+                    target_location,
+                    shot_direction,
+                    double_jump: untargeted.fast,
+                    fast: untargeted.fast,
+                    estimated_boost: estimate.validation.boost_estimate as f32,
+                    score,
+                };
+                if best.is_none_or(|current| candidate.score < current.score) {
+                    best = Some(candidate);
+                }
+            }
         }
     }
     best
@@ -882,10 +957,10 @@ fn aerial_candidate_rank(
     time_remaining: f32,
     ordinary_score: f32,
     urgent_save: bool,
-    fast: bool,
+    _fast: bool,
 ) -> f32 {
     if urgent_save {
-        time_remaining + if fast { 0.005 } else { 0.025 }
+        time_remaining + 0.025
     } else {
         ordinary_score
     }
