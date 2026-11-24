@@ -72,11 +72,11 @@ mod tests {
     }
 
     #[test]
-    fn pitch_rotates_the_forward_axis_into_world_up() {
+    fn positive_rlbot_pitch_rotates_forward_toward_negative_world_z() {
         let matrix = Matrix3::new(std::f32::consts::FRAC_PI_2, 0.0, 0.0);
-        near(matrix.forward, Vector::new(0.0, 0.0, 1.0));
+        near(matrix.forward, Vector::new(0.0, 0.0, -1.0));
         near(matrix.right, Vector::new(0.0, 1.0, 0.0));
-        near(matrix.up, Vector::new(-1.0, 0.0, 0.0));
+        near(matrix.up, Vector::new(1.0, 0.0, 0.0));
     }
 
     #[test]
