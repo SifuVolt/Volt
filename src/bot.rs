@@ -4084,6 +4084,7 @@ impl BotBrain {
                 controller.yaw = dodge_direction.y;
                 controller.jump = true;
                 state.dodging = true;
+                state.dodge_started_at = Some(game_time);
                 state.counter = 4;
                 self.last_flip_time = game_time;
                 println!(
