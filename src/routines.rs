@@ -155,6 +155,23 @@ impl StrikeExecutor {
         self.candidate
     }
 
+    /// Hand off a reachable Noob Black wall contact directly into the jump
+    /// phase. The wall approach controller has already driven to the launch
+    /// point; this avoids sending the car back through a ground waypoint.
+    pub fn start_from_wall(
+        &mut self,
+        candidate: ShotCandidate,
+        now: f32,
+        jump_hold_duration: f32,
+    ) {
+        self.candidate = Some(candidate);
+        self.phase = StrikePhase::JumpHold;
+        self.phase_started = now;
+        self.jump_hold_duration = jump_hold_duration.clamp(0.06, 0.20);
+        self.jump_started = true;
+        self.last_tick = Some(now);
+    }
+
     pub fn reset(&mut self) {
         self.candidate = None;
         self.phase = StrikePhase::Approach;

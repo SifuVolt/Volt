@@ -13,6 +13,11 @@ The bot is split into small, explicit layers:
   support/transition roles. Emergency saves override ordinary role priority.
 - drive.rs combines Volt's existing defaultPD/defaultThrottle port with a
   speed-aware waypoint controller and an airborne recovery controller.
+- aerial.rs keeps the Party Cannon-style aerial candidate validator, live
+  prediction refresh, hitbox-aware contact correction, fast/normal aerial
+  sequencing, backboard handling, and boost-aware flight controller.
+- planning.rs and defense.rs retain Noob Black's wall-unfolding reachability
+  scan and Volt's landing-plane/recovery calculations.
 - routines.rs runs ground approaches, jump shots, double jumps, aerial
   alignment, directional dodge contact, and the timed speedflip kickoff.
 - shot_parser.rs, shot_physics.rs, and shot_planner.rs retain the
@@ -21,6 +26,8 @@ The bot is split into small, explicit layers:
 - prediction/ and state.rs convert RLBot packets and the collision-aware
   ball prediction into stable per-tick values.
 - teamplay.rs retains the volt_teamplay_v1 team-only message contract.
+  Wall routes are selected only when reachable and competitive with the
+  ordinary shot, and when no teammate has claimed a better concrete contact.
 
 ## Reference material
 

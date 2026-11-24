@@ -8,16 +8,18 @@
 use std::collections::HashMap;
 
 use crate::{
+    aerial::{find_aerial_candidate, AerialCandidate, AerialShot},
+    control::{default_drive, DriveInput},
     drive::{drive_to, recover_in_air, DriveRequest},
     math::Vector,
-    prediction::BallTrajectory,
-    routines::{KickoffExecutor, StrikeExecutor},
-    shot_parser::ShotTargets,
-    shot_physics::ShotType,
-    shot_planner::{
-        find_best_any_shot, find_best_shot, find_fast_intercept,
-        ShotCandidate,
+    planning::{
+        find_wall_drive, wall_approach_geometry, WallDriveMode, WallDrivePlan,
     },
+    prediction::{BallSlice, BallTrajectory},
+    routines::{KickoffExecutor, StrikeExecutor},
+    shot_parser::{ParsedShot, ShotTargets},
+    shot_physics::{get_jump_time, ShotType},
+    shot_planner::{find_best_any_shot, find_best_shot, find_fast_intercept, ShotCandidate},
     state::{AgentFrame, TeamplayMessage},
     strategy::{
         build_plan, choose_boost_pad, cover_target, kickoff_cheat_target,
@@ -88,6 +90,76 @@ fn teammate_has_priority_shot(
     })
 }
 
+fn aerial_message(
+    aerial: &AerialShot,
+    now: f32,
+    score: f32,
+    cover_owner: Option<usize>,
+) -> TeamplayMessage {
+    TeamplayMessage {
+        status: "SHOT_FOUND".to_owned(),
+        shot_type: "AERIAL".to_owned(),
+        score: (100.0 / (1.0 + score.max(0.0))).clamp(0.0, 100.0),
+        contact_time: (aerial.intercept_time - now).clamp(0.0, 10.0),
+        received_at: now,
+        cover_owner,
+        cover_released: false,
+        receive_x: None,
+        receive_y: None,
+        receive_dir_x: None,
+        receive_dir_y: None,
+        contact_x: Some(aerial.ball.x),
+        contact_y: Some(aerial.ball.y),
+    }
+}
+
+fn wall_message(
+    wall: WallDrivePlan,
+    now: f32,
+    cover_owner: Option<usize>,
+) -> TeamplayMessage {
+    TeamplayMessage {
+        status: "WALL_PASS".to_owned(),
+        shot_type: match wall.mode {
+            WallDriveMode::SingleJump => "JUMP",
+            WallDriveMode::DoubleJump => "DOUBLE_JUMP",
+            WallDriveMode::Aerial => "AERIAL",
+        }.to_owned(),
+        score: 78.0,
+        contact_time: wall.intercept_time.clamp(0.0, 10.0),
+        received_at: now,
+        cover_owner,
+        cover_released: true,
+        receive_x: None,
+        receive_y: None,
+        receive_dir_x: None,
+        receive_dir_y: None,
+        contact_x: Some(wall.ball_slice.location.x),
+        contact_y: Some(wall.ball_slice.location.y),
+    }
+}
+
+fn controller_from_drive(
+    output: crate::control::DriveOutput,
+    car: crate::state::CarState,
+) -> rlbot::flat::ControllerState {
+    let mut controller = rlbot::flat::ControllerState::default();
+    controller.steer = output.controls.steer;
+    controller.pitch = output.controls.pitch;
+    controller.yaw = output.controls.yaw;
+    controller.roll = output.controls.roll;
+    if let Some(throttle) = output.throttle {
+        controller.throttle = throttle;
+    }
+    if let Some(handbrake) = output.handbrake {
+        controller.handbrake = handbrake;
+    }
+    if let Some(boost) = output.boost {
+        controller.boost = boost && car.boost > 0.0;
+    }
+    controller
+}
+
 fn shot_message(
     status: &str,
     candidate: Option<ShotCandidate>,
@@ -129,6 +201,8 @@ fn shot_message(
 pub struct BotBrain {
     teammate_comms: HashMap<usize, TeamplayMessage>,
     strike: StrikeExecutor,
+    aerial: Option<AerialShot>,
+    aerial_score: f32,
     kickoff: KickoffExecutor,
     last_message: TeamplayMessage,
     kickoff_contest_until: f32,
@@ -146,6 +220,8 @@ impl BotBrain {
         Self {
             teammate_comms: HashMap::new(),
             strike: StrikeExecutor::new(),
+            aerial: None,
+            aerial_score: 0.0,
             kickoff: KickoffExecutor::default(),
             last_message: shot_message("NO_SHOT", None, 0.0, None, false),
             kickoff_contest_until: -999.0,
@@ -163,6 +239,147 @@ impl BotBrain {
         message
     }
 
+    fn run_wall_approach(
+        &mut self,
+        car: crate::state::CarState,
+        plan: WallDrivePlan,
+        targets: ShotTargets,
+        frame: &AgentFrame,
+        boost_accel: f32,
+    ) -> rlbot::flat::ControllerState {
+        let side = team_side(car.team);
+        let foe_goal = Vector::new(0.0, -side * 5120.0, 300.0);
+        let Some(geometry) = wall_approach_geometry(
+            &car,
+            plan.ball_slice,
+            car.team,
+            foe_goal,
+            plan.mode,
+            plan.intercept_time,
+        ) else {
+            return rlbot::flat::ControllerState::default();
+        };
+
+        let mut output = default_drive(
+            &car,
+            DriveInput {
+                target_speed: geometry.speed_required,
+                local_target: geometry.local_target,
+                upside_down: false,
+                up: geometry.surface_up.map(|up| car.local(up)),
+                handbrake: false,
+                boost_accel,
+            },
+        );
+        let yaw_error = if geometry.on_wall {
+            output.target_angles.yaw.abs()
+        } else {
+            geometry.local_angle
+        };
+        let needs_boost = car.boost > 0.0
+            && geometry.distance > 300.0
+            && geometry.speed_required > car.velocity.magnitude() + 100.0
+            && yaw_error < 0.85
+            && output.handbrake != Some(true);
+        output.boost = Some(needs_boost);
+        if needs_boost {
+            output.throttle = Some(1.0);
+        }
+
+        let controller = controller_from_drive(output, car);
+        let time_remaining = plan.intercept_time;
+        if geometry.on_wall && geometry.distance < 320.0 && time_remaining < 1.65 {
+            if plan.mode == WallDriveMode::Aerial {
+                let slice = BallSlice {
+                    time: time_remaining,
+                    ..plan.ball_slice
+                };
+                let shot_target = (targets.left + targets.right) * 0.5;
+                let (target_location, shot_direction) =
+                    crate::aerial::party_cannon_contact_geometry(
+                        car,
+                        slice,
+                        shot_target,
+                        frame.match_state.gravity,
+                    );
+                let candidate = AerialCandidate {
+                    slice,
+                    shot_target,
+                    target_location,
+                    shot_direction,
+                    double_jump: true,
+                    fast: true,
+                    estimated_boost: car.boost,
+                    score: time_remaining,
+                };
+                self.aerial_score = candidate.score;
+                self.aerial = Some(AerialShot::new(
+                    car,
+                    candidate,
+                    frame.match_state.time,
+                    frame.match_state.gravity,
+                    boost_accel,
+                ));
+                return controller;
+            }
+
+            let shot_type = if plan.mode == WallDriveMode::DoubleJump {
+                ShotType::DoubleJump
+            } else {
+                ShotType::Jump
+            };
+            let candidate = ShotCandidate {
+                time: time_remaining,
+                ball: geometry.ball,
+                ball_velocity: plan.ball_slice.velocity,
+                approach: geometry.approach,
+                shot_direction: geometry.shot_direction,
+                shot_type,
+                targeted: true,
+                can_jump: true,
+                fast: plan.mode == WallDriveMode::DoubleJump,
+                score: time_remaining,
+                parser: ParsedShot {
+                    found: true,
+                    fast: plan.mode == WallDriveMode::DoubleJump,
+                    shot_type: Some(shot_type),
+                    targets,
+                    ball_offset: geometry.ball,
+                    shot_vector: geometry.shot_direction,
+                    approach_target: geometry.approach,
+                    time: time_remaining,
+                },
+            };
+            let press_time = get_jump_time(
+                geometry.ball.z - car.location.z,
+                car.velocity.z,
+                frame.match_state.gravity.z,
+            ).press as f32;
+            self.strike.start_from_wall(candidate, frame.match_state.time, press_time);
+            return controller;
+        }
+
+        let mut controller = controller;
+        if !car.airborne
+            && time_remaining <= geometry.jump_time
+            && geometry.local_angle <= std::f32::consts::FRAC_PI_2
+        {
+            controller.jump = true;
+        }
+        if car.airborne {
+            let (_, pd) = crate::control::default_pd(
+                &car,
+                car.local(geometry.ball - car.location),
+                false,
+                Some(car.local(Vector::new(0.0, 0.0, 1.0))),
+            );
+            controller.pitch = pd.pitch;
+            controller.yaw = pd.yaw;
+            controller.roll = pd.roll;
+        }
+        controller
+    }
+
     pub fn tick(
         &mut self,
         frame: &AgentFrame,
@@ -177,6 +394,7 @@ impl BotBrain {
 
         if !frame.match_state.round_active || me.demolished {
             self.strike.reset();
+            self.aerial = None;
             return (
                 rlbot::flat::ControllerState::default(),
                 shot_message("NO_SHOT", None, now, None, false),
@@ -187,6 +405,7 @@ impl BotBrain {
             if !self.was_kickoff {
                 self.kickoff.reset();
                 self.strike.reset();
+                self.aerial = None;
                 self.kickoff_contest_until = now + 10.0;
             }
             self.was_kickoff = true;
@@ -215,6 +434,36 @@ impl BotBrain {
         } else if self.was_kickoff {
             self.was_kickoff = false;
             self.kickoff.reset();
+        }
+
+        if let Some(mut aerial) = self.aerial.take() {
+            let goal = (targets.left + targets.right) * 0.5;
+            aerial.refresh_prediction(
+                me,
+                prediction,
+                now,
+                goal,
+                frame.match_state.gravity,
+                ball.location.z,
+            );
+            let controller = aerial.run(
+                me,
+                now,
+                frame.match_state.gravity,
+                boost_accel,
+                0.0,
+            );
+            if !aerial.finished {
+                let message = aerial_message(
+                    &aerial,
+                    now,
+                    self.aerial_score,
+                    None,
+                );
+                self.aerial = Some(aerial);
+                self.last_message = message.clone();
+                return (controller, message);
+            }
         }
 
         let plan = build_plan(frame, prediction);
@@ -273,11 +522,121 @@ impl BotBrain {
             );
         }
 
+        // Aerial validation remains a separate boost-budgeted scan, as in
+        // Python Volt. The committed AerialShot then owns its live prediction
+        // refresh, jump/second-jump timing, pitchback and boost controller.
+        candidate = candidate.filter(|shot| shot.shot_type != ShotType::Aerial);
+
         let teammate_claimed = !urgent
             && challenger
             && teammate_has_priority_shot(&self.teammate_comms, now, candidate);
         if teammate_claimed {
             candidate = None;
+        }
+
+        // Noob Black wall-route reachability is evaluated independently
+        // from ordinary ground contacts. It is only selected when it is
+        // competitive with the ordinary intercept and a teammate has not
+        // already claimed a better concrete shot.
+        if challenger && !urgent && !teammate_claimed && !self.strike.active() && self.aerial.is_none() {
+            let side = team_side(me.team);
+            let foe_goal = Vector::new(0.0, -side * 5120.0, 300.0);
+            if let Some(wall) = find_wall_drive(&me, &prediction.slices, me.team, foe_goal, 5.0) {
+                let competitive = candidate.is_none_or(|shot| wall.intercept_time <= shot.time + 0.18);
+                if competitive && (0.12..=5.2).contains(&wall.intercept_time) {
+                    let controller = self.run_wall_approach(
+                        me,
+                        wall,
+                        targets,
+                        frame,
+                        boost_accel,
+                    );
+                    let message = wall_message(wall, now, plan.cover_owner);
+                    self.last_message = message.clone();
+                    return (controller, message);
+                }
+            }
+        }
+
+        // Prefer a viable source-validated aerial when its score beats the
+        // current ground/jump candidate. The ceiling/height limits mirror
+        // Volt's solo-match restriction and ceiling launch safety.
+        if challenger && !urgent && !teammate_claimed && !self.strike.active() && self.aerial.is_none() {
+            let friendly_count = frame.cars.iter()
+                .filter(|car| car.team == me.team && !car.demolished)
+                .count();
+            let enemy_count = frame.cars.iter()
+                .filter(|car| car.team != me.team && !car.demolished)
+                .count();
+            let max_height = if friendly_count == 1 && enemy_count == 1 {
+                1200.0
+            } else {
+                f32::INFINITY
+            };
+            let min_height = if max_height > 1200.0
+                && me.location.z >= 2044.0 - me.hitbox.height * 1.1
+            {
+                551.0
+            } else if unlimited_boost || me.airborne {
+                150.0
+            } else {
+                450.0
+            };
+            let goal = (targets.left + targets.right) * 0.5;
+            let aerial_candidate = find_aerial_candidate(
+                me,
+                prediction,
+                goal,
+                targets,
+                &frame.cars,
+                frame.match_state.gravity,
+                boost_accel,
+                now,
+                self.kickoff_contest_until,
+                min_height,
+                max_height,
+                horizon.min(6.0),
+                unlimited_boost,
+            ).filter(|aerial| {
+                candidate.is_none_or(|shot| aerial.score < shot.score)
+            });
+
+            if let Some(aerial_candidate) = aerial_candidate {
+                let mut aerial = AerialShot::new(
+                    me,
+                    aerial_candidate,
+                    now,
+                    frame.match_state.gravity,
+                    boost_accel,
+                );
+                aerial.refresh_prediction(
+                    me,
+                    prediction,
+                    now,
+                    goal,
+                    frame.match_state.gravity,
+                    ball.location.z,
+                );
+                let controller = aerial.run(
+                    me,
+                    now,
+                    frame.match_state.gravity,
+                    boost_accel,
+                    0.0,
+                );
+                self.aerial_score = aerial_candidate.score;
+                if !aerial.finished {
+                    let message = aerial_message(
+                        &aerial,
+                        now,
+                        self.aerial_score,
+                        plan.cover_owner,
+                    );
+                    self.aerial = Some(aerial);
+                    self.last_message = message.clone();
+                    return (controller, message);
+                }
+            }
         }
 
         if let Some(shot) = candidate {
@@ -302,9 +661,9 @@ impl BotBrain {
             return (controller, message);
         }
 
-        // Keep a committed airborne strike alive if the ground-only planner
-        // cannot issue a fresh candidate this frame.
-        if self.strike.active() && me.airborne {
+        // Keep a committed strike alive after launch. This also covers a
+        // wall jump while the car is still physically attached to the wall.
+        if self.strike.active() {
             let controller = self.strike.tick(
                 me,
                 ball,
