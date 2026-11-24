@@ -1,7 +1,10 @@
+pub mod aerial;
 pub mod brain;
+pub mod defense;
 pub mod drive;
 pub mod mechanics;
 pub mod physics;
+pub mod planning;
 pub mod prediction;
 pub mod routines;
 pub mod shot_physics;
