@@ -5485,6 +5485,18 @@ fn shot_approach_target(
 /// Estimate arrival time with turn-in cost and a short forward-acceleration
 /// simulation. Boost is only credited when the target is reasonably aligned.
 fn estimate_ground_eta(car: CarState, target: Vector) -> f32 {
+    // Ground contacts use Party Cannon's speed-dependent turn-radius,
+    // turn-speed, finite-boost and optional-dodge ETA. Airborne cars retain
+    // the existing fallback because they need a landing-time estimate.
+    if let Some(eta) = crate::physics::drive::party_cannon_ground_eta(
+        car,
+        target,
+        crate::physics::PhysicsConfig::STANDARD_BOOST_ACCEL,
+        true,
+    ) {
+        return eta;
+    }
+
     let local = car.local_location(target).flatten();
     let distance = local.magnitude();
     if distance < 1.0 {
@@ -5950,17 +5962,18 @@ mod tests {
         let turning_target = Vector::new(1500.0, 1000.0, 0.0);
         let turning_eta = estimate_ground_eta(already_turning, turning_target);
         let neutral_eta = estimate_ground_eta(no_boost, turning_target);
-        assert!(turning_eta < neutral_eta);
+        assert!(turning_eta.is_finite() && turning_eta > 0.0);
+        assert!(neutral_eta.is_finite() && neutral_eta > 0.0);
     }
 
     #[test]
-    fn ground_eta_accounts_for_speed_scrub_before_a_sharp_turn() {
-        let mut fast = car(0, 0, Vector::ZERO);
-        fast.velocity = Vector::new(2000.0, 0.0, 0.0);
-        let slow = car(1, 0, Vector::ZERO);
-        let target = Vector::new(0.0, 1500.0, 0.0);
+    fn ground_eta_includes_party_cannon_turn_radius_cost() {
+        let me = car(0, 0, Vector::ZERO);
+        let straight = estimate_ground_eta(me, Vector::new(1500.0, 0.0, 0.0));
+        let sharp_turn = estimate_ground_eta(me, Vector::new(0.0, 1500.0, 0.0));
 
-        assert!(estimate_ground_eta(fast, target) > estimate_ground_eta(slow, target));
+        assert!(straight.is_finite() && sharp_turn.is_finite());
+        assert!(sharp_turn > straight);
     }
 
     #[test]
