@@ -2976,18 +2976,30 @@ impl BotBrain {
             let t = shot.time;
             // Python ground_shot caches its goal aim from the live ball.
             // Keep that height/aim choice separate from the predicted contact.
-            let goal_aim = cached_ground_goal_aim_point(
-                &mut self.ground_shot_goal_aim_point, car, ball.location, shot.targets,
-            );
+            let parser_has_targets =
+                (shot.targets.left - shot.targets.right).magnitude() > 1.0;
+            let goal_aim = if parser_has_targets {
+                cached_ground_goal_aim_point(
+                    &mut self.ground_shot_goal_aim_point, car, ball.location, shot.targets,
+                )
+            } else {
+                foe_goal(team_side(car.team))
+            };
             let shot_vector = shot.side_shot.map_or_else(
-                || (goal_aim - shot.ball).flatten().normalize(),
+                || {
+                    if parser_has_targets {
+                        (goal_aim - shot.ball).flatten().normalize()
+                    } else {
+                        shot.shot_direction.flatten().normalize()
+                    }
+                },
                 |side| side.shot_direction.flatten().normalize(),
             );
             shot.shot_direction = shot_vector;
 
             // Refresh the same hitbox-aware contact geometry used when the
-            // candidate was selected. Preserve its face unless a neighbouring
-            // face is materially better for the new predicted ball position.
+            // candidate was selected. Untargeted touches stay centred on the
+            // opponent-goal ray; targeted shots preserve their best face.
             let (contact_point, offset_target, contact_face, contact_quality) =
                 if let Some(side) = shot.side_shot {
                     let lateral = Vector::new(-shot_vector.y, shot_vector.x, 0.0).normalize();
@@ -2997,7 +3009,7 @@ impl BotBrain {
                         if side.side_sign < 0.0 { "left" } else { "right" },
                         shot.contact_quality,
                     )
-                } else {
+                } else if parser_has_targets {
                     select_ball_contact(
                         car,
                         shot.ball,
@@ -3005,6 +3017,19 @@ impl BotBrain {
                         shot.targets,
                         t,
                         Some(shot.contact_face),
+                    )
+                } else {
+                    (
+                        shot.ball - shot_vector * BALL_RADIUS,
+                        crate::contact::hitbox_center_target(
+                            car,
+                            shot.ball,
+                            shot_vector,
+                            BALL_RADIUS + car.hitbox.length * 0.5,
+                            0.0,
+                        ),
+                        "centre",
+                        1.0,
                     )
                 };
             shot.contact_point = contact_point;
