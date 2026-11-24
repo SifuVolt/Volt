@@ -1238,6 +1238,8 @@ impl BotBrain {
             roles.map(|role| role.challenger == me.index).unwrap_or(false)
         };
         let is_goalie = roles.map(|r| r.goalie == me.index).unwrap_or(false);
+        let can_take_untargeted_fallback =
+            allows_untargeted_fallback(living_teammates.len(), is_challenger);
         self.teamplay_cover_owner = roles.and_then(|r| {
             if r.goalie != r.challenger { Some(r.goalie) } else { None }
         });
@@ -1383,7 +1385,7 @@ impl BotBrain {
             };
         }
 
-        if is_goalie && !is_challenger && living_teammates.len() >= 3 {
+        if is_goalie && !can_take_untargeted_fallback {
             return Plan {
                 decision: Decision::Goalkeeper,
                 target: Vector::new(0.0, side * 5270.0, 0.0),
@@ -1520,7 +1522,7 @@ impl BotBrain {
         // the elected challenger does not meet should_prioritize_ball().
         // Until the dedicated grid_defense controller is executed, preserve
         // its non-goalie lane target here rather than issuing a ball challenge.
-        if !is_challenger && living_teammates.len() != 2 {
+        if !can_take_untargeted_fallback {
             return Plan {
                 decision: Decision::Transition,
                 target: Vector::new(
@@ -1534,7 +1536,7 @@ impl BotBrain {
             };
         }
 
-        if is_challenger || living_teammates.len() == 2 {
+        if can_take_untargeted_fallback {
             let aim = shot_aim_point(ball.location, side, me.airborne);
             let fast_intercept_zone = transition_followup_active || (ball_depth > 0.0 && ball_depth <= 1280.0);
             let fast_intercept_searched = fast_intercept_zone && is_challenger;
@@ -4091,6 +4093,12 @@ fn assign_roles_volt(
     })
 }
 
+/// Python run_logic allows untargeted fallback touches for 1v1/2v2,
+/// and for the elected challenger in 3v3.
+fn allows_untargeted_fallback(team_size: usize, is_challenger: bool) -> bool {
+    team_size < 3 || is_challenger
+}
+
 /// Direct port of Volt's should_prioritize_ball() mode-specific challenge
 /// gate. The active-shot exception and post-kickoff contest window are
 /// preserved so a committed mechanic is not abandoned by a later ETA check.
@@ -6231,6 +6239,14 @@ mod tests {
         assert!(dodge.jump);
         assert!((dodge.pitch + 0.8).abs() < 1e-6);
         assert!((dodge.yaw - 0.6).abs() < 1e-6);
+    }
+
+    #[test]
+    fn untargeted_fallback_matches_python_team_size_gate() {
+        assert!(allows_untargeted_fallback(1, false));
+        assert!(allows_untargeted_fallback(2, false));
+        assert!(allows_untargeted_fallback(3, true));
+        assert!(!allows_untargeted_fallback(3, false));
     }
 
     #[test]
