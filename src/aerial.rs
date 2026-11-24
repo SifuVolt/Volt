@@ -742,6 +742,7 @@ pub fn find_aerial_candidate(
     min_height: f32,
     max_height: f32,
     horizon: f32,
+    urgent_save: bool,
     unlimited_boost: bool,
 ) -> Option<AerialCandidate> {
     if prediction.slices.is_empty() || (!unlimited_boost && car.boost <= 0.0) {
@@ -841,7 +842,7 @@ pub fn find_aerial_candidate(
         }
 
         let (target_location, shot_direction) = contact_geometry(car, slice, goal, gravity);
-        let score = score_aerial_candidate(
+        let ordinary_score = score_aerial_candidate(
             car,
             cars,
             slice.location,
@@ -851,6 +852,10 @@ pub fn find_aerial_candidate(
             gravity.z,
             game_time < kickoff_contest_until,
         );
+        // Python find_shot save_mode ranks a parser-validated aerial by
+        // contact time plus the aerial complexity penalty; it does not trade
+        // an earlier save for a higher-quality attacking angle.
+        let score = aerial_candidate_rank(time_remaining, ordinary_score, urgent_save);
         let estimate = aerial_shot_is_viable(
             &car, target_location, time_remaining, gravity, boost_accel, true,
         );
@@ -869,6 +874,14 @@ pub fn find_aerial_candidate(
         }
     }
     best
+}
+
+fn aerial_candidate_rank(time_remaining: f32, ordinary_score: f32, urgent_save: bool) -> f32 {
+    if urgent_save {
+        time_remaining + 0.025
+    } else {
+        ordinary_score
+    }
 }
 
 /// Exact Party Cannon WallShot.adjust_jump correction used by jump_shot.
@@ -938,6 +951,16 @@ mod tests {
             boost,
             hitbox: Hitbox { length: 118.0, width: 84.0, height: 36.0, offset: Vector::ZERO },
         }
+    }
+
+    #[test]
+    fn urgent_aerial_selection_uses_contact_time_not_attacking_angle_score() {
+        let earlier = aerial_candidate_rank(0.72, 1.8, true);
+        let later = aerial_candidate_rank(1.05, 0.2, true);
+        assert!(earlier < later);
+
+        let ordinary = aerial_candidate_rank(0.72, 1.8, false);
+        assert_eq!(ordinary, 1.8);
     }
 
     #[test]
