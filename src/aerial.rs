@@ -963,9 +963,9 @@ mod tests {
     #[test]
     fn urgent_aerial_selection_uses_contact_time_not_attacking_angle_score() {
         let earlier_normal = aerial_candidate_rank(0.72, 1.8, true, false);
-        let later_fast = aerial_candidate_rank(0.74, 0.2, true, true);
+        let later_fast = aerial_candidate_rank(0.73, 0.2, true, true);
         assert!(later_fast < earlier_normal);
-        assert!((later_fast - 0.745).abs() < 0.0001);
+        assert!((later_fast - 0.735).abs() < 0.0001);
 
         let ordinary = aerial_candidate_rank(0.72, 1.8, false, false);
         assert_eq!(ordinary, 1.8);
