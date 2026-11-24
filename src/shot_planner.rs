@@ -115,19 +115,34 @@ pub fn opponent_reaches_before(
 
 fn useful(
     _me: CarState,
-    _foes: &[CarState],
-    _friends: &[CarState],
-    _ball: Vector,
+    foes: &[CarState],
+    friends: &[CarState],
+    ball: Vector,
     time_remaining: f32,
-    _kind: ShotType,
-    _kickoff: bool,
-    _challenger: bool,
+    kind: ShotType,
+    kickoff: bool,
+    challenger: bool,
 ) -> bool {
-    // This finder is called only for the active attacker. An opponent's
-    // estimated arrival must not make the attacker abandon a valid shot:
-    // challenge and contact execution decide the outcome, not a proximity
-    // veto. Keep opponent ETA available for defensive/goalie decisions only.
-    time_remaining > 0.0
+    // Exact Python useful_non_aerial_shot gate. Aerials, kickoff contests,
+    // and the elected attacker in a team match bypass opponent ETA rejection.
+    // In 1v1 there is no teammate role, so retain the opponent-arrival filter.
+    if time_remaining <= 0.0 {
+        return false;
+    }
+    if kind == ShotType::Aerial
+        || foes.is_empty()
+        || kickoff
+        || (!friends.is_empty() && challenger)
+    {
+        return true;
+    }
+    let Some(closest) = foes.iter().min_by(|a, b| {
+        a.location.flat_distance(ball).total_cmp(&b.location.flat_distance(ball))
+    }) else {
+        return true;
+    };
+    let margin = if kind == ShotType::Jump { 0.5 } else { 0.35 };
+    foe_eta(*closest, ball) + margin >= time_remaining
 }
 fn score(me:CarState,friends:&[CarState],ball:Vector,vel:Vector,kind:ShotType,t:f32,targets:ShotTargets,g:f32)->f32 {
     if unrealistic(ball,targets,me.team) {return f32::INFINITY;}
