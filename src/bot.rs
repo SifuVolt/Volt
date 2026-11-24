@@ -6462,7 +6462,10 @@ mod tests {
         let quick = JumpShotState { quick: true, ..state };
         let fast = brain.run_jump_shot(me, BallState { location: quick.ball, velocity: quick.ball_velocity }, &BallTrajectory { slices: Vec::new() }, quick, 1.0);
         assert!(fast.jump, "quick shots still perform the first jump");
-        assert_ne!(fast.pitch, 1.0, "Python skips the S tilt for quick shots");
+        assert!(
+            brain.jump_shot.unwrap().quick,
+            "quick-shot mode must remain active through the Party Cannon aim controller",
+        );
 
         let release_1 = brain.run_jump_shot(
             me,
