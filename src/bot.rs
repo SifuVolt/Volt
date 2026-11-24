@@ -14,7 +14,7 @@ use crate::{
     planning::{find_wall_drive, wall_approach_geometry, WallDriveMode, WallDrivePlan},
     shot_physics::{double_jump_shot_is_viable, get_jump_time, ground_shot_is_viable, jump_shot_is_viable, ShotType},
     shot_parser::{runtime_ground_reachability, ShotTargets},
-    shot_planner::{find_best_any_shot, find_best_pass_shot, find_best_shot, find_fast_intercept, find_fast_intercept_candidate, grid_jump_time, opponent_reaches_before, pass_shot_targets, ShotCandidate},
+    shot_planner::{find_best_any_shot, find_best_pass_shot, find_best_shot, find_fast_intercept, find_fast_intercept_candidate, grid_jump_time, pass_shot_targets, ShotCandidate},
     state::{BallState, BoostPadState, CarState, MatchState},
 };
 use std::collections::HashMap;
@@ -2064,34 +2064,6 @@ impl BotBrain {
                 self.set_teamplay_shot(me, ball, candidate, opponent_goal, roles, urgent_save);
             } else if !committed_shot_active {
                 self.yield_teamplay_opportunity();
-            }
-        }
-        if candidate.is_none() && !urgent_save && self.ground_flip.is_none()
-            && self.defense_flip.is_none() && self.defense_recovery_target.is_none()
-        {
-            let kickoff = game_time < self.kickoff_contest_until;
-            let rejected_jump = self.jump_shot.is_some_and(|shot| {
-                opponent_reaches_before(
-                    &opponents, shot.ball, shot.intercept_time - game_time,
-                    ShotType::Jump, kickoff,
-                )
-            });
-            let rejected_double = self.double_jump_shot.is_some_and(|shot| {
-                opponent_reaches_before(
-                    &opponents, shot.ball, shot.intercept_time - game_time,
-                    ShotType::DoubleJump, kickoff,
-                )
-            });
-            if rejected_jump || rejected_double {
-                self.jump_shot = None;
-                self.double_jump_shot = None;
-                return Plan {
-                    decision: if is_goalie { Decision::Goalkeeper } else { Decision::Transition },
-                    target: Vector::new(0.0, side * 5050.0, 0.0),
-                    target_speed: 1500.0,
-                    shot: None,
-                    jump: None,
-                };
             }
         }
         let selected_score = candidate.map(|shot| shot.score);
