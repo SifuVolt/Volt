@@ -6117,7 +6117,7 @@ mod tests {
     #[test]
     fn quick_jump_shot_releases_early_and_dodges_before_the_intercept() {
         let mut brain = BotBrain::new();
-        let mut me = car(0, 0, Vector::new(250.0, -65.0, 0.0));
+        let mut me = car(0, 0, Vector::new(250.0, -65.0, 100.0));
         me.airborne = true;
         me.air_state = AirState::InAir;
         let state = JumpShotState {
@@ -6195,7 +6195,7 @@ mod tests {
             shot_direction: Vector::new(1.0, 0.0, 0.0),
             contact_face: "centre",
             contact_face_label: None,
-            goal_aim_point: Some(Vector::new(5120.0, 512.0, 300.0)),
+            goal_aim_point: Some(Vector::new(5120.0, 2000.0, 300.0)),
             needed_jump_time: 0.2,
             jumping: true,
             dodging: false,
