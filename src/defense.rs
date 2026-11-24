@@ -481,18 +481,19 @@ mod tests {
         let mut car_state = car(0, Vector::new(3500.0, -3000.0, 17.0));
         car_state.boost = 20.0;
         let goal = Vector::new(0.0, 5120.0, 300.0);
-        let arrival = car_state.location.distance(Vector::new(3500.0, 4000.0, 0.0)) / 2300.0;
+        let respawning_location = Vector::new(3500.0, -4100.0, 70.0);
+        let arrival = car_state.location.distance(respawning_location) / 2300.0;
         let pads = [
             BoostPadState {
                 index: 0,
-                location: Vector::new(3500.0, 4000.0, 0.0),
+                location: respawning_location,
                 large: true,
                 active: false,
                 timer: (arrival - 0.1).max(0.0),
             },
             BoostPadState {
                 index: 1,
-                location: Vector::new(3600.0, 4100.0, 0.0),
+                location: Vector::new(3600.0, -4050.0, 70.0),
                 large: true,
                 active: false,
                 timer: arrival + 1.0,
