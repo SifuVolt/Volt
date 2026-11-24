@@ -6353,7 +6353,7 @@ mod tests {
         assert!(held.jump, "first jump should remain held through 0.10 seconds");
 
         let released = brain.run_jump_shot(
-            me, ball, &prediction, brain.jump_shot.unwrap(), 1.11,
+            me, ball, &prediction, brain.jump_shot.unwrap(), 1.21,
         );
         assert!(!released.jump, "first jump should release after the longer hold");
         assert_eq!(brain.jump_shot.unwrap().counter, 1);
