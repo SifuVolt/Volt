@@ -6322,12 +6322,30 @@ mod tests {
                     targets: ShotTargets { left: Vector::ZERO, right: Vector::ZERO },
         };
 
-        let controller = brain.run_jump_shot(me, BallState { location: state.ball, velocity: state.ball_velocity }, &BallTrajectory { slices: Vec::new() }, state, 1.10);
+        let waiting = brain.run_jump_shot(
+            me,
+            BallState { location: state.ball, velocity: state.ball_velocity },
+            &BallTrajectory { slices: Vec::new() },
+            state,
+            1.10,
+        );
+        assert!(!waiting.jump, "Party Cannon holds the dodge until the final 0.05s");
+        assert!(brain.jump_shot.unwrap().dodge_started_at.is_none());
+
+        let controller = brain.run_jump_shot(
+            me,
+            BallState { location: state.ball, velocity: state.ball_velocity },
+            &BallTrajectory { slices: Vec::new() },
+            brain.jump_shot.unwrap(),
+            1.16,
+        );
         assert!(controller.jump);
         let committed = brain.jump_shot.unwrap();
         assert!(committed.dodge_started_at.is_some());
-        assert!((controller.pitch + committed.dodge_direction.x).abs() < 1e-6);
-        assert!((controller.yaw - committed.dodge_direction.y).abs() < 1e-6);
+        let (expected_yaw, expected_pitch) =
+            party_cannon_dodge_inputs(me, committed.shot_direction.flatten().normalize());
+        assert!((controller.pitch - expected_pitch).abs() < 1e-6);
+        assert!((controller.yaw - expected_yaw).abs() < 1e-6);
     }
 
     #[test]
@@ -6410,7 +6428,7 @@ mod tests {
         me.air_state = AirState::InAir;
         let state = JumpShotState {
             started_at: 1.0,
-            intercept_time: 1.5,
+            intercept_time: 1.29,
             ball: Vector::new(300.0, 0.0, 200.0),
             ball_velocity: Vector::ZERO,
             approach: Vector::new(200.0, 0.0, 0.0),
@@ -6481,7 +6499,7 @@ mod tests {
             BallState { location: state.ball, velocity: state.ball_velocity },
             &BallTrajectory { slices: Vec::new() },
             brain.jump_shot.unwrap(),
-            1.24,
+            1.245,
         );
         assert!(dodge.jump, "the forward dodge is a fresh second jump press");
         assert_eq!(brain.jump_shot.unwrap().counter, 4, "the sequence must enter the dodge phase");
