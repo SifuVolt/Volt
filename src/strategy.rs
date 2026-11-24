@@ -172,11 +172,11 @@ pub fn build_plan(frame: &AgentFrame, prediction: &BallTrajectory) -> TacticalPl
 pub fn cover_target(frame: &AgentFrame) -> Vector {
     let side = team_side(frame.me.team);
     let own_goal_y = side * 5120.0;
-    let own_depth = (frame.ball.location.y * side).clamp(0.0, 4200.0);
+    let own_depth: f32 = (frame.ball.location.y * side).clamp(0.0, 4200.0);
     // As the ball approaches our goal, the cover car retreats with it.
     // Keep the target between the ball and goal instead of stepping out
     // toward midfield when the threat is already deep in the box.
-    let outward = (1100.0 - own_depth * 0.20).clamp(250.0, 1100.0);
+    let outward: f32 = (1100.0_f32 - own_depth * 0.20).clamp(250.0, 1100.0);
     let ball_x = frame.ball.location.x * 0.62
         + frame.ball.velocity.x.clamp(-500.0, 500.0) * 0.22;
     Vector::new(
@@ -211,9 +211,9 @@ pub fn support_target(frame: &AgentFrame, previous_target: Option<Vector>) -> Ve
             (a.location.y * side_value).total_cmp(&(b.location.y * side_value))
         });
 
-    let (mut target_x, mut target_y) = if let Some(lead) = lead {
+    let (mut target_x, mut target_y): (f32, f32) = if let Some(lead) = lead {
         // Python uses a 900-unit gap in 2v2 and 1150 in 3v3.
-        let support_gap = if friend_count <= 1 { 900.0 } else { 1150.0 };
+        let support_gap: f32 = if friend_count <= 1 { 900.0 } else { 1150.0 };
         let lead_x = lead.location.x;
         let lead_y = lead.location.y * side_value;
         let target_x = lead_x * 0.58 + ball_x * 0.42;
