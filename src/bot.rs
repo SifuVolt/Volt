@@ -3479,7 +3479,8 @@ impl BotBrain {
         // then apply the jump-specific wall correction before constructing
         // the centre hitbox contact. A pure goal-centre vector can put the
         // approach point behind the car even when the predicted shot is valid.
-        let mut shot_direction = party_cannon_shot_direction(
+        let goal_shot_direction = (goal_aim - state.ball).flatten().normalize();
+        let predicted_shot_direction = party_cannon_shot_direction(
             car,
             state.ball,
             state.ball_velocity,
@@ -3487,6 +3488,13 @@ impl BotBrain {
             goal_aim,
             self.match_state.gravity,
         ).normalize();
+        let mut shot_direction = if goal_shot_direction.magnitude() > 0.001
+            && predicted_shot_direction.magnitude() > 0.001
+        {
+            (goal_shot_direction * 0.65 + predicted_shot_direction * 0.35).normalize()
+        } else {
+            goal_shot_direction
+        };
         shot_direction = wall_shot_adjust_jump(state.ball, shot_direction).0.normalize();
         state.shot_direction = shot_direction;
 
