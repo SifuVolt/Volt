@@ -1036,14 +1036,62 @@ mod tests {
     }
 
     #[test]
-    fn urgent_aerial_selection_uses_contact_time_not_attacking_angle_score() {
+    fn urgent_targeted_aerials_share_python_shot_type_penalty() {
         let earlier_normal = aerial_candidate_rank(0.72, 1.8, true, false);
         let later_fast = aerial_candidate_rank(0.73, 0.2, true, true);
-        assert!(later_fast < earlier_normal);
-        assert!((later_fast - 0.735).abs() < 0.0001);
+        assert!((earlier_normal - 0.745).abs() < 0.0001);
+        assert!((later_fast - 0.755).abs() < 0.0001);
+        assert!(earlier_normal < later_fast);
+
+        let normal = aerial_candidate_rank(0.72, 1.8, true, false);
+        let fast = aerial_candidate_rank(0.72, 0.2, true, true);
+        assert_eq!(normal, fast);
 
         let ordinary = aerial_candidate_rank(0.72, 1.8, false, false);
         assert_eq!(ordinary, 1.8);
+    }
+
+    #[test]
+    fn untargeted_aerial_fallback_catches_ball_rejected_by_goal_angle_parser() {
+        let me = car(Vector::ZERO, 100.0);
+        let slice = BallSlice {
+            time: 1.8,
+            location: Vector::new(0.0, 0.0, 900.0),
+            velocity: Vector::ZERO,
+        };
+        let targets = ShotTargets {
+            left: Vector::new(-893.0, 5120.0, 300.0),
+            right: Vector::new(893.0, 5120.0, 300.0),
+        };
+        let gravity = Vector::new(0.0, 0.0, -650.0);
+        let targeted = parse_slice_for_shot_with_target(
+            &me, slice.location, slice.velocity, slice.time - 1.0 / 120.0,
+            92.75, 991.6667, gravity, targets,
+            false, false, false, true, true, false,
+        );
+        assert!(!targeted.found);
+
+        let prediction = BallTrajectory { slices: vec![slice] };
+        let candidate = find_aerial_candidate(
+            me,
+            &prediction,
+            Vector::new(0.0, 5120.0, 300.0),
+            targets,
+            &[],
+            gravity,
+            991.6667,
+            0.0,
+            -999.0,
+            450.0,
+            f32::INFINITY,
+            6.0,
+            false,
+            false,
+        ).expect("untargeted parser should preserve the reachable aerial");
+
+        assert_eq!(candidate.slice, slice);
+        assert!(candidate.score.is_finite());
+        assert!(candidate.estimated_boost >= 0.0);
     }
 
     #[test]
