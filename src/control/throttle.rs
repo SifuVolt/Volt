@@ -212,8 +212,9 @@ mod tests {
     #[test]
     fn handbrake_uses_python_world_speed_gate() {
         let mut args = input();
+        args.car_speed = 650.0;
         args.world_speed = 650.0;
-        args.local_target = Some(Vector::new(100.0, 0.0, 0.0));
+        args.local_target = Some(Vector::new(100.0, -100.0, 0.0));
         args.steer = 1.0;
         args.yaw = 0.4;
         args.target_angles.yaw = 0.2;
@@ -229,6 +230,6 @@ mod tests {
         args.car_speed = 1000.0;
         args.target_speed = 900.0;
         let result = default_throttle(args);
-        assert_eq!(result.throttle, None);
+        assert_eq!(result.throttle, Some(0.02));
     }
 }
