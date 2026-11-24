@@ -6,6 +6,7 @@
 //! before choosing the car's target point.
 
 use crate::{
+    contact::hitbox_center_target,
     control::{default_drive, default_pd, DriveInput},
     defense::GridDefense,
     math::Vector,
@@ -650,12 +651,11 @@ fn contact_geometry(
     shot_direction = wall_shot_adjust_aerial(
         slice.location, shot_direction, approach_distance,
     ).0;
-    let hitbox_offset = car.forward() * car.hitbox.offset.x
-        + car.right() * car.hitbox.offset.y
-        + car.up() * car.hitbox.offset.z;
-    let mut target_location = slice.location - shot_direction * approach_distance - hitbox_offset;
-    // Aim the nose at the lower-middle of the ball, halfway from centre to bottom.
-    target_location.z -= AERIAL_CONTACT_DROP;
+    // Shared hitbox-aware target used by ground, jump and aerial routines.
+    // Aerials aim at the lower-middle of the ball, halfway from centre to bottom.
+    let target_location = hitbox_center_target(
+        car, slice.location, shot_direction, approach_distance, AERIAL_CONTACT_DROP,
+    );
     (target_location, shot_direction)
 }
 
