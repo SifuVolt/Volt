@@ -98,7 +98,10 @@ pub fn encode(_index: usize, _team: u32, message: &TeamplayMessage) -> Option<Ve
     }
     let status = if allowed_status(&message.status) { &message.status } else { "NO_SHOT" };
     let shot_type = if matches!(status, "SHOT_FOUND" | "ANY_SHOT_FOUND" | "WALL_PASS") {
-        status
+        match message.shot_type.as_str() {
+            "GROUND" | "JUMP" | "DOUBLE_JUMP" | "AERIAL" => message.shot_type.as_str(),
+            _ => status,
+        }
     } else { "NO_SHOT" };
     let cover_owner = message.cover_owner.map(|v| v.to_string())
         .unwrap_or_else(|| "null".to_owned());
@@ -119,7 +122,7 @@ mod tests {
 
     fn message() -> TeamplayMessage {
         TeamplayMessage {
-            status: "SHOT_FOUND".into(), shot_type: "SHOT_FOUND".into(),
+            status: "SHOT_FOUND".into(), shot_type: "GROUND".into(),
             score: 82.5, contact_time: 1.25, received_at: 3.0,
             cover_owner: Some(2), cover_released: true,
             receive_x: Some(120.0), receive_y: Some(800.0),
@@ -134,6 +137,7 @@ mod tests {
         let (sender, decoded) = decode(1, 0, 0, 2, &encoded, 4.0).unwrap();
         assert_eq!(sender, 1);
         assert_eq!(decoded.status, "SHOT_FOUND");
+        assert_eq!(decoded.shot_type, "GROUND");
         assert_eq!(decoded.cover_owner, Some(2));
         assert_eq!(decoded.receive_x, Some(120.0));
         assert_eq!(decoded.received_at, 4.0);
