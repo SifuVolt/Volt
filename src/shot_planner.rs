@@ -33,20 +33,19 @@ fn cap(v:f32,a:f32,b:f32)->f32 { v.max(a).min(b) }
 fn team_side(team:u32)->f32 { if team==0 {-1.0} else {1.0} }
 fn center(t:ShotTargets)->Vector { (t.left+t.right)*0.5 }
 
-// A valid contact is the primary selection criterion: choose the earliest
-// reachable intercept, using shot quality only to break same-time ties.
-// This deliberately prevents a much later, prettier setup from replacing
-// an earlier ground/jump contact that the parser has already validated.
+// Python tools.find_shot scores the complete sampled prediction horizon.
+// The lowest candidate score wins; time is already part of that score, so
+// do not override a cleaner later contact with an unconditional earliest-time
+// preference.
 fn prefer_earlier_candidate(
-    time: f32,
+    _time: f32,
     score: f32,
     best: Option<(f32, f32)>,
 ) -> bool {
-    let Some((best_time, best_score)) = best else {
+    let Some((_, best_score)) = best else {
         return true;
     };
-    time < best_time - 1.0e-4
-        || ((time - best_time).abs() <= 1.0e-4 && score < best_score)
+    score < best_score
 }
 
 fn aim_point(ball:Vector,vel:Vector,t:ShotTargets,g:f32)->Vector {
@@ -303,13 +302,13 @@ pub fn find_fast_intercept_candidate(
         // Do not prefer a later normal aerial over an earlier fast aerial.
         // Both candidates passed the same CLib reachability parser; commit to
         // whichever valid contact arrives first.
-        match (first_normal, first_fast) {
-            (Some(normal), Some(fast)) => {
-                return Some(if fast.slice.time < normal.slice.time { fast } else { normal });
-            }
-            (Some(normal), None) => return Some(normal),
-            (None, Some(fast)) => return Some(fast),
-            (None, None) => {}
+        // Python fast_intercept_finder gives any reachable normal aerial
+        // priority over fast aerials; fast is only its fallback.
+        if let Some(normal) = first_normal {
+            return Some(normal);
+        }
+        if let Some(fast) = first_fast {
+            return Some(fast);
         }
     }
 
@@ -429,6 +428,9 @@ fn find_best_shot_with_double_jump(
         if !useful(me,&foes,&friends,slice.location,remaining,kind,game_time<kickoff_contest_until,elected_challenger) {continue;}
         let mut value=if urgent_save {remaining+match kind {ShotType::Ground=>0.0,ShotType::Jump=>0.005,ShotType::DoubleJump=>0.015,ShotType::Aerial=>0.025}}
             else {score(me,&friends,slice.location,slice.velocity,kind,remaining,targets,gravity.z)};
+        if !urgent_save && kind==ShotType::Aerial && game_time<kickoff_contest_until {
+            value-=0.40;
+        }
         if kind==ShotType::DoubleJump && me.boost>0.0 {value+=0.25;}
         if prefer_earlier_candidate(t, value, best.map(|candidate| (candidate.time, candidate.score))) {
             best=Some(ShotCandidate{time:t,ball:slice.location,ball_velocity:slice.velocity,
@@ -659,6 +661,9 @@ pub fn find_best_any_shot(
         ) { continue; }
 
         let mut value = score_any(me, &friends, slice.location, slice.velocity, kind, remaining);
+        if kind == ShotType::Aerial && game_time < kickoff_contest_until {
+            value -= 0.40;
+        }
         if kind == ShotType::DoubleJump && me.boost > 0.0 { value += 0.25; }
         if prefer_earlier_candidate(time, value, best.map(|candidate| (candidate.time, candidate.score))) {
             let direction = (center(targets) - slice.location).flatten().normalize();
