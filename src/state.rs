@@ -345,3 +345,58 @@ pub struct TeamplayMessage {
     pub contact_y: Option<f32>,
 }
 
+/// Immutable per-tick snapshot produced from the RLBot packet. Strategy code
+/// consumes this instead of repeatedly decoding FlatBuffer fields.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AgentFrame {
+    pub me: CarState,
+    pub cars: Vec<CarState>,
+    pub ball: BallState,
+    pub match_state: MatchState,
+    pub boost_pads: Vec<BoostPadState>,
+}
+
+impl AgentFrame {
+    pub fn from_packet(
+        packet: &GamePacket,
+        player_index: usize,
+        team: usize,
+        boost_pads: &[BoostPadState],
+    ) -> Option<Self> {
+        let me = CarState::from_packet(packet, player_index)?;
+        let ball = BallState::from_packet(packet)?;
+        let match_state = MatchState::from_packet(packet, team)?;
+        let cars = (0..packet.players.len())
+            .filter_map(|index| CarState::from_packet(packet, index))
+            .collect();
+
+        let mut pads = boost_pads.to_vec();
+        for pad in &mut pads {
+            pad.update(packet);
+        }
+
+        Some(Self { me, cars, ball, match_state, boost_pads: pads })
+    }
+}
+
+#[cfg(test)]
+mod frame_tests {
+    use super::*;
+
+    #[test]
+    fn match_state_default_is_safe_for_uninitialized_agent() {
+        let state = MatchState::default();
+        assert_eq!(state.time, 0.0);
+        assert!(!state.round_active);
+        assert!(!state.kickoff);
+        assert!(!state.match_ended);
+    }
+
+    #[test]
+    fn boost_pad_defaults_to_active_until_first_packet_update() {
+        let pad = BoostPadState::default();
+        assert!(!pad.active);
+        assert_eq!(pad.index, 0);
+        assert_eq!(pad.location, Vector::ZERO);
+    }
+}
