@@ -1106,6 +1106,47 @@ mod tests {
     }
 
     #[test]
+    fn untargeted_aerial_parser_applies_post_launch_boost_reserve() {
+        let mut me = test_car();
+        me.location = Vector::ZERO;
+        me.velocity = Vector::ZERO;
+        me.orientation = Matrix3::new(0.0, 0.0, 0.0);
+        me.boost = 100.0;
+        let slice = BallSlice {
+            time: 1.8,
+            location: Vector::new(0.0, 0.0, 900.0),
+            velocity: Vector::ZERO,
+        };
+        let parsed = parse_untargeted_aerial_budget(
+            me,
+            slice,
+            slice.time - 1.0 / 120.0,
+            Vector::new(0.0, 0.0, -650.0),
+            991.6667,
+            false,
+        );
+        assert!(parsed.found);
+        assert_eq!(parsed.shot_type, Some(ShotType::Aerial));
+    }
+
+    #[test]
+    fn untargeted_aerial_score_matches_python_fast_and_kickoff_adjustments() {
+        let me = test_car();
+        let ball = Vector::new(0.0, 0.0, 900.0);
+        let normal = score_untargeted_aerial_candidate(
+            me, &[], ball, Vector::ZERO, 1.0, false, false,
+        );
+        let fast = score_untargeted_aerial_candidate(
+            me, &[], ball, Vector::ZERO, 1.0, false, true,
+        );
+        let kickoff = score_untargeted_aerial_candidate(
+            me, &[], ball, Vector::ZERO, 1.0, true, false,
+        );
+        assert!((normal - fast - 0.45).abs() < 0.0001);
+        assert!((normal - kickoff - 0.40).abs() < 0.0001);
+    }
+
+    #[test]
     fn untargeted_score_prefers_approach_from_behind_ball() {
         let behind = test_car();
         let ball = Vector::new(0.0, 0.0, 180.0);
