@@ -1,6 +1,13 @@
-
 use super::Vector;
+use glam::{EulerRot, Mat3};
 
+/// Car orientation basis extracted from the same ZYX Euler matrix used by
+/// RLBot's physics rotation:
+///
+/// Mat3::from_euler(EulerRot::ZYX, yaw, pitch, roll)
+///
+/// Columns are deliberately interpreted as forward, right, and up. This
+/// matches the local-coordinate convention used by Python Volt/VirxERLU.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Matrix3 {
     pub forward: Vector,
@@ -10,28 +17,19 @@ pub struct Matrix3 {
 
 impl Matrix3 {
     pub fn new(pitch: f32, yaw: f32, roll: f32) -> Self {
-        let (sp, cp) = pitch.sin_cos();
-        let (sy, cy) = yaw.sin_cos();
-        let (sr, cr) = roll.sin_cos();
+        let rotation = Mat3::from_euler(EulerRot::ZYX, yaw, pitch, roll);
+        let forward = rotation.x_axis;
+        let right = rotation.y_axis;
+        let up = rotation.z_axis;
 
         Self {
-            forward: Vector::new(cp * cy, cp * sy, sp),
-
-            right: Vector::new(
-                cy * sp * sr - cr * sy,
-                sy * sp * sr + cr * cy,
-                -cp * sr,
-            ),
-
-            up: Vector::new(
-                -cr * cy * sp - sr * sy,
-                -cr * sy * sp + sr * cy,
-                cp * cr,
-            ),
+            forward: Vector::new(forward.x, forward.y, forward.z),
+            right: Vector::new(right.x, right.y, right.z),
+            up: Vector::new(up.x, up.y, up.z),
         }
     }
 
-    // Converts a world-space vector into local car coordinates.
+    /// Convert a world-space vector to local forward/right/up coordinates.
     pub fn dot(self, vector: Vector) -> Vector {
         Vector::new(
             self.forward.dot(vector),
@@ -49,35 +47,54 @@ impl Matrix3 {
 mod tests {
     use super::*;
 
-    #[test]
-    fn zero_rotation_matches_world_axes() {
-        let matrix = Matrix3::new(0.0, 0.0, 0.0);
+    const EPS: f32 = 1.0e-5;
 
-        assert_eq!(matrix.forward, Vector::new(1.0, 0.0, 0.0));
-        assert_eq!(matrix.right, Vector::new(0.0, 1.0, 0.0));
-        assert_eq!(matrix.up, Vector::new(0.0, 0.0, 1.0));
+    fn near(a: Vector, b: Vector) {
+        assert!((a.x - b.x).abs() < EPS, "x: {:?} != {:?}", a, b);
+        assert!((a.y - b.y).abs() < EPS, "y: {:?} != {:?}", a, b);
+        assert!((a.z - b.z).abs() < EPS, "z: {:?} != {:?}", a, b);
     }
 
     #[test]
-    fn local_coordinates_match_basis() {
+    fn zero_rotation_maps_columns_to_world_forward_right_up() {
+        let matrix = Matrix3::new(0.0, 0.0, 0.0);
+        near(matrix.forward, Vector::new(1.0, 0.0, 0.0));
+        near(matrix.right, Vector::new(0.0, 1.0, 0.0));
+        near(matrix.up, Vector::new(0.0, 0.0, 1.0));
+    }
+
+    #[test]
+    fn yaw_rotates_forward_and_right_around_world_up() {
+        let matrix = Matrix3::new(0.0, std::f32::consts::FRAC_PI_2, 0.0);
+        near(matrix.forward, Vector::new(0.0, 1.0, 0.0));
+        near(matrix.right, Vector::new(-1.0, 0.0, 0.0));
+        near(matrix.up, Vector::new(0.0, 0.0, 1.0));
+    }
+
+    #[test]
+    fn pitch_rotates_the_forward_axis_into_world_up() {
+        let matrix = Matrix3::new(std::f32::consts::FRAC_PI_2, 0.0, 0.0);
+        near(matrix.forward, Vector::new(0.0, 0.0, 1.0));
+        near(matrix.right, Vector::new(0.0, 1.0, 0.0));
+        near(matrix.up, Vector::new(-1.0, 0.0, 0.0));
+    }
+
+    #[test]
+    fn euler_basis_is_orthonormal_and_right_handed() {
+        let matrix = Matrix3::new(0.4, 1.2, -0.7);
+        assert!((matrix.forward.magnitude() - 1.0).abs() < EPS);
+        assert!((matrix.right.magnitude() - 1.0).abs() < EPS);
+        assert!((matrix.up.magnitude() - 1.0).abs() < EPS);
+        assert!(matrix.forward.dot(matrix.right).abs() < EPS);
+        assert!(matrix.forward.dot(matrix.up).abs() < EPS);
+        assert!(matrix.right.dot(matrix.up).abs() < EPS);
+        assert!((matrix.determinant() - 1.0).abs() < EPS);
+    }
+
+    #[test]
+    fn local_coordinates_are_dot_products_with_matrix_columns() {
         let matrix = Matrix3::new(0.0, 0.0, 0.0);
         let world = Vector::new(10.0, 20.0, 30.0);
-
         assert_eq!(matrix.dot(world), world);
-    }
-
-    #[test]
-    fn orientation_is_orthonormal() {
-        let matrix = Matrix3::new(0.4, 1.2, -0.7);
-
-        assert!((matrix.forward.magnitude() - 1.0).abs() < 0.0001);
-        assert!((matrix.right.magnitude() - 1.0).abs() < 0.0001);
-        assert!((matrix.up.magnitude() - 1.0).abs() < 0.0001);
-
-        assert!(matrix.forward.dot(matrix.right).abs() < 0.0001);
-        assert!(matrix.forward.dot(matrix.up).abs() < 0.0001);
-        assert!(matrix.right.dot(matrix.up).abs() < 0.0001);
-
-        assert!((matrix.determinant() - 1.0).abs() < 0.0001);
     }
 }
