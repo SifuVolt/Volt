@@ -167,6 +167,15 @@ fn party_cannon_dodge_inputs(car: CarState, direction: Vector) -> (f32, f32) {
 
 /// Party Cannon's AimAt reference: aim along DodgeDirection while orienting
 /// the roof away from the dodge direction and the contact surface normal.
+fn party_cannon_cached_dodge_input(
+    started_at: f32,
+    game_time: f32,
+    cached_input: Vector,
+) -> Option<(f32, f32)> {
+    (game_time - started_at < 0.6)
+        .then_some((cached_input.x, cached_input.y))
+}
+
 fn party_cannon_jump_aim(car: CarState, dodge_direction: Vector, normal: Vector) -> ControllerState {
     let local_target = car.local(dodge_direction);
     let mut desired_up = dodge_direction.cross(dodge_direction.cross(-normal)).normalize();
@@ -4094,12 +4103,12 @@ impl BotBrain {
             state.dodging = true;
             // Party Cannon keeps its cached directional input active for
             // 0.6s after the airborne dodge starts.
-            if state.dodge_started_at
-                .is_some_and(|started| game_time - started < 0.6)
-            {
+            if let Some((yaw, pitch)) = state.dodge_started_at.and_then(|started| {
+                party_cannon_cached_dodge_input(started, game_time, state.dodge_direction)
+            }) {
                 controller.jump = true;
-                controller.yaw = state.dodge_direction.x;
-                controller.pitch = state.dodge_direction.y;
+                controller.yaw = yaw;
+                controller.pitch = pitch;
             }
         } else if state.counter == 5 {
             self.jump_shot = None;
@@ -7018,6 +7027,19 @@ mod party_cannon_jump_tests {
             party_cannon_dodge_inputs(me, Vector::new(0.0, 1.0, 0.0));
         assert!((yaw - 1.0).abs() < 1.0e-5);
         assert!(pitch.abs() < 1.0e-5);
+    }
+
+    #[test]
+    fn party_cannon_dodge_holds_cached_input_for_six_tenths() {
+        let cached = Vector::new(0.35, -0.92, 0.0);
+        assert_eq!(
+            party_cannon_cached_dodge_input(1.0, 1.59, cached),
+            Some((0.35, -0.92)),
+        );
+        assert_eq!(
+            party_cannon_cached_dodge_input(1.0, 1.61, cached),
+            None,
+        );
     }
 
     #[test]
