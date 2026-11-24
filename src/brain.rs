@@ -20,7 +20,7 @@ use crate::{
     routines::{KickoffExecutor, StrikeExecutor},
     shot_parser::{ParsedShot, ShotTargets},
     shot_physics::{get_jump_time, ShotType},
-    shot_planner::{find_best_any_shot, find_best_shot, find_fast_intercept, ShotCandidate},
+    shot_planner::{find_best_any_shot, find_best_pass_shot, find_best_shot, find_fast_intercept, ShotCandidate},
     state::{AgentFrame, TeamplayMessage},
     strategy::{
         build_plan, choose_boost_pad, cover_target, kickoff_cheat_target,
@@ -80,12 +80,19 @@ fn teammate_has_priority_shot(
         if !(0.0..=0.75).contains(&age) {
             return false;
         }
+        // contact_time is relative to the sender's last packet. Account for
+        // the age of the received message before comparing two challengers.
+        let contact_time = message.contact_time - age;
+        if contact_time < -0.15 {
+            return false;
+        }
+        let contact_time = contact_time.max(0.0);
         match message.status.as_str() {
-            // A concrete SHOT_FOUND always beats a speculative ANY_SHOT_FOUND
-            // when the contacts are within the handoff window.
-            "SHOT_FOUND" => message.contact_time <= our_time + 0.20,
+            // A wall approach is also a concrete committed challenge, not a
+            // speculative ANY_SHOT_FOUND message.
+            "SHOT_FOUND" | "WALL_PASS" => contact_time <= our_time + 0.20,
             "ANY_SHOT_FOUND" => our_candidate.is_none()
-                || message.contact_time + 0.08 < our_time,
+                || contact_time + 0.08 < our_time,
             _ => false,
         }
     })
@@ -578,6 +585,26 @@ impl BotBrain {
             );
         }
 
+        if candidate.is_none() && challenger && !urgent {
+            // Python find_pass_shot is a last resort after goal-directed and
+            // untargeted touches fail. The chosen pass lane is stored in the
+            // parser targets and preserved by the strike executor.
+            candidate = find_best_pass_shot(
+                me,
+                &frame.cars,
+                ball.location,
+                prediction,
+                frame.match_state.gravity,
+                boost_accel,
+                now,
+                self.kickoff_contest_until,
+                false,
+                true,
+                unlimited_boost,
+                horizon.min(4.0),
+            );
+        }
+
         if candidate.is_none() && challenger {
             // Final fallback: choose the earliest parser-valid touch rather
             // than driving past a reachable ball while waiting for a better
@@ -635,8 +662,9 @@ impl BotBrain {
 
         // Prefer a viable source-validated aerial when its score beats the
         // current ground/jump candidate. The ceiling/height limits mirror
-        // Volt's solo-match restriction and ceiling launch safety.
-        if challenger && !urgent && !teammate_claimed && !self.strike.active() && self.aerial.is_none() {
+        // Volt's solo-match restriction and ceiling launch safety. Urgent
+        // saves use earliest-contact scoring instead of attacking quality.
+        if challenger && !teammate_claimed && !self.strike.active() && self.aerial.is_none() {
             let friendly_count = frame.cars.iter()
                 .filter(|car| car.team == me.team && !car.demolished)
                 .count();
@@ -671,6 +699,7 @@ impl BotBrain {
                 min_height,
                 max_height,
                 horizon.min(6.0),
+                urgent,
                 unlimited_boost,
             ).filter(|aerial| {
                 candidate.is_none_or(|shot| aerial.score < shot.score)
@@ -832,11 +861,50 @@ impl BotBrain {
 mod tests {
     use super::*;
 
+    fn team_message(status: &str, contact_time: f32, received_at: f32) -> TeamplayMessage {
+        TeamplayMessage {
+            status: status.to_owned(),
+            shot_type: "JUMP".to_owned(),
+            score: 50.0,
+            contact_time,
+            received_at,
+            cover_owner: None,
+            cover_released: false,
+            receive_x: None,
+            receive_y: None,
+            receive_dir_x: None,
+            receive_dir_y: None,
+            contact_x: None,
+            contact_y: None,
+        }
+    }
+
     #[test]
     fn shot_type_names_are_stable_for_team_comms() {
         assert_eq!(shot_type_name(ShotType::Ground), "GROUND");
         assert_eq!(shot_type_name(ShotType::Jump), "JUMP");
         assert_eq!(shot_type_name(ShotType::DoubleJump), "DOUBLE_JUMP");
         assert_eq!(shot_type_name(ShotType::Aerial), "AERIAL");
+    }
+
+    #[test]
+    fn wall_pass_is_a_concrete_teammate_priority_claim() {
+        let messages = HashMap::from([
+            (1, team_message("WALL_PASS", 1.0, 10.0)),
+        ]);
+        assert!(teammate_has_priority_shot(&messages, 10.10, None));
+    }
+
+    #[test]
+    fn teammate_priority_ages_contact_time_and_ignores_expired_claims() {
+        let active = HashMap::from([
+            (1, team_message("SHOT_FOUND", 1.10, 10.0)),
+        ]);
+        assert!(teammate_has_priority_shot(&active, 10.20, None));
+
+        let expired = HashMap::from([
+            (1, team_message("SHOT_FOUND", 0.10, 10.0)),
+        ]);
+        assert!(!teammate_has_priority_shot(&expired, 10.30, None));
     }
 }
