@@ -195,6 +195,11 @@ pub fn support_target(frame: &AgentFrame, previous_target: Option<Vector>) -> Ve
     let ball_x = ball.x;
     let ball_y = ball.y * side_value;
 
+    // Python len(agent.friends) includes demolished teammates, while its
+    // lead-selection loop separately skips demolished cars.
+    let friend_count = frame.cars.iter()
+        .filter(|car| car.team == frame.me.team && car.index != frame.me.index)
+        .count();
     let friends: Vec<CarState> = frame.cars.iter()
         .copied()
         .filter(|car| car.team == frame.me.team && car.index != frame.me.index && !car.demolished)
@@ -208,7 +213,7 @@ pub fn support_target(frame: &AgentFrame, previous_target: Option<Vector>) -> Ve
 
     let (mut target_x, mut target_y) = if let Some(lead) = lead {
         // Python uses a 900-unit gap in 2v2 and 1150 in 3v3.
-        let support_gap = if friends.len() <= 1 { 900.0 } else { 1150.0 };
+        let support_gap = if friend_count <= 1 { 900.0 } else { 1150.0 };
         let lead_x = lead.location.x;
         let lead_y = lead.location.y * side_value;
         let target_x = lead_x * 0.58 + ball_x * 0.42;
@@ -361,6 +366,23 @@ mod tests {
         let target = support_target(&state, None);
         assert!((target.x - 374.0).abs() < 0.01);
         assert!((target.y + 900.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn support_gap_counts_demolished_teammates_like_python_friends_list() {
+        let me = make_car(0, 0, Vector::new(0.0, -1000.0, 17.0));
+        let lead = make_car(1, 0, Vector::new(500.0, -500.0, 17.0));
+        let demolished = CarState {
+            demolished: true,
+            ..make_car(2, 0, Vector::new(-500.0, 0.0, 17.0))
+        };
+        let state = frame(
+            me,
+            vec![me, lead, demolished],
+            Vector::new(200.0, -1000.0, 92.75),
+        );
+        let target = support_target(&state, None);
+        assert!((target.y + 1650.0).abs() < 0.01);
     }
 
     #[test]
