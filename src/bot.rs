@@ -1383,7 +1383,7 @@ impl BotBrain {
             };
         }
 
-        if is_goalie && !is_challenger {
+        if is_goalie && !is_challenger && living_teammates.len() >= 3 {
             return Plan {
                 decision: Decision::Goalkeeper,
                 target: Vector::new(0.0, side * 5270.0, 0.0),
@@ -1393,22 +1393,10 @@ impl BotBrain {
             };
         }
 
-        // In 2v2, should_prioritize_ball() can elect the teammate with
-        // the better immediate challenge. The non-challenger runs the
-        // non-goalie grid_defense lane rather than also driving at the ball.
-        if living_teammates.len() == 2 && !is_challenger {
-            return Plan {
-                decision: Decision::Transition,
-                target: Vector::new(
-                    if me.location.x == 0.0 { 0.0 } else { me.location.x.signum() * 900.0 },
-                    side * 5050.0,
-                    0.0,
-                ),
-                target_speed: 1700.0,
-                shot: None,
-                jump: None,
-            };
-        }
+        // Python still allows either 2v2 player to take an untargeted
+        // first touch when the elected attacker has no useful shot. Keep
+        // the fixed goalie role for positioning, but do not return before
+        // that local fallback has been evaluated.
 
         if roles.and_then(|r| r.transition).is_some_and(|index| index == me.index)
             && !transition_followup_active
@@ -1532,7 +1520,7 @@ impl BotBrain {
         // the elected challenger does not meet should_prioritize_ball().
         // Until the dedicated grid_defense controller is executed, preserve
         // its non-goalie lane target here rather than issuing a ball challenge.
-        if !is_challenger {
+        if !is_challenger && living_teammates.len() != 2 {
             return Plan {
                 decision: Decision::Transition,
                 target: Vector::new(
@@ -1546,10 +1534,11 @@ impl BotBrain {
             };
         }
 
-        if is_challenger {
+        if is_challenger || living_teammates.len() == 2 {
             let aim = shot_aim_point(ball.location, side, me.airborne);
             let fast_intercept_zone = transition_followup_active || (ball_depth > 0.0 && ball_depth <= 1280.0);
-            if fast_intercept_zone {
+            let fast_intercept_searched = fast_intercept_zone && is_challenger;
+            if fast_intercept_searched {
                 if let Some(plan) = self.fast_intercept_plan(
                     me, cars, ball, prediction, game_time, opponent_goal, roles, urgent_save,
                 ) {
@@ -1566,9 +1555,9 @@ impl BotBrain {
             //    when the ball is behind this car;
             // 2) run_logic may then take an untargeted first touch as a
             //    local fallback. That fallback is NOT a teamplay claim.
-            let mut candidate = if fast_intercept_zone {
+            let mut candidate = if fast_intercept_searched {
                 None
-            } else if ball_depth < 640.0 {
+            } else if is_challenger && ball_depth < 640.0 {
                 find_best_shot(
                     me, cars, ball.location, prediction, shot_targets,
                     match_state.gravity, self.boost_accel, game_time,
@@ -1581,7 +1570,8 @@ impl BotBrain {
             let mut teamplay_opportunity = candidate.is_some();
 
             if candidate.is_none()
-                && !fast_intercept_zone
+                && is_challenger
+                && !fast_intercept_searched
                 && ball_depth < me.location.y * side
             {
                 candidate = find_best_any_shot(
@@ -1594,7 +1584,7 @@ impl BotBrain {
 
             // This is the run_logic fallback after teamplay_shot was empty.
             // It may challenge, but it must not announce a team-owned shot.
-            if candidate.is_none() && !fast_intercept_zone {
+            if candidate.is_none() && !fast_intercept_searched {
                 candidate = find_best_any_shot(
                     me, cars, prediction, shot_targets, match_state.gravity,
                     self.boost_accel, game_time, self.kickoff_contest_until,
@@ -1619,6 +1609,7 @@ impl BotBrain {
             }
             let mut vulnerable_fallback_selected = false;
             if candidate.is_none()
+                && is_challenger
                 && ball_depth > 640.0
                 && opponent_is_vulnerable(me, ball, cars, own_goal)
             {
@@ -1632,19 +1623,25 @@ impl BotBrain {
             if let Some(candidate) = candidate {
                 if teamplay_opportunity {
                     self.set_teamplay_shot(me, ball, candidate, opponent_goal, roles, urgent_save);
-                    if !should_commit_to_shot(
-                        me, cars, ball, roles, urgent_save, self.teamplay_score,
-                        candidate.time, &self.teammate_comms, game_time,
-                    ) {
-                        self.yield_teamplay_opportunity();
-                        return Plan {
-                            decision: Decision::Transition,
-                            target: Vector::new(me.location.x.signum() * 900.0, side * 5050.0, 0.0),
-                            target_speed: 1700.0,
-                            shot: None,
-                            jump: None,
-                        };
-                    }
+                }
+                // Python checks teammate ownership for both published
+                // teamplay shots and local untargeted/pass fallbacks.
+                if !should_commit_to_shot(
+                    me, cars, ball, roles, urgent_save, self.teamplay_score,
+                    candidate.time, &self.teammate_comms, game_time,
+                ) {
+                    self.yield_teamplay_opportunity();
+                    return Plan {
+                        decision: if is_goalie { Decision::Goalkeeper } else { Decision::Transition },
+                        target: if is_goalie {
+                            Vector::new(0.0, side * 5270.0, 0.0)
+                        } else {
+                            Vector::new(me.location.x.signum() * 900.0, side * 5050.0, 0.0)
+                        },
+                        target_speed: 1700.0,
+                        shot: None,
+                        jump: None,
+                    };
                 }
             }
             if candidate.is_none() && !urgent_save && self.ground_flip.is_none()
@@ -1703,7 +1700,8 @@ impl BotBrain {
 
             // Noob Black's unfolded wall-shot scan competes with ordinary
             // ground/jump contacts, but never displaces an urgent save.
-            if !committed_nonwall_shot_active
+            if is_challenger
+                && !committed_nonwall_shot_active
                 && !urgent_save
                 && self.ground_flip.is_none()
                 && self.defense_flip.is_none()
@@ -1731,7 +1729,7 @@ impl BotBrain {
                 }
             }
 
-            if fast_intercept_zone && !urgent_save
+            if fast_intercept_searched && !urgent_save
                 && (me.airborne || game_time - self.last_landing_time > 0.5)
             {
                 let max_height = if living_teammates.len() == 1 && opponents.len() == 1 {
@@ -1773,7 +1771,7 @@ impl BotBrain {
             } else {
                 350.0
             };
-            if !urgent_save && self.jump_shot.is_none() && self.ground_flip.is_none() {
+            if is_challenger && !urgent_save && self.jump_shot.is_none() && self.ground_flip.is_none() {
                 if let Some(candidate) = find_aerial_candidate(
                     me,
                     prediction,
@@ -1823,6 +1821,16 @@ impl BotBrain {
                         };
                     }
                 }
+            }
+
+            if !is_challenger && candidate.is_none() {
+                return Plan {
+                    decision: Decision::Goalkeeper,
+                    target: Vector::new(0.0, side * 5270.0, 0.0),
+                    target_speed: 1500.0,
+                    shot: None,
+                    jump: None,
+                };
             }
 
             let target = selected
