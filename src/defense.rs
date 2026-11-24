@@ -61,10 +61,13 @@ impl GridDefense {
         pads.iter()
             .copied()
             .filter(|pad| {
+                let pad_distance = car.location.distance(pad.location);
                 (pad.location.x.abs() > 3000.0 || pad.location.y.abs() > 4000.0)
                     && pad.location.distance(-goal) < car_goal_distance
                     && Self::sign(pad.location.x) == Self::sign(car.location.x)
-                    && pad.active
+                    // Python accepts an inactive pad when its respawn timer
+                    // expires before the car's straight-line arrival estimate.
+                    && (pad.active || pad.timer <= pad_distance / 2300.0)
             })
             .min_by(|a, b| {
                 // Python sorts (not boost.large, score): every full pad is
@@ -471,6 +474,32 @@ mod tests {
             dodge_timeout: 0.0, dodge_elapsed: 0.0, dodge_dir: Vector::ZERO,
             flip_reset_available: false, boost: 0.0, hitbox: Hitbox::default(),
         }
+    }
+
+    #[test]
+    fn defensive_pad_selection_accepts_only_pads_that_respawn_before_arrival() {
+        let mut car_state = car(0, Vector::new(3500.0, -3000.0, 17.0));
+        car_state.boost = 20.0;
+        let goal = Vector::new(0.0, 5120.0, 300.0);
+        let arrival = car_state.location.distance(Vector::new(3500.0, 4000.0, 0.0)) / 2300.0;
+        let pads = [
+            BoostPadState {
+                index: 0,
+                location: Vector::new(3500.0, 4000.0, 0.0),
+                large: true,
+                active: false,
+                timer: (arrival - 0.1).max(0.0),
+            },
+            BoostPadState {
+                index: 1,
+                location: Vector::new(3600.0, 4100.0, 0.0),
+                large: true,
+                active: false,
+                timer: arrival + 1.0,
+            },
+        ];
+        let selected = GridDefense::choose_pad(car_state, goal, &pads, false);
+        assert_eq!(selected.map(|pad| pad.index), Some(0));
     }
 
     #[test]
