@@ -10,6 +10,7 @@ use std::collections::HashMap;
 use crate::{
     aerial::{find_aerial_candidate, AerialCandidate, AerialShot},
     control::{default_drive, DriveInput},
+    defense::GridDefense,
     drive::{drive_to, recover_in_air, DriveRequest},
     math::Vector,
     planning::{
@@ -203,6 +204,9 @@ pub struct BotBrain {
     strike: StrikeExecutor,
     aerial: Option<AerialShot>,
     aerial_score: f32,
+    defense: GridDefense,
+    defense_flip: Option<(f32, Vector)>,
+    last_flip_time: f32,
     kickoff: KickoffExecutor,
     last_message: TeamplayMessage,
     kickoff_contest_until: f32,
@@ -222,6 +226,9 @@ impl BotBrain {
             strike: StrikeExecutor::new(),
             aerial: None,
             aerial_score: 0.0,
+            defense: GridDefense::default(),
+            defense_flip: None,
+            last_flip_time: -999.0,
             kickoff: KickoffExecutor::default(),
             last_message: shot_message("NO_SHOT", None, 0.0, None, false),
             kickoff_contest_until: -999.0,
@@ -237,6 +244,68 @@ impl BotBrain {
         let mut message = self.last_message.clone();
         message.received_at = now;
         message
+    }
+
+    fn run_cover_role(&mut self, frame: &AgentFrame) -> rlbot::flat::ControllerState {
+        let car = frame.me;
+        let now = frame.match_state.time;
+
+        if let Some((started_at, direction)) = self.defense_flip {
+            let elapsed = now - started_at;
+            let mut controller = rlbot::flat::ControllerState::default();
+            if elapsed < 0.075 {
+                controller.jump = true;
+                return controller;
+            }
+            if elapsed < 0.10 {
+                controller.jump = false;
+                return controller;
+            }
+            if elapsed < 0.9 {
+                if self.last_flip_time < started_at {
+                    self.last_flip_time = now;
+                }
+                controller.jump = true;
+                controller.pitch = -direction.x;
+                controller.yaw = direction.y;
+                return controller;
+            }
+            self.defense_flip = None;
+        }
+
+        let side = team_side(car.team);
+        let opponent_goal = Vector::new(0.0, -side * 5120.0, 300.0);
+        let output = self.defense.run(
+            car,
+            &frame.cars,
+            frame.ball,
+            &frame.boost_pads,
+            opponent_goal,
+            true,
+            false,
+        );
+
+        if output.start_flip {
+            self.defense_flip = Some((now, Vector::new(1.0, 0.0, 0.0)));
+            let mut controller = rlbot::flat::ControllerState::default();
+            controller.jump = true;
+            return controller;
+        }
+
+        if car.airborne
+            && now - self.last_flip_time > 78.0 / 120.0
+            && car.velocity.z < -10.0
+        {
+            if let Some(target) = output.recovery_target {
+                return GridDefense::recovery_controller(
+                    car,
+                    target,
+                    frame.match_state.gravity.z,
+                );
+            }
+        }
+
+        output.controller
     }
 
     fn run_wall_approach(
@@ -713,7 +782,7 @@ impl BotBrain {
 
         // Low-boost collection is opportunistic. A cover player only leaves
         // the defensive lane for a nearby pad, and never during a goal threat.
-        if !urgent && me.boost < 24.0 {
+        if !urgent && plan.role != Role::Cover && me.boost < 24.0 {
             if let Some(pad) = choose_boost_pad(frame, movement_target, enemy_near_ball) {
                 if me.location.flat_distance(pad) < 900.0 || plan.role == Role::Support {
                     movement_target = pad;
@@ -722,7 +791,9 @@ impl BotBrain {
             }
         }
 
-        let controller = if me.airborne {
+        let controller = if plan.role == Role::Cover {
+            self.run_cover_role(frame)
+        } else if me.airborne {
             recover_in_air(&me, boost_accel, Some(movement_target))
         } else {
             drive_to(
