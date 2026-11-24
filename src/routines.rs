@@ -174,18 +174,6 @@ pub fn hitbox_contact_target(car: CarState, ball: Vector, shot_direction: Vector
     ball - shot_direction.normalize() * (BALL_RADIUS + half_length) - world_offset
 }
 
-fn align_to_direction(car: &CarState, direction: Vector) -> ControllerState {
-    let local = car.local(direction);
-    let (_, output) = default_pd(car, local, false, None);
-    let mut controller = ControllerState::default();
-    controller.steer = output.steer;
-    controller.pitch = output.pitch;
-    controller.yaw = output.yaw;
-    controller.roll = output.roll;
-    controller.throttle = 1.0;
-    controller
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum StrikePhase {
     Approach,
@@ -195,9 +183,6 @@ enum StrikePhase {
     JumpFlight,
     /// Double-jump path retained separately from the single-jump dodge.
     JumpHold,
-    JumpRelease,
-    SecondJump,
-    Flight,
 }
 
 const JUMP_SPEED: f32 = 291.6667;
@@ -1188,48 +1173,7 @@ impl StrikeExecutor {
                     controller
                 }
             }
-            StrikePhase::JumpRelease => {
-                let mut controller = align_to_direction(&car, self.current_shot_direction);
-                controller.jump = false;
-                if now - self.phase_started >= 0.05 {
-                    self.set_phase(StrikePhase::SecondJump, now);
-                }
-                controller
-            }
-            StrikePhase::SecondJump => {
-                let mut controller = align_to_direction(&car, self.current_shot_direction);
-                controller.jump = now - self.phase_started < 0.06;
-                controller.boost = car.boost > 0.0
-                    && car.local(self.current_shot_direction).x > 0.65;
-                controller.throttle = 1.0;
-                if now - self.phase_started >= 0.06 {
-                    self.set_phase(StrikePhase::Flight, now);
-                    controller.jump = false;
-                }
-                controller
-            }
-            StrikePhase::Flight => {
-                if !car.airborne {
-                    self.reset();
-                    return ControllerState::default();
-                }
-                let target_delta = self.current_jump_target - car.location;
-                let local_target = car.local(target_delta);
-                let local_shot = car.local(self.current_shot_direction);
-                let aim = if target_delta.magnitude() > 65.0 {
-                    target_delta
-                } else {
-                    self.current_shot_direction
-                };
-                let mut controller = align_to_direction(&car, aim);
-                controller.boost = car.boost > 0.0
-                    && local_shot.x > 0.0
-                    && local_shot.angle(Vector::new(1.0, 0.0, 0.0)) < 0.48
-                    && car.velocity.dot(self.current_shot_direction) < 2180.0;
-                controller.throttle = 1.0;
-                let _ = local_target;
-                controller
-            }
+
         }
     }
 }
