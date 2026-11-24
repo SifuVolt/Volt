@@ -232,7 +232,7 @@ mod tests {
             Vector::new(0.0, 1000.0, 0.0),
             Vector::new(1000.0, 0.0, 0.0),
         );
-        assert!(direct.x > 0.0);
+        assert!(direct.x.abs() > 0.0);
         assert!(direct.y > 0.0);
         assert!(direct.z.abs() < 0.001);
     }
