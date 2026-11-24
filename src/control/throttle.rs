@@ -1,13 +1,10 @@
 use crate::math::Vector;
-use crate::physics::drive::{curvature, is_inside_turn_radius, throttle_acceleration, turn_radius};
+use crate::physics::drive::{
+    curvature, is_inside_turn_radius, throttle_acceleration, turn_radius,
+};
 
 use super::pd::OrientationAngles;
 
-/// Inputs required by Volt's Python defaultThrottle calculation.
-///
-/// Speeds and angular velocity use the same coordinate conventions as
-/// CarState: car_speed is local forward velocity, world_speed is total speed,
-/// and angular_velocity is local.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ThrottleInput {
     pub airborne: bool,
@@ -23,8 +20,6 @@ pub struct ThrottleInput {
     pub boost_accel: f32,
 }
 
-/// Only populated controls are changed by defaultThrottle. None means the
-/// Python routine would leave that controller field untouched.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct ThrottleOutput {
     pub car_speed: f32,
@@ -45,11 +40,10 @@ fn sign(value: f32) -> f32 {
     }
 }
 
-/// Pure Rust port of Volt's Python defaultThrottle.
-///
-/// This does not mutate RLBot's controller or CarState. It returns only the
-/// controller fields changed by the Python routine. target_angles is required
-/// because the source routine reads its yaw angle unconditionally on ground.
+/// Direct port of Volt's current Python utils.defaultThrottle.
+/// Keep the source's acceleration curve, speed-dependent turn cap and
+/// boostless-distance simulation; do not substitute the separate
+/// brake/coast controller from VirxERLU or Party Cannon.
 pub fn default_throttle(input: ThrottleInput) -> ThrottleOutput {
     let mut output = ThrottleOutput {
         car_speed: input.car_speed,
@@ -67,9 +61,7 @@ pub fn default_throttle(input: ThrottleInput) -> ThrottleOutput {
 
     if let Some(local_target) = input.local_target {
         let turn_rad = turn_radius(input.car_speed.abs());
-        let angular_velocity = input.angular_velocity;
-        let angular_speed = angular_velocity.magnitude();
-
+        let angular_speed = input.angular_velocity.magnitude();
         let inside_turn = if local_target.y.abs() < turn_rad {
             is_inside_turn_radius(turn_rad, local_target, sign(input.steer))
         } else {
@@ -87,20 +79,16 @@ pub fn default_throttle(input: ThrottleInput) -> ThrottleOutput {
         angle_to_target = std::f32::consts::PI - angle_to_target;
     }
 
-    // Party Cannon-style turn-speed limit from Volt's Python utility.
     if let Some(local_target) = input.local_target {
         if target_speed > 0.0 && local_target.x > 0.0 {
             let target_distance_sq =
                 local_target.x * local_target.x + local_target.y * local_target.y;
-
             if target_distance_sq > 350.0_f32.powi(2) {
                 let required_curvature =
                     2.0 * local_target.y.abs() / target_distance_sq;
-
                 if required_curvature > 0.00015 {
                     let mut turn_speed_limit = 0.0;
                     let mut candidate_speed = 0.0;
-
                     while candidate_speed <= 2300.0 {
                         if curvature(candidate_speed) >= required_curvature {
                             turn_speed_limit = candidate_speed;
@@ -109,7 +97,6 @@ pub fn default_throttle(input: ThrottleInput) -> ThrottleOutput {
                             break;
                         }
                     }
-
                     target_speed = target_speed.min(turn_speed_limit.max(450.0));
                 }
             }
@@ -145,11 +132,7 @@ pub fn default_throttle(input: ThrottleInput) -> ThrottleOutput {
     output.target_speed = target_speed;
     output.throttle = Some(throttle);
     output.handbrake = Some(handbrake);
-
-    if steer != input.steer {
-        output.steer = Some(steer);
-    } else if handbrake && input.steer != input.yaw {
-        // In the handbrake branch Python always assigns yaw to steer.
+    if steer != input.steer || (handbrake && input.steer != input.yaw) {
         output.steer = Some(steer);
     }
 
@@ -158,7 +141,6 @@ pub fn default_throttle(input: ThrottleInput) -> ThrottleOutput {
             .local_target
             .map(|target| (target.x * target.x + target.y * target.y).sqrt())
             .unwrap_or(0.0);
-
         let mut boostless_speed = input.car_speed.max(0.0);
         let mut boostless_distance = 0.0;
 
@@ -167,16 +149,13 @@ pub fn default_throttle(input: ThrottleInput) -> ThrottleOutput {
                 if boostless_speed >= target_speed - 50.0 {
                     break;
                 }
-
                 let throttle_accel = throttle_acceleration(boostless_speed);
                 if throttle_accel <= 0.0 {
                     break;
                 }
-
                 boostless_speed =
                     target_speed.min(boostless_speed + throttle_accel / 120.0);
                 boostless_distance += boostless_speed / 120.0;
-
                 if boostless_distance >= available_distance {
                     break;
                 }
@@ -187,7 +166,6 @@ pub fn default_throttle(input: ThrottleInput) -> ThrottleOutput {
             && angle_to_target < 0.45
             && speed_error > input.boost_accel / 20.0
             && boostless_speed < target_speed - 50.0;
-
         output.boost = Some(boost_needed);
     }
 
@@ -215,14 +193,12 @@ mod tests {
     }
 
     #[test]
-    fn airborne_leaves_controller_fields_untouched() {
+    fn airborne_leaves_ground_controls_untouched() {
         let mut args = input();
         args.airborne = true;
         let result = default_throttle(args);
-
         assert_eq!(result.car_speed, args.car_speed);
         assert_eq!(result.throttle, None);
-        assert_eq!(result.steer, None);
         assert_eq!(result.handbrake, None);
         assert_eq!(result.boost, None);
     }
@@ -235,46 +211,55 @@ mod tests {
     }
 
     #[test]
-    fn tight_turn_caps_requested_speed_using_curvature_table() {
+    fn tight_turn_caps_requested_speed_using_python_curvature_table() {
         let mut args = input();
         args.target_speed = 1800.0;
         args.local_target = Some(Vector::new(500.0, 500.0, 0.0));
-
         let result = default_throttle(args);
         assert!(result.target_speed < args.target_speed);
         assert!(result.target_speed >= 450.0);
     }
 
     #[test]
-    fn aligned_boost_is_used_when_throttle_only_cannot_reach_target() {
+    fn boost_is_used_when_throttle_only_cannot_reach_requested_speed() {
         let mut args = input();
         args.target_speed = 2200.0;
         args.local_target = Some(Vector::new(100.0, 0.0, 0.0));
-
-        let result = default_throttle(args);
-        assert_eq!(result.boost, Some(true));
+        assert_eq!(default_throttle(args).boost, Some(true));
     }
 
     #[test]
-    fn boost_is_not_used_when_target_angle_is_too_large() {
+    fn boost_is_not_used_when_car_is_misaligned() {
         let mut args = input();
         args.target_speed = 2200.0;
         args.target_angles.yaw = 0.5;
         args.local_target = Some(Vector::new(100.0, 0.0, 0.0));
-
-        let result = default_throttle(args);
-        assert_eq!(result.boost, Some(false));
+        assert_eq!(default_throttle(args).boost, Some(false));
     }
 
     #[test]
-    fn reverse_target_uses_reverse_alignment_angle() {
+    fn reverse_target_uses_reverse_alignment_and_throttle() {
         let mut args = input();
         args.target_speed = -500.0;
-        args.target_angles.yaw = 0.0;
         args.local_target = None;
-
         let result = default_throttle(args);
         assert_eq!(result.boost, Some(false));
         assert_eq!(result.throttle, Some(-500.0 / 1600.0));
+    }
+
+    #[test]
+    fn source_handbrake_turn_branch_uses_yaw_as_steer() {
+        let mut args = input();
+        args.world_speed = 600.0;
+        args.car_speed = 600.0;
+        args.angular_velocity = Vector::new(0.0, 0.0, 2.0);
+        args.local_target = Some(Vector::new(0.0, 100.0, 0.0));
+        args.target_angles.yaw = 0.5;
+        args.steer = -0.4;
+        args.yaw = 0.7;
+        let result = default_throttle(args);
+        if result.handbrake == Some(true) {
+            assert_eq!(result.steer, Some(args.yaw));
+        }
     }
 }

@@ -1,4 +1,5 @@
 use crate::math::Vector;
+use crate::state::CarState;
 
 /// Exact throttle-only acceleration curve used by Volt's Python
 /// `throttle_acceleration` utility. Input is local forward velocity.
@@ -87,9 +88,205 @@ pub fn dodge_impulse(car_velocity: Vector, max_speed: f32) -> f32 {
     impulse
 }
 
+
+/// Party Cannon's speed-dependent turn-radius table, used by its Drive ETA
+/// model. Unlike a fixed-radius Dubins path, this follows Rocket League's
+/// measured cornering response as speed changes.
+pub fn party_cannon_turn_radius(speed: f32) -> f32 {
+    let speed = speed.abs().clamp(0.01, 2300.0);
+    if speed <= 500.0 {
+        145.0 + (speed / 500.0) * (251.0 - 145.0)
+    } else if speed <= 1000.0 {
+        251.0 + ((speed - 500.0) / 500.0) * (425.0 - 251.0)
+    } else if speed <= 1500.0 {
+        425.0 + ((speed - 1000.0) / 500.0) * (727.0 - 425.0)
+    } else if speed <= 1750.0 {
+        727.0 + ((speed - 1500.0) / 250.0) * (909.0 - 727.0)
+    } else {
+        909.0 + ((speed - 1750.0) / 550.0) * (1136.0 - 909.0)
+    }
+}
+
+pub fn party_cannon_speed_from_turn_radius(radius: f32) -> f32 {
+    let radius = radius.clamp(145.0, 1136.0);
+    if radius <= 251.0 {
+        ((radius - 145.0) / 106.0) * 500.0
+    } else if radius <= 425.0 {
+        500.0 + ((radius - 251.0) / 174.0) * 500.0
+    } else if radius <= 727.0 {
+        1000.0 + ((radius - 425.0) / 302.0) * 500.0
+    } else if radius <= 909.0 {
+        1500.0 + ((radius - 727.0) / 182.0) * 250.0
+    } else {
+        1750.0 + ((radius - 909.0) / 227.0) * 550.0
+    }
+}
+
+pub fn party_cannon_speed_after_turn(current_speed: f32, angle: f32, modifier: f32) -> f32 {
+    let turn = angle.max(0.0) * 0.49 * modifier;
+    let exponential = turn.exp();
+    let response = exponential * turn * if current_speed > 1234.0 { 0.2 } else { 1.0 };
+    ((1234.0 * response + current_speed) / (response + 1.0)).clamp(0.0, 2300.0)
+}
+
+fn party_cannon_turn_geometry(
+    car: &CarState,
+    target: Vector,
+    backwards: bool,
+) -> (f32, f32, f32, f32) {
+    let normal = car.up().normalize();
+    let forward = (car.forward() - normal * car.forward().dot(normal)).normalize();
+    let right = forward.cross(-normal).normalize();
+    let target_delta = target - car.location;
+    let target_delta = target_delta - normal * target_delta.dot(normal);
+    let direct_distance = target_delta.magnitude();
+    if direct_distance < 1.0 || forward.magnitude() < 0.001 || right.magnitude() < 0.001 {
+        return (direct_distance, 0.0, party_cannon_turn_radius(car.velocity.magnitude()), 0.0);
+    }
+
+    let target_direction = target_delta / direct_distance;
+    let heading = if backwards { -forward } else { forward };
+    let angle = heading.dot(target_direction).clamp(-1.0, 1.0).acos();
+    let current_speed = car.velocity.dot(forward);
+    let turn_speed = if backwards {
+        party_cannon_speed_after_turn(-current_speed, angle, 0.4)
+    } else {
+        party_cannon_speed_after_turn(current_speed, angle, 0.5)
+    };
+    let mut radius = party_cannon_turn_radius(turn_speed);
+    let side = right.dot(target_delta).signum();
+
+    if angle < 1.0e-4 || side.abs() < 1.0e-4 {
+        if angle < 1.0e-4 {
+            return (direct_distance, 0.0, radius, angle);
+        }
+        let turn_distance = radius * angle;
+        return (turn_distance + (direct_distance - turn_distance).max(0.0), turn_distance, radius, angle);
+    }
+
+    let mut center = car.location + right * (side * radius);
+    let mut center_to_target = target - center;
+    center_to_target = center_to_target - normal * center_to_target.dot(normal);
+    let mut center_distance = center_to_target.magnitude();
+
+    if center_distance < radius {
+        let lateral_component = right.dot(target_direction).abs().max(1.0e-4);
+        radius = direct_distance / (2.0 * lateral_component);
+        center = car.location + right * (side * radius);
+        center_to_target = target - center;
+        center_to_target = center_to_target - normal * center_to_target.dot(normal);
+        center_distance = center_to_target.magnitude();
+    }
+
+    if !radius.is_finite() || !center_distance.is_finite() || center_distance < 1.0 {
+        return (direct_distance, 0.0, party_cannon_turn_radius(turn_speed), angle);
+    }
+
+    let radial_start = (car.location - center).normalize();
+    let radial_end = center_to_target.normalize();
+    let flat_angle = radial_start.dot(radial_end).clamp(-1.0, 1.0).acos();
+    let swept_angle = if target_delta.dot(heading) < 0.0 {
+        (flat_angle - 2.0 * std::f32::consts::PI).abs()
+    } else {
+        flat_angle
+    };
+    let tangent_angle = (radius / center_distance).clamp(0.0, 1.0).acos();
+    let arc_angle = (swept_angle - tangent_angle).clamp(0.0, 2.0 * std::f32::consts::PI);
+    let tangent_distance = (center_distance * center_distance - radius * radius).max(0.0).sqrt();
+    let turn_distance = radius * arc_angle;
+    (tangent_distance + turn_distance, turn_distance, radius, angle)
+}
+
+/// Party Cannon's Drive.GetEta model for a grounded car on its current
+/// drivable surface. Returns None for airborne cars so callers can use their
+/// ballistic/landing-aware ETA instead.
+pub fn party_cannon_ground_eta(
+    car: CarState,
+    target: Vector,
+    boost_accel: f32,
+    allow_dodges: bool,
+) -> Option<f32> {
+    let surface_up = car.up().normalize();
+    if car.airborne || surface_up.z < 0.95 {
+        // This port intentionally handles the floor plane only. Wall and
+        // airborne paths fall back to Volt's existing surface-aware estimate
+        // rather than applying a flat Dubins-style approximation to them.
+        return None;
+    }
+
+    let eta_for_direction = |backwards: bool, allow_dodges: bool| {
+        let (path_distance, turn_distance, radius, angle) =
+            party_cannon_turn_geometry(&car, target, backwards);
+        let distance = (path_distance - turn_distance).max(0.0);
+        let turn_time = turn_distance
+            / party_cannon_speed_from_turn_radius(radius).max(400.0);
+        let current_speed = car.velocity.dot(car.forward().normalize());
+
+        if backwards {
+            let speed = party_cannon_speed_after_turn(-current_speed, angle, 0.8).max(1400.0);
+            return turn_time + distance / speed;
+        }
+
+        let min_speed = party_cannon_speed_after_turn(current_speed, angle, 1.0).max(1400.0);
+        let accel = boost_accel.max(0.0);
+        let boost_consumption = 33.333_333;
+        let fin_speed = (min_speed + accel * car.boost.max(0.0) / boost_consumption)
+            .clamp(1400.0, 2300.0);
+        if accel <= 0.0 {
+            return turn_time + distance / min_speed;
+        }
+
+        let distance_while_boosting =
+            ((fin_speed * fin_speed - min_speed * min_speed) / (2.0 * accel)).max(0.0);
+        if distance < distance_while_boosting {
+            let final_speed = (min_speed * min_speed + 2.0 * accel * distance)
+                .max(0.0).sqrt().clamp(1400.0, 2300.0);
+            return turn_time + distance / ((min_speed + final_speed) * 0.5).max(1.0);
+        }
+
+        let acceleration_distance = distance_while_boosting;
+        let acceleration_time = acceleration_distance
+            / ((min_speed + fin_speed) * 0.5).max(1.0);
+        let remaining = (distance - acceleration_distance).max(0.0);
+        let cruise_speed = if allow_dodges && distance / fin_speed.max(1.0) > 1.25 {
+            fin_speed + 500.0
+        } else {
+            fin_speed
+        };
+        turn_time + acceleration_time + remaining / cruise_speed.max(1.0)
+    };
+
+    let forward_eta = eta_for_direction(false, false);
+    let backward_eta = eta_for_direction(true, false);
+    let local_direction = (target - car.location).flatten().normalize();
+    let forward = car.forward().flatten().normalize();
+    let backwards = backward_eta + 0.5 < forward_eta
+        && car.forward().dot(car.velocity) < 500.0
+        && forward.dot(local_direction).clamp(-1.0, 1.0).acos()
+            > std::f32::consts::PI * 0.6;
+
+    Some(eta_for_direction(backwards, allow_dodges))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn party_cannon_turn_radius_matches_source_lookup_points() {
+        assert!((party_cannon_turn_radius(500.0) - 251.0).abs() < 1.0e-4);
+        assert!((party_cannon_turn_radius(1000.0) - 425.0).abs() < 1.0e-4);
+        assert!((party_cannon_turn_radius(1500.0) - 727.0).abs() < 1.0e-4);
+        assert!((party_cannon_turn_radius(1750.0) - 909.0).abs() < 1.0e-4);
+        assert!((party_cannon_turn_radius(2300.0) - 1136.0).abs() < 1.0e-4);
+    }
+
+    #[test]
+    fn party_cannon_speed_after_turn_matches_zero_angle_and_slows_for_turns() {
+        assert!((party_cannon_speed_after_turn(1000.0, 0.0, 1.0) - 1000.0).abs() < 1.0e-4);
+        assert!(party_cannon_speed_after_turn(2000.0, 1.0, 1.0) < 2000.0);
+    }
+
+
 
     #[test]
     fn throttle_acceleration_matches_python_curve() {

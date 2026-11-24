@@ -6,8 +6,11 @@ pub mod shot_physics;
 pub mod shot_parser;
 pub mod shot_planner;
 pub mod mechanics;
+pub mod kickoff;
 pub mod teamplay;
 pub mod bot;
+pub mod brain;
+mod contact;
 mod control;
 mod defense;
 mod math;
@@ -50,6 +53,7 @@ struct VoltRustAgent {
     brain: BotBrain,
     last_comms_signature: Vec<u8>,
     last_comms_send_time: f32,
+    last_hold_log_time: f32,
 }
 
 impl BotAgent for VoltRustAgent {
@@ -103,6 +107,7 @@ impl BotAgent for VoltRustAgent {
             brain,
             last_comms_signature: Vec::new(),
             last_comms_send_time: -999.0,
+            last_hold_log_time: -999.0,
         }
     }
 
@@ -172,9 +177,20 @@ impl BotAgent for VoltRustAgent {
             self.team as usize,
             &self.boost_pads,
         ) else {
-            // Always submit a controller for this player on every active
-            // packet. A temporarily incomplete packet must not leave the
-            // previous frame's throttle/boost/jump input latched.
+            // Never silently confuse packet decoding failure with a bot
+            // choosing to stop. Log the exact missing-packet context while
+            // still sending neutral controls for safety.
+            if game_time - self.last_hold_log_time >= 0.5 {
+                println!(
+                    "[AGENT HOLD] reason=frame_decode_none player={} players={} balls={} teams={} t={:.3}",
+                    self.index,
+                    game_packet.players.len(),
+                    game_packet.balls.len(),
+                    game_packet.teams.len(),
+                    game_time,
+                );
+                self.last_hold_log_time = game_time;
+            }
             packet_queue.push(PlayerInput {
                 player_index: self.index,
                 controller_state: ControllerState::default(),
@@ -200,6 +216,15 @@ impl BotAgent for VoltRustAgent {
 
         // VirxERLU does not run gameplay routines outside Active/Kickoff.
         if !frame.match_state.round_active {
+            if game_time - self.last_hold_log_time >= 0.5 {
+                println!(
+                    "[AGENT HOLD] reason=round_not_active player={} t={:.3} kickoff={}",
+                    self.index,
+                    game_time,
+                    frame.match_state.kickoff,
+                );
+                self.last_hold_log_time = game_time;
+            }
             packet_queue.push(PlayerInput {
                 player_index: self.index,
                 controller_state: ControllerState::default(),
