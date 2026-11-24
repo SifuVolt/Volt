@@ -41,6 +41,16 @@ fn team_side(team: u32) -> f32 {
     if team == 0 { -1.0 } else { 1.0 }
 }
 
+fn transition_bump_lead_target(me: crate::state::CarState, foe: crate::state::CarState) -> Option<Vector> {
+    let distance = me.location.flat_distance(foe.location);
+    if !(260.0..=4200.0).contains(&distance) {
+        return None;
+    }
+    let car_speed = me.velocity.flatten().magnitude();
+    let lead_time = (distance / (car_speed + 650.0).max(1100.0)).clamp(0.12, 0.55);
+    Some(foe.location + foe.velocity.flatten() * lead_time)
+}
+
 fn transition_bump_target(frame: &AgentFrame) -> Option<Vector> {
     let side = team_side(frame.me.team);
     let goal_direction = -side;
@@ -62,7 +72,7 @@ fn transition_bump_target(frame: &AgentFrame) -> Option<Vector> {
                 return None;
             }
 
-            let predicted = foe.location + foe.velocity * 0.18;
+            let predicted = transition_bump_lead_target(frame.me, *foe)?;
             Some((distance_to_ball - lane_alignment * 350.0, predicted))
         })
         .min_by(|a, b| a.0.total_cmp(&b.0))
@@ -892,6 +902,36 @@ mod tests {
             contact_x: None,
             contact_y: None,
         }
+    }
+
+    #[test]
+    fn transition_bump_uses_speed_dependent_lead_and_python_distance_limits() {
+        let me = crate::state::CarState {
+            location: Vector::ZERO,
+            velocity: Vector::new(0.0, 2000.0, 0.0),
+            ..crate::state::CarState::default()
+        };
+        let foe = crate::state::CarState {
+            location: Vector::new(1000.0, 0.0, 17.0),
+            velocity: Vector::new(0.0, 100.0, 80.0),
+            ..crate::state::CarState::default()
+        };
+        let target = transition_bump_lead_target(me, foe).unwrap();
+        let lead_time = (1000.0_f32 / 2650.0).clamp(0.12, 0.55);
+        assert!((target.y - 100.0 * lead_time).abs() < 0.001);
+        assert_eq!(target.z, 17.0);
+
+        let too_close = crate::state::CarState {
+            location: Vector::new(200.0, 0.0, 17.0),
+            ..foe
+        };
+        assert!(transition_bump_lead_target(me, too_close).is_none());
+
+        let too_far = crate::state::CarState {
+            location: Vector::new(4201.0, 0.0, 17.0),
+            ..foe
+        };
+        assert!(transition_bump_lead_target(me, too_far).is_none());
     }
 
     #[test]
