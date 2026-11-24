@@ -537,7 +537,7 @@ mod tests {
         let mut me = car(0, Vector::new(0.0, -1000.0, 1000.0));
         me.boost = 50.0;
         me.airborne = true;
-        me.orientation = Matrix3::new(-std::f32::consts::FRAC_PI_2, 0.0, 0.0);
+        me.orientation = Matrix3::new(std::f32::consts::FRAC_PI_2, 0.0, 0.0);
         let controller = GridDefense::ball_recovery_controller(me, -650.0);
         assert!(controller.boost);
         assert_eq!(controller.throttle, 1.0);
@@ -549,13 +549,13 @@ mod tests {
         wall_car.boost = 50.0;
         wall_car.airborne = true;
         wall_car.velocity = Vector::new(1000.0, 0.0, 0.0);
-        wall_car.orientation = Matrix3::new(-std::f32::consts::FRAC_PI_2, 0.0, 0.0);
+        wall_car.orientation = Matrix3::new(std::f32::consts::FRAC_PI_2, 0.0, 0.0);
         assert!(!GridDefense::ball_recovery_controller(wall_car, -650.0).boost);
 
         let mut near_floor = car(0, Vector::new(0.0, 0.0, 250.0));
         near_floor.boost = 50.0;
         near_floor.airborne = true;
-        near_floor.orientation = Matrix3::new(-std::f32::consts::FRAC_PI_2, 0.0, 0.0);
+        near_floor.orientation = Matrix3::new(std::f32::consts::FRAC_PI_2, 0.0, 0.0);
         assert!(!GridDefense::ball_recovery_controller(near_floor, -650.0).boost);
     }
 }
