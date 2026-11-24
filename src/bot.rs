@@ -3589,7 +3589,6 @@ impl BotBrain {
         if !state.side_mode {
             let party_target = state.ball - state.shot_direction * 165.0;
             let (party_shot, party_dodge) = party_cannon_jump_directions(
-                car,
                 state.ball,
                 state.shot_direction,
                 party_target,
