@@ -857,7 +857,7 @@ pub fn find_aerial_candidate(
         // Python find_shot save_mode ranks a parser-validated aerial by
         // contact time plus the aerial complexity penalty; it does not trade
         // an earlier save for a higher-quality attacking angle.
-        let score = aerial_candidate_rank(time_remaining, ordinary_score, urgent_save);
+        let score = aerial_candidate_rank(time_remaining, ordinary_score, urgent_save, parsed.fast);
         let estimate = aerial_shot_is_viable(
             &car, target_location, time_remaining, gravity, boost_accel, true,
         );
@@ -878,9 +878,14 @@ pub fn find_aerial_candidate(
     best
 }
 
-fn aerial_candidate_rank(time_remaining: f32, ordinary_score: f32, urgent_save: bool) -> f32 {
+fn aerial_candidate_rank(
+    time_remaining: f32,
+    ordinary_score: f32,
+    urgent_save: bool,
+    fast: bool,
+) -> f32 {
     if urgent_save {
-        time_remaining + 0.025
+        time_remaining + if fast { 0.005 } else { 0.025 }
     } else {
         ordinary_score
     }
@@ -957,11 +962,12 @@ mod tests {
 
     #[test]
     fn urgent_aerial_selection_uses_contact_time_not_attacking_angle_score() {
-        let earlier = aerial_candidate_rank(0.72, 1.8, true);
-        let later = aerial_candidate_rank(1.05, 0.2, true);
-        assert!(earlier < later);
+        let earlier_normal = aerial_candidate_rank(0.72, 1.8, true, false);
+        let later_fast = aerial_candidate_rank(0.74, 0.2, true, true);
+        assert!(later_fast < earlier_normal);
+        assert!((later_fast - 0.745).abs() < 0.0001);
 
-        let ordinary = aerial_candidate_rank(0.72, 1.8, false);
+        let ordinary = aerial_candidate_rank(0.72, 1.8, false, false);
         assert_eq!(ordinary, 1.8);
     }
 
