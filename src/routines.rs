@@ -1060,7 +1060,7 @@ impl StrikeExecutor {
         ball: BallState,
         candidate: Option<ShotCandidate>,
         prediction: &BallTrajectory,
-        targets: ShotTargets,
+        _targets: ShotTargets,
         gravity: Vector,
         boost_accel: f32,
         now: f32,
