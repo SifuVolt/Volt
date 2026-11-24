@@ -6174,7 +6174,7 @@ mod tests {
     }
 
     #[test]
-    fn jump_shot_uses_python_s_tilt_and_three_release_frames() {
+    fn jump_shot_s_tilts_airborne_ball_and_quick_path_skips_tilt() {
         let mut brain = BotBrain::new();
         // Put the car airborne and inside the calculated front-contact
         // window so the test reaches the three-frame release and dodge phases.
@@ -6217,7 +6217,7 @@ mod tests {
         let quick = JumpShotState { quick: true, ..state };
         let fast = brain.run_jump_shot(me, BallState { location: quick.ball, velocity: quick.ball_velocity }, &BallTrajectory { slices: Vec::new() }, quick, 1.0);
         assert!(fast.jump, "quick shots still perform the first jump");
-        assert_eq!(fast.pitch, 1.0, "airborne-ball jump shots keep the requested S tilt even when quick");
+        assert_ne!(fast.pitch, 1.0, "quick shots skip the S-tilt and prioritise the dodge");
 
         let release_1 = brain.run_jump_shot(
             me,
