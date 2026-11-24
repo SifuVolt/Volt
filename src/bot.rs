@@ -5195,37 +5195,6 @@ fn cached_ground_goal_aim_point(
 }
 
 
-fn party_cannon_jump_front_contact(
-    car: CarState,
-    ball: Vector,
-    shot_direction: Vector,
-    time_remaining: f32,
-    gravity: Vector,
-    jumping: bool,
-    previous_label: Option<&'static str>,
-) -> Option<(Vector, &'static str)> {
-    let orientation_horizon = if jumping {
-        time_remaining.max(0.0).min(0.18)
-    } else {
-        0.0
-    };
-    let impact_horizon = time_remaining.max(0.0).min(0.30);
-    let contact = crate::contact::select_front_contact(
-        car,
-        ball,
-        Vector::ZERO,
-        shot_direction,
-        gravity,
-        orientation_horizon,
-        impact_horizon,
-        0.0,
-        false,
-        previous_label,
-    )?;
-    Some((contact.approach, contact.face))
-}
-
-
 fn contact_approach_from_label(
     ball: Vector,
     shot: Vector,
