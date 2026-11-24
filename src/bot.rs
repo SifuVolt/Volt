@@ -5963,7 +5963,7 @@ mod tests {
     }
 
     #[test]
-    fn hitbox_offset_moves_the_selected_car_centre_target() {
+    fn python_ground_contact_uses_ball_surface_standoff_not_hitbox_offset() {
         let centred = car(0, 0, Vector::new(0.0, -500.0, 0.0));
         let mut offset = centred;
         offset.hitbox.offset.x = 20.0;
@@ -5974,7 +5974,9 @@ mod tests {
         let (shifted, _, _, _, _) =
             select_ground_contact(offset, ball, Vector::ZERO, aim, 0.2);
 
-        assert!((shifted.x - (plain.x - 20.0)).abs() < 0.01);
+        // Python ground_shot approaches the labelled ball surface. The
+        // separate jump-shot hitbox target applies the actual local offset.
+        assert_eq!(shifted, plain);
     }
 
     #[test]
@@ -6062,21 +6064,22 @@ mod tests {
     }
 
     #[test]
-    fn ground_contact_prefers_forward_velocity_toward_ball() {
+    fn python_ground_contact_uses_car_position_not_velocity() {
         let mut me = car(0, 0, Vector::new(0.0, -700.0, 0.0));
         me.velocity = Vector::new(0.0, 900.0, 0.0);
-        let (_, normal, quality, _, _) = select_ground_contact(
-            me,
-            Vector::new(0.0, 0.0, 100.0),
-            Vector::ZERO,
-            Vector::new(0.0, 5120.0, 300.0),
-            0.2,
-        );
+        let ball = Vector::new(0.0, 0.0, 100.0);
+        let aim = Vector::new(0.0, 5120.0, 300.0);
+        let (_, normal, quality, _, face) =
+            select_ground_contact(me, ball, Vector::ZERO, aim, 0.2);
+        me.velocity = Vector::new(0.0, -900.0, 0.0);
+        let (_, reverse_normal, reverse_quality, _, reverse_face) =
+            select_ground_contact(me, ball, Vector::ZERO, aim, 0.2);
 
-        // The selected front-face normal points from the car's contact
-        // surface toward the ball, which is in +Y from this car.
-        assert!(normal.y > 0.5);
-        assert!(quality > 0.7);
+        // Python select_ball_contact ranks the current car-to-ball side;
+        // it does not use predicted car motion or ball velocity.
+        assert!(normal.y < -0.5);
+        assert_eq!(face, reverse_face);
+        assert!((quality - reverse_quality).abs() < 1e-6);
     }
 
     #[test]
