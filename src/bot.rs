@@ -5142,6 +5142,15 @@ fn party_cannon_jump_front_contact(
 }
 
 
+fn contact_approach_from_label(
+    ball: Vector,
+    shot: Vector,
+    label: &str,
+    distance: f32,
+) -> Option<Vector> {
+    crate::contact::approach_from_face(ball, shot, label, distance)
+}
+
 fn shot_aim_point(ball: Vector, side: f32, airborne: bool) -> Vector {
     let goal = foe_goal(side);
     // Preserve Python's side-based aim-height rule exactly.
