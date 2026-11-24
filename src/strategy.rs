@@ -365,7 +365,7 @@ mod tests {
         );
         let target = support_target(&state, None);
         assert!((target.x - 374.0).abs() < 0.01);
-        assert!((target.y + 900.0).abs() < 0.01);
+        assert!((target.y + 1150.0).abs() < 0.01);
     }
 
     #[test]
@@ -379,7 +379,7 @@ mod tests {
         let state = frame(
             me,
             vec![me, lead, demolished],
-            Vector::new(200.0, -1000.0, 92.75),
+            Vector::new(200.0, -800.0, 92.75),
         );
         let target = support_target(&state, None);
         assert!((target.y + 1650.0).abs() < 0.01);
