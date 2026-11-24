@@ -256,7 +256,6 @@ impl StrikeExecutor {
         self.last_tick = None;
         self.last_debug_at = -999.0;
         self.jump_hold_duration = 0.06;
-        self.second_jump_used = false;
         self.current_jump_target = Vector::ZERO;
         self.current_shot_direction = Vector::new(1.0, 0.0, 0.0);
     }
@@ -427,7 +426,7 @@ impl StrikeExecutor {
         let (approach, shot_direction, _) =
             Self::refreshed_jump_geometry(&car, shot, targets, gravity, time_remaining);
 
-        let mut final_target = cap_in_field(&car, approach.flatten());
+        let final_target = cap_in_field(&car, approach.flatten());
         let mut distance_remaining = car.location.flat_distance(final_target);
         if car.airborne {
             distance_remaining = car.local_location(approach.flatten()).x;
@@ -617,7 +616,6 @@ impl StrikeExecutor {
         }
         let hf = predicted_velocity.z;
         let tau = (JUMP_MAX_DURATION - jump_elapsed).max(0.0);
-        predicted_velocity = predicted_velocity + car.up() * (JUMP_ACCEL * tau);
         predicted_position = predicted_position
             + car.up() * (JUMP_ACCEL * tau * (time_remaining - 0.5 * tau));
 
