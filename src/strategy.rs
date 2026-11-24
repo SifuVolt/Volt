@@ -238,11 +238,15 @@ pub fn choose_boost_pad(
     }
 
     frame.boost_pads.iter()
-        .filter(|pad| pad.active)
         .filter_map(|pad| {
             let to_pad = (pad.location - me.location).flatten();
             let distance = to_pad.magnitude();
             if distance > if me.boost < 12.0 { 2600.0 } else { 1700.0 } {
+                return None;
+            }
+            // Use RLBot's respawn countdown exactly as the Python boost-pad
+            // tracker does: don't detour when the pad becomes active too late.
+            if !pad.active && pad.timer > distance / 2300.0 {
                 return None;
             }
             let direction = to_pad.normalize();
