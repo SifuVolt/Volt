@@ -5039,7 +5039,9 @@ fn candidate_to_intercept(car:CarState,candidate:ShotCandidate,targets:ShotTarge
             };
             (
                 candidate.ball-direction*BALL_RADIUS,
-                candidate.ball-direction*contact_standoff,
+                crate::contact::hitbox_center_target(
+                    car, candidate.ball, direction, contact_standoff, 0.0,
+                ),
                 "centre",
                 1.0,
                 direction,
