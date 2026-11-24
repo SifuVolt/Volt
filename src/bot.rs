@@ -531,6 +531,98 @@ impl BotBrain {
 
         let side = team_side(me.team);
         let own_goal = Vector::new(0.0, side * 5120.0, 0.0);
+
+        // Python run_logic checks should_defensive_aerial() before its
+        // ball_in_goal_danger emergency_clear. Preserve that ordering: a
+        // reachable aerial is the first defensive response to a high ball
+        // travelling toward our net, rather than letting the ground clear
+        // pre-empt it.
+        if self.aerial_shot.is_none()
+            && self.ground_flip.is_none()
+            && self.defense_flip.is_none()
+            && self.defense_recovery_target.is_none()
+            && defensive_aerial_eligible(me, cars, ball, prediction, game_time)
+        {
+            let friends = cars.iter().filter(|car| {
+                car.team == me.team && car.index != me.index && !car.demolished
+            }).count();
+            let foes = cars.iter().filter(|car| {
+                car.team != me.team && !car.demolished
+            }).count();
+            let max_height = if friends == 0 && foes == 1 { 1200.0 } else { f32::INFINITY };
+            let min_height = if max_height > 1200.0
+                && me.location.z >= 2044.0 - me.hitbox.height * 1.1
+            {
+                551.0
+            } else if self.unlimited_boost || me.airborne {
+                150.0
+            } else {
+                450.0
+            };
+
+            // Exact Python anti_target construction: own-goal posts are
+            // extended outward and supplied in reversed order to find_aerial.
+            let own_goal_center = Vector::new(0.0, side * 5120.0, 300.0);
+            let left_post = Vector::new(-side * 820.0, side * 5120.0, 350.0);
+            let right_post = Vector::new(side * 820.0, side * 5120.0, 350.0);
+            let width_direction = (right_post - left_post).normalize();
+            let anti_targets = ShotTargets {
+                left: right_post + width_direction * 100.0,
+                right: left_post - width_direction * 100.0,
+            };
+
+            if let Some(candidate) = find_aerial_candidate(
+                me,
+                prediction,
+                own_goal_center,
+                anti_targets,
+                cars,
+                match_state.gravity,
+                self.boost_accel,
+                game_time,
+                self.kickoff_contest_until,
+                min_height,
+                max_height,
+                6.0,
+                self.unlimited_boost,
+            ) {
+                self.jump_shot = None;
+                self.double_jump_shot = None;
+                self.pending_double_jump = None;
+                self.power_clear = None;
+                self.emergency_clear = None;
+                self.emergency_save_zone_active = true;
+
+                let mut aerial = AerialShot::new(
+                    me, candidate, game_time, match_state.gravity, self.boost_accel,
+                );
+                aerial.refresh_prediction(
+                    me, prediction, game_time, own_goal_center,
+                    match_state.gravity, ball.location.z,
+                );
+                let drive = default_drive(
+                    &me,
+                    DriveInput {
+                        target_speed: MAX_SPEED,
+                        local_target: me.local_location(aerial.target_location),
+                        upside_down: false,
+                        up: None,
+                        handbrake: false,
+                        boost_accel: self.boost_accel,
+                    },
+                );
+                let controls = aerial.run(
+                    me, game_time, match_state.gravity, self.boost_accel,
+                    drive.controls.steer,
+                );
+                self.aerial_shot = Some(aerial);
+                if !aerial.aerialing && !aerial.side_wall_active {
+                    return controller_from_drive(drive, me);
+                }
+                return controls;
+            }
+        }
+
         let ball_in_goal_danger = ball.location.flat_distance(own_goal) < 400.0
             && ball.velocity.y * side > 250.0;
         if ball_in_goal_danger {
@@ -3482,6 +3574,10 @@ impl BotBrain {
                     distance_remaining, velocity, drive.target_speed,
                     aligned, side_ready, runtime_reachable,
                 );
+                // Python sets quick_shot at the actual launch frame,
+                // not when the candidate was first selected. The approach
+                // can be extended by patience, so refresh it from live T.
+                state.quick = t <= 0.45;
                 state.jumping = true;
                 state.jump_time = None;
                 self.jump_shot = Some(state);
@@ -3732,6 +3828,55 @@ impl BotBrain {
     }
 }
 
+
+fn defensive_aerial_eligible(
+    me: CarState,
+    cars: &[CarState],
+    ball: BallState,
+    prediction: &BallTrajectory,
+    game_time: f32,
+) -> bool {
+    let side = team_side(me.team);
+    let friends: Vec<CarState> = cars.iter().copied()
+        .filter(|car| car.team == me.team && car.index != me.index && !car.demolished)
+        .collect();
+
+    // Noob Black's role election does not let a passive goalie steal the
+    // aerial from the elected attacker.
+    if !friends.is_empty() {
+        let mut living = friends.clone();
+        living.push(me);
+        let roles = assign_roles_volt(
+            &living,
+            ball,
+            side,
+            Vector::new(0.0, side * 5120.0, 350.0),
+            Vector::new(0.0, -side * 5120.0, 300.0),
+            prediction,
+            game_time,
+        );
+        if roles.is_some_and(|role| role.goalie == me.index && role.challenger != me.index) {
+            return false;
+        }
+    }
+
+    let ball_depth = ball.location.y * side;
+    if ball.location.z < 350.0 || ball_depth < 0.0 {
+        return false;
+    }
+    if ball.velocity.y * side < 250.0 {
+        return false;
+    }
+
+    let own_goal = Vector::new(0.0, side * 5120.0, 350.0);
+    let toward_own_goal = (own_goal - me.location).flatten().normalize();
+    let car_forward = me.forward().flatten().normalize();
+    if car_forward.dot(toward_own_goal) < 0.35 {
+        return false;
+    }
+
+    me.location.distance(ball.location) <= 3000.0
+}
 
 fn receive_plan(car: CarState, contact: Vector, aim: Vector) -> Option<(Vector, Vector, Vector)> {
     let mut lane = (aim - contact).flatten();
