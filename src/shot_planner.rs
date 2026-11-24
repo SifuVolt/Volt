@@ -167,7 +167,7 @@ pub fn score_aerial_candidate(
     value
 }
 
-fn reserve(me:CarState,ball:Vector,t:f32,kind:ShotType,g:f32,unlimited:bool)->f32 {
+pub(crate) fn reserve(me:CarState,ball:Vector,t:f32,kind:ShotType,g:f32,unlimited:bool)->f32 {
     if unlimited || kind==ShotType::Ground {return 0.0;}
     let height=(ball.z-R-me.location.z).max(0.0);
     let flat=me.location.flat_distance(ball);
@@ -482,7 +482,7 @@ fn parse_any_budget(
     ParsedShot::default()
 }
 
-fn score_any(
+pub(crate) fn score_any(
     me: CarState,
     friends: &[CarState],
     ball: Vector,
