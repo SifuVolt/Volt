@@ -818,25 +818,132 @@ fn grid_profile(car:CarState)->(Vec<f32>,Vec<f32>) {
     }
     (ds,vs)
 }
-#[derive(Clone,Copy)]struct GridJump{time:f32,ball:Vector,contact:Vector}
-fn find_grid_jump(car:CarState,pred:&BallTrajectory,tg:ShotTargets,horizon:f32)->Option<GridJump> {
-    if car.airborne {return None;}
-    let target=center(tg);let (ds,vs)=grid_profile(car);let mut best=None;
-    for s in &pred.slices {
-        let t=s.time;if t<0.05 {continue;}if t>horizon {break;}
-        if ((t*60.0).round()/60.0-t).abs()>0.009 {continue;}
-        if s.location.y.abs()>5212.75 {break;}
-        let dir=(target-s.location).normalize();let contact=s.location-dir*R;
-        let distance=contact.flat_distance(car.location);
-        let Some(jt)=grid_jump_time((contact.z-car.location.z).max(0.0),true) else{continue;};
-        if contact.z as f64>car.location.z as f64+grid_max_jump_height(true)+60.0 {continue;}
-        let charge=(t*120.0).round().clamp(0.0,600.0) as usize;
-        let drive=((t-jt).max(0.0).min(5.0)*120.0).round().clamp(0.0,600.0) as usize;
-        let reach=ds[drive]+vs[drive]*(charge as f32-drive as f32)/120.0;
-        if reach<distance {continue;}
-        if best.is_none_or(|b:GridJump|t<b.time) {best=Some(GridJump{time:t,ball:s.location,contact});}
+#[derive(Clone, Copy)]
+struct GridJump {
+    time: f32,
+    ball: Vector,
+    contact: Vector,
+}
+
+fn grid_double_jump_height_reachable(car: CarState, ball: Vector, targets: ShotTargets) -> bool {
+    let car_to_ball = (ball - car.location).normalize();
+    let left = (targets.left - ball).normalize();
+    let right = (targets.right - ball).normalize();
+    let direction = if car_to_ball.magnitude() < 1.0 {
+        left
+    } else {
+        car_to_ball.clamp_2d(left, right)
+    };
+    let contact_z = ball.z - direction.z * R;
+    let required_height = (contact_z - car.location.z).max(0.0);
+    grid_jump_time(required_height, true).is_some()
+}
+
+fn grid_needs_backwall_alignment(ball: Vector, velocity: Vector, goal_y: f32) -> bool {
+    ball.x.abs() < 3000.0
+        && ball.x.abs() - 890.0 + R * 2.0_f32.sqrt() > (ball.y - goal_y).abs()
+        && velocity.x * ball.x.signum() < 0.0
+}
+
+/// Grid's independent double-jump scan, including its patient back-wall
+/// alignment delay. The latter prevents selecting a side-skimming contact
+/// that is technically reachable but still has a poor shooting lane.
+fn find_grid_jump(
+    car: CarState,
+    prediction: &BallTrajectory,
+    targets: ShotTargets,
+    horizon: f32,
+) -> Option<GridJump> {
+    if car.airborne {
+        return None;
     }
-    best
+
+    let target = center(targets);
+    let (distances, velocities) = grid_profile(car);
+    let mut best: Option<GridJump> = None;
+
+    for slice in &prediction.slices {
+        let time = slice.time;
+        if time < 0.05 {
+            continue;
+        }
+        if time > horizon {
+            break;
+        }
+        if ((time * 60.0).round() / 60.0 - time).abs() > 0.009 {
+            continue;
+        }
+        if slice.location.y.abs() > 5212.75 {
+            break;
+        }
+
+        let direction = (target - slice.location).normalize();
+        let contact = slice.location - direction * R;
+        let distance = contact.flat_distance(car.location);
+        let Some(jump_time) = grid_jump_time((contact.z - car.location.z).max(0.0), true) else {
+            continue;
+        };
+        if contact.z as f64 > car.location.z as f64 + grid_max_jump_height(true) + 60.0 {
+            continue;
+        }
+
+        let charging_ticks = (time * 120.0).round().clamp(0.0, 600.0) as usize;
+        let driving_ticks = ((time - jump_time).max(0.0).min(5.0) * 120.0)
+            .round()
+            .clamp(0.0, 600.0) as usize;
+        let reachable = distances[driving_ticks]
+            + velocities[driving_ticks]
+                * (charging_ticks as f32 - driving_ticks as f32)
+                / 120.0;
+        if reachable < distance {
+            continue;
+        }
+
+        if best.is_none_or(|current| time < current.time) {
+            best = Some(GridJump {
+                time,
+                ball: slice.location,
+                contact,
+            });
+        }
+    }
+
+    let mut selected = best?;
+    let selected_index = prediction.slices.iter()
+        .position(|slice| (slice.time - selected.time).abs() < 1.0e-5)?;
+    let selected_slice = prediction.slices[selected_index];
+    let goal_y = target.y;
+    if grid_needs_backwall_alignment(
+        selected_slice.location,
+        selected_slice.velocity,
+        goal_y,
+    ) {
+        // Python _select_patient_intercept waits for the first later
+        // prediction that has entered the central shooting lane and remains
+        // vertically reachable by Grid's double-jump model.
+        for slice in prediction.slices.iter().skip(selected_index + 1) {
+            if slice.time > horizon {
+                break;
+            }
+            if slice.location.y.abs() > 5212.75 {
+                break;
+            }
+            let aligned = (
+                slice.location.x.abs() - 890.0 + R * 2.0_f32.sqrt()
+            ) <= (slice.location.y - goal_y).abs();
+            if aligned && grid_double_jump_height_reachable(car, slice.location, targets) {
+                let direction = (target - slice.location).normalize();
+                selected = GridJump {
+                    time: slice.time,
+                    ball: slice.location,
+                    contact: slice.location - direction * R,
+                };
+                break;
+            }
+        }
+    }
+
+    Some(selected)
 }
 
 #[cfg(test)]
@@ -847,6 +954,52 @@ mod tests {
     fn test_car()->CarState {CarState{index:0,team:0,location:Vector::new(0.0,-1000.0,17.0),velocity:Vector::new(0.0,1200.0,0.0),orientation:Matrix3::new(0.0,1.5707963,0.0),angular_velocity:Vector::ZERO,demolished:false,airborne:false,supersonic:false,jumped:false,doublejumped:false,air_state:AirState::OnGround,has_jumped:false,has_double_jumped:false,has_dodged:false,dodge_timeout:0.0,dodge_elapsed:0.0,dodge_dir:Vector::ZERO,flip_reset_available:false,boost:50.0,hitbox:Hitbox{length:118.0,width:84.0,height:36.0,offset:Vector::ZERO}}}
     #[test]fn grid_jump_time_matches_source_polynomial(){assert!(grid_jump_time(200.0,false).is_some());assert!(grid_jump_time(350.0,true).is_some());assert!(grid_jump_time(5.0,true).is_some());}
     #[test]fn grid_profile_has_601_120hz_samples(){let(d,v)=grid_profile(test_car());assert_eq!(d.len(),601);assert_eq!(v.len(),601);assert!(d[600]>d[0]);}
+    #[test]
+    fn grid_double_jump_delays_a_side_backwall_touch_until_the_lane_aligns() {
+        let mut car = test_car();
+        car.location = Vector::new(1450.0, 4400.0, 17.0);
+        car.velocity = Vector::new(0.0, 500.0, 0.0);
+        car.boost = 70.0;
+        let targets = ShotTargets {
+            left: Vector::new(-820.0, 5120.0, 350.0),
+            right: Vector::new(820.0, 5120.0, 350.0),
+        };
+        let prediction = BallTrajectory {
+            slices: vec![
+                BallSlice {
+                    time: 0.50,
+                    location: Vector::new(1500.0, 4500.0, 350.0),
+                    velocity: Vector::new(-200.0, 0.0, 0.0),
+                },
+                BallSlice {
+                    time: 0.60,
+                    location: Vector::new(1400.0, 4500.0, 350.0),
+                    velocity: Vector::new(-200.0, 0.0, 0.0),
+                },
+                BallSlice {
+                    time: 0.70,
+                    location: Vector::new(1300.0, 4500.0, 350.0),
+                    velocity: Vector::new(-200.0, 0.0, 0.0),
+                },
+            ],
+        };
+
+        assert!(grid_needs_backwall_alignment(
+            prediction.slices[0].location,
+            prediction.slices[0].velocity,
+            5120.0,
+        ));
+        assert!(!grid_needs_backwall_alignment(
+            prediction.slices[2].location,
+            prediction.slices[2].velocity,
+            5120.0,
+        ));
+
+        let candidate = find_grid_jump(car, &prediction, targets, 2.0).unwrap();
+        assert!((candidate.time - 0.70).abs() < 0.001);
+        assert_eq!(candidate.ball, prediction.slices[2].location);
+    }
+
     #[test]
     fn untargeted_score_prefers_approach_from_behind_ball() {
         let behind = test_car();
