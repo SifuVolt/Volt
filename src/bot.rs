@@ -5,6 +5,7 @@
 //! timed shot execution all feed the live RLBot controller.
 
 use crate::{
+    approach::Approach,
     aerial::{find_aerial_candidate, find_any_aerial_candidate, find_fast_aerial_candidate, party_cannon_contact_geometry, party_cannon_shot_direction, wall_shot_adjust_jump, AerialCandidate, AerialShot},
     control::{default_drive, default_pd, DriveInput},
     defense::GridDefense,
@@ -2925,8 +2926,18 @@ impl BotBrain {
                 );
                 target
             };
-            let distance_remaining = final_target.flat_distance(car.location)
-                - car.hitbox.length / 3.0;
+            // Plan a curvature-constrained ground route to the contact pose.
+            // The Dubins endpoint faces the intended outgoing shot direction,
+            // so the car arrives already aligned instead of steering directly
+            // at a point and correcting its heading at the last moment.
+            let approach_path = if !car.airborne {
+                Approach::new(&car, final_target, shot_vector)
+            } else {
+                None
+            };
+            let route_distance = approach_path
+                .map_or_else(|| final_target.flat_distance(car.location), |path| path.path_length);
+            let distance_remaining = route_distance - car.hitbox.length / 3.0;
             let mut speed_required = if close_contact {
                 MAX_SPEED
             } else {
@@ -2951,11 +2962,21 @@ impl BotBrain {
             let local_final_target = car.local_location(final_target);
             let local_offset_target = car.local_location(offset_target.flatten());
             let angle_to_target = local_final_target.y.atan2(local_final_target.x).abs();
+            // Recalculate after field clamping; the unclamped route above is
+            // retained for ETA parity, while this path supplies the live
+            // look-ahead point for steering.
+            let live_approach = if !car.airborne {
+                Approach::new(&car, final_target, shot_vector)
+            } else {
+                None
+            };
+            let drive_target = live_approach.map_or(final_target, |path| path.waypoint);
+            let local_drive_target = car.local_location(drive_target);
             let output = default_drive(
                 &car,
                 DriveInput {
                     target_speed: speed_required,
-                    local_target: local_final_target,
+                    local_target: local_drive_target,
                     upside_down: false,
                     up: None,
                     handbrake: false,
