@@ -293,6 +293,25 @@ pub fn choose_boost_pad(
         .map(|(_, location)| location)
 }
 
+/// Python support.get_support_pad(): take only a nearby small pad which
+/// is close to both the car and its support position.
+pub fn choose_support_pad(frame: &AgentFrame, target: Vector) -> Option<Vector> {
+    let me = frame.me;
+    if me.boost >= 30.0 {
+        return None;
+    }
+
+    frame.boost_pads.iter()
+        .filter(|pad| pad.active && !pad.large)
+        .filter(|pad| pad.location.flat_distance(me.location) < 750.0)
+        .filter(|pad| pad.location.flat_distance(target) < 550.0)
+        .min_by(|a, b| {
+            a.location.flat_distance(me.location)
+                .total_cmp(&b.location.flat_distance(me.location))
+        })
+        .map(|pad| pad.location)
+}
+
 pub fn opponent_near_ball(frame: &AgentFrame, radius: f32) -> bool {
     frame.cars.iter().any(|car| {
         car.team != frame.me.team
@@ -354,6 +373,34 @@ mod tests {
         let target = support_target(&state, None);
         assert_eq!(target.x, -2250.0);
         assert_eq!(target.y, -2650.0);
+    }
+
+    #[test]
+    fn support_pad_prefers_a_nearby_small_pad_and_ignores_full_or_distant_pads() {
+        let mut me = make_car(0, 0, Vector::new(0.0, -1000.0, 17.0));
+        me.boost = 20.0;
+        let small = crate::state::BoostPadState {
+            index: 0, location: Vector::new(300.0, -1050.0, 70.0),
+            large: false, active: true, timer: 0.0,
+        };
+        let full = crate::state::BoostPadState {
+            index: 1, location: Vector::new(100.0, -1000.0, 70.0),
+            large: true, active: true, timer: 0.0,
+        };
+        let distant = crate::state::BoostPadState {
+            index: 2, location: Vector::new(1000.0, -1000.0, 70.0),
+            large: false, active: true, timer: 0.0,
+        };
+        let mut state = frame(me, vec![me], Vector::ZERO);
+        state.boost_pads = vec![small, full, distant];
+        assert_eq!(
+            choose_support_pad(&state, Vector::new(250.0, -1000.0, 0.0)),
+            Some(small.location),
+        );
+
+        me.boost = 35.0;
+        state.me = me;
+        assert_eq!(choose_support_pad(&state, Vector::new(250.0, -1000.0, 0.0)), None);
     }
 
     #[test]
