@@ -5023,6 +5023,7 @@ fn candidate_to_intercept(car:CarState,candidate:ShotCandidate,targets:ShotTarge
     } else {
         targets
     };
+    let contact_standoff = BALL_RADIUS + car.hitbox.length * 0.5;
 
     let (mut contact_point,mut approach,mut contact_face,contact_quality,shot_direction,side_shot) =
         if untargeted {
