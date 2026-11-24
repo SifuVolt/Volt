@@ -39,15 +39,10 @@ fn target_center(targets: ShotTargets) -> Vector {
     (targets.left + targets.right) * 0.5
 }
 
-/// Ground shots use Volt's relative goal aim point: high centre while the
-/// ball is in our half, otherwise just above centre for a grounded car.
-fn ground_shot_direction(
-    car: &CarState,
-    ball: Vector,
-    live_ball: Vector,
-    targets: ShotTargets,
-    fallback: Vector,
-) -> Vector {
+/// Python _relative_goal_aim_point: blue is side -1, orange is side +1.
+/// The returned z is retained for diagnostics/tests even though the current
+/// ground-shot vector is flattened before contact-direction calculation.
+fn ground_aim_point(car: &CarState, live_ball: Vector, targets: ShotTargets) -> Vector {
     let mut aim = target_center(targets);
     aim.z = 300.0;
     let python_team_side = if car.team == 0 { -1.0 } else { 1.0 };
@@ -58,6 +53,17 @@ fn ground_shot_direction(
     } else {
         aim.z += 10.0;
     }
+    aim
+}
+
+fn ground_shot_direction(
+    car: &CarState,
+    ball: Vector,
+    live_ball: Vector,
+    targets: ShotTargets,
+    fallback: Vector,
+) -> Vector {
+    let aim = ground_aim_point(car, live_ball, targets);
     let direction = (aim - ball).flatten().normalize();
     if direction.magnitude() > 0.001 {
         direction
@@ -1543,22 +1549,21 @@ mod tests {
         orange.team = 1;
 
         assert_eq!(
-            ground_shot_direction(
-                &blue, Vector::new(0.0, -1000.0, 100.0),
-                Vector::new(0.0, -1000.0, 100.0), targets, Vector::new(0.0, 1.0, 0.0),
-            ),
-            Vector::new(0.0, 1.0, 0.0),
+            ground_aim_point(&blue, Vector::new(0.0, -1000.0, 100.0), targets).z,
+            310.0,
         );
-        let blue_opponent_half = ground_shot_direction(
-            &blue, Vector::new(0.0, 1000.0, 100.0),
-            Vector::new(0.0, 1000.0, 100.0), targets, Vector::new(0.0, 1.0, 0.0),
+        assert_eq!(
+            ground_aim_point(&blue, Vector::new(0.0, 1000.0, 100.0), targets).z,
+            470.0,
         );
-        let orange_own_half = ground_shot_direction(
-            &orange, Vector::new(0.0, 1000.0, 100.0),
-            Vector::new(0.0, 1000.0, 100.0), targets, Vector::new(0.0, 1.0, 0.0),
+        assert_eq!(
+            ground_aim_point(&orange, Vector::new(0.0, 1000.0, 100.0), targets).z,
+            310.0,
         );
-        assert!(blue_opponent_half.magnitude() > 0.99);
-        assert!(orange_own_half.magnitude() > 0.99);
+        assert_eq!(
+            ground_aim_point(&orange, Vector::new(0.0, -1000.0, 100.0), targets).z,
+            470.0,
+        );
     }
 
     #[test]
