@@ -16,6 +16,8 @@ use rlbot::flat::ControllerState;
 pub struct DriveRequest {
     pub target: Vector,
     pub target_speed: f32,
+    /// Optional final-facing vector used by Python goto (e.g. support facing ball).
+    pub vector: Option<Vector>,
     pub boost_accel: f32,
     pub allow_handbrake: bool,
     /// Keep forward momentum for a shot approach instead of braking at the
@@ -28,6 +30,7 @@ impl DriveRequest {
         Self {
             target,
             target_speed: 2300.0,
+            vector: None,
             boost_accel,
             allow_handbrake: true,
             preserve_momentum: false,
@@ -50,10 +53,27 @@ fn speed_for_heading(angle: f32) -> f32 {
     }
 }
 
+fn apply_approach_vector(car: &CarState, target: Vector, vector: Vector) -> Vector {
+    let car_to_target = target - car.location;
+    let side = vector.cross(Vector::new(0.0, 0.0, 1.0)).dot(car_to_target);
+    let side = if side < 0.0 { -1.0 } else if side > 0.0 { 1.0 } else { 0.0 };
+    let perpendicular = car_to_target
+        .cross(Vector::new(0.0, 0.0, side))
+        .normalize();
+    let adjustment = car_to_target.angle_2d(vector) * car_to_target.flatten().magnitude()
+        / std::f32::consts::PI;
+    target.flatten() + perpendicular * adjustment
+}
+
 /// Volt-style speed-aware ground drive. A shot approach can request
 /// preserve_momentum so the car accelerates through the contact window.
 pub fn drive_to(car: &CarState, request: DriveRequest) -> ControllerState {
-    let target = cap_in_field(car, request.target);
+    // Match Python goto.vector: curve the final approach so the car faces
+    // the requested vector when it reaches the stationary target.
+    let requested_target = request.vector
+        .map(|vector| apply_approach_vector(car, request.target, vector))
+        .unwrap_or(request.target);
+    let target = cap_in_field(car, requested_target);
     let local_target = car.local_location(target);
     let distance = local_target.flatten().magnitude();
     let heading = local_target.y.atan2(local_target.x);
@@ -194,6 +214,7 @@ mod tests {
             DriveRequest {
                 target: Vector::new(200.0, 0.0, 0.0),
                 target_speed: 2300.0,
+                vector: None,
                 boost_accel: 991.6667,
                 allow_handbrake: false,
                 preserve_momentum: true,
@@ -201,6 +222,19 @@ mod tests {
         );
         assert!(controller.throttle >= 0.0);
         assert!(!controller.handbrake);
+    }
+
+    #[test]
+    fn approach_vector_bends_the_route_without_changing_the_target() {
+        let me = car(Vector::ZERO, Vector::ZERO);
+        let direct = apply_approach_vector(
+            &me,
+            Vector::new(0.0, 1000.0, 0.0),
+            Vector::new(1000.0, 0.0, 0.0),
+        );
+        assert!(direct.x > 0.0);
+        assert!(direct.y > 0.0);
+        assert!(direct.z.abs() < 0.001);
     }
 
     #[test]
