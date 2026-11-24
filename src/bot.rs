@@ -4875,27 +4875,44 @@ fn assign_roles(cars: &[CarState], ball: BallState, side: f32) -> Option<TeamRol
 
 /// Port of tools.select_ball_contact: select centre/left/right/high/low
 /// contact using the car's current approach and the intended shot direction.
-fn select_ball_contact(car: CarState, ball: Vector, targets: ShotTargets) -> (Vector, Vector, &'static str, f32) {
-    let target_center=(targets.left+targets.right)*0.5;
-    let mut shot_direction=(target_center-ball).flatten().normalize();
-    if shot_direction.magnitude()<0.001 {
-        shot_direction=Vector::new(0.0,team_side(car.team),0.0);
+fn select_ball_contact(
+    car: CarState,
+    ball: Vector,
+    ball_velocity: Vector,
+    targets: ShotTargets,
+    time: f32,
+    previous_face: Option<&'static str>,
+) -> (Vector, Vector, &'static str, f32) {
+    let target_center = (targets.left + targets.right) * 0.5;
+    let mut shot_direction = (target_center - ball).flatten().normalize();
+    if shot_direction.magnitude() < 0.001 {
+        shot_direction = Vector::new(0.0, -team_side(car.team), 0.0);
     }
-    let lateral=Vector::new(-shot_direction.y,shot_direction.x,0.0).normalize();
-    let car_from_ball=(car.location-ball).normalize();
-    let candidates=[
-        ("centre",-shot_direction),
-        ("left",(-shot_direction+lateral*0.55).normalize()),
-        ("right",(-shot_direction-lateral*0.55).normalize()),
-        ("high",(-shot_direction+Vector::new(0.0,0.0,0.30)).normalize()),
-        ("low",(-shot_direction-Vector::new(0.0,0.0,0.30)).normalize()),
-    ];
-    let (label,normal,quality)=candidates.into_iter().map(|(label,normal)|{
-        let approach_alignment=car_from_ball.dot(normal);
-        let shot_alignment=(-normal).dot(shot_direction);
-        (label,normal,approach_alignment*0.75+shot_alignment*0.25)
-    }).max_by(|a,b|a.2.total_cmp(&b.2)).unwrap_or(("centre",-shot_direction,0.0));
-    (ball+normal*BALL_RADIUS,ball+normal*120.0,label,quality)
+
+    let horizon = time.clamp(0.0, 0.18);
+    let Some(contact) = crate::contact::select_front_contact(
+        car,
+        ball,
+        ball_velocity,
+        shot_direction,
+        Vector::ZERO,
+        horizon,
+        horizon,
+        0.08,
+        true,
+        previous_face,
+    ) else {
+        let contact_point = ball - shot_direction * BALL_RADIUS;
+        let approach = ball - shot_direction * (BALL_RADIUS + car.hitbox.length * 0.5);
+        return (contact_point, approach, "centre", 0.0);
+    };
+
+    (
+        contact.contact_point,
+        contact.approach,
+        contact.face,
+        contact.quality,
+    )
 }
 
 fn select_side_shot(car:CarState,candidate:ShotCandidate,targets:ShotTargets)->Option<SideShotPlan> {
@@ -4951,7 +4968,6 @@ fn candidate_to_intercept(car:CarState,candidate:ShotCandidate,targets:ShotTarge
         targets
     };
 
-    let contact_standoff=BALL_RADIUS+car.hitbox.length*0.5;
     let (mut contact_point,mut approach,mut contact_face,contact_quality,shot_direction,side_shot) =
         if untargeted {
             // fast_intercept_finder constructs routines without a target
@@ -4974,9 +4990,14 @@ fn candidate_to_intercept(car:CarState,candidate:ShotCandidate,targets:ShotTarge
                 None,
             )
         } else {
-            let (point,_,face,quality)=select_ball_contact(car,candidate.ball,selected_targets);
-            let normal=(point-candidate.ball).normalize();
-            let approach=candidate.ball+normal*contact_standoff;
+            let (point,approach,face,quality)=select_ball_contact(
+                car,
+                candidate.ball,
+                candidate.ball_velocity,
+                selected_targets,
+                candidate.time,
+                None,
+            );
             let side=select_side_shot(car,candidate,selected_targets);
             let direction=side.map_or(candidate.shot_direction,|s|s.shot_direction);
             let (approach,point,face)=if let Some(side)=side {
