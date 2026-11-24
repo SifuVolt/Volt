@@ -1,4 +1,5 @@
 use crate::math::Vector;
+use crate::state::CarState;
 
 /// Exact throttle-only acceleration curve used by Volt's Python
 /// `throttle_acceleration` utility. Input is local forward velocity.
