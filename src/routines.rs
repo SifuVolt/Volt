@@ -1619,7 +1619,7 @@ mod tests {
         assert!(dodge.jump);
         assert_eq!(dodge.pitch, -1.0);
 
-        let after_dodge = kickoff.tick_kicker(grounded, close_ball, 0, 991.6667, 1.10);
+        let after_dodge = kickoff.tick_kicker(grounded, close_ball, 0, 991.6667, 1.11);
         assert!(!after_dodge.jump);
     }
 
