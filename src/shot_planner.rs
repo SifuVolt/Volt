@@ -945,16 +945,16 @@ mod tests {
     }
 
     #[test]
-    fn intercept_selection_prefers_earliest_valid_contact_over_later_score() {
-        assert!(prefer_earlier_candidate(1.0, 2.0, Some((1.5, 0.1))));
-        assert!(!prefer_earlier_candidate(1.5, 0.1, Some((1.0, 2.0))));
+    fn intercept_selection_prefers_python_lowest_score_over_earliest_time() {
+        assert!(!prefer_earlier_candidate(1.0, 2.0, Some((1.5, 0.1))));
+        assert!(prefer_earlier_candidate(1.5, 0.05, Some((1.0, 0.1))));
+        assert!(prefer_earlier_candidate(1.0, 0.0, None));
     }
 
     #[test]
-    fn intercept_selection_uses_score_only_for_same_time_ties() {
-        assert!(prefer_earlier_candidate(1.0, 0.5, Some((1.0, 1.0))));
-        assert!(!prefer_earlier_candidate(1.0, 1.5, Some((1.0, 1.0))));
-        assert!(prefer_earlier_candidate(1.0, 0.0, None));
+    fn intercept_selection_keeps_first_candidate_when_scores_tie() {
+        assert!(!prefer_earlier_candidate(1.0, 1.0, Some((1.0, 1.0))));
+        assert!(!prefer_earlier_candidate(1.5, 1.0, Some((1.0, 1.0))));
     }
 
     #[test]
