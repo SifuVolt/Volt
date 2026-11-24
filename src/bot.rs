@@ -900,7 +900,12 @@ impl BotBrain {
         game_time: f32,
     ) -> ControllerState {
         let local_ball = car.local_location(ball.location);
-        let (_, mut controller) = default_pd(&car, local_ball, false, None);
+        let (_, pd) = default_pd(&car, local_ball, false, None);
+        let mut controller = ControllerState::default();
+        controller.steer = pd.steer;
+        controller.pitch = pd.pitch;
+        controller.yaw = pd.yaw;
+        controller.roll = pd.roll;
         controller.throttle = 1.0;
 
         match state.phase {
