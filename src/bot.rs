@@ -3628,14 +3628,20 @@ impl BotBrain {
         // Python's shot_patience.adjust runs inside the routine, including
         // the first frame after the shot is selected. Do not wait until the
         // car reaches the jump window before allowing the intercept to move.
-        if !state.jumping && !state.patience_applied {
+        if !state.patience_applied {
             let foe_goal_y = -team_side(car.team) * 5120.0;
             if let Some((new_time, later_slice)) = shot_patience_adjustment(
                 car, &prediction.slices, game_time, state.intercept_time, foe_goal_y,
             ) {
                 state.intercept_time = new_time;
-                state.ball = later_slice.location;
-                state.ball_velocity = later_slice.velocity;
+                // Python always calls shot_patience.adjust(), even after the
+                // jump starts, but it only refreshes ball_location before
+                // jumping. Preserve that split: move T without replacing the
+                // already-committed in-flight contact point.
+                if !state.jumping {
+                    state.ball = later_slice.location;
+                    state.ball_velocity = later_slice.velocity;
+                }
                 state.patience_applied = true;
             }
         }
