@@ -8,7 +8,6 @@
 use crate::{
     aerial::wall_shot_adjust_jump,
     control::{default_drive, default_pd, DriveInput},
-    drive::{drive_to, DriveRequest},
     math::{utils::{cap, cap_in_field}, Vector},
     physics::drive::dodge_impulse,
     prediction::{BallSlice, BallTrajectory},
@@ -1757,9 +1756,8 @@ mod tests {
         );
         assert!(!release.jump);
 
-        let mut dodge = ControllerState::default();
         for i in 0..3 {
-            dodge = executor.tick(
+            let _ = executor.tick(
                 me,
                 live_ball,
                 None,
@@ -1770,7 +1768,7 @@ mod tests {
                 1.09 + (i as f32 + 1.0) / 120.0,
             );
         }
-        dodge = executor.tick(
+        let dodge = executor.tick(
             me,
             live_ball,
             None,
