@@ -1238,8 +1238,13 @@ impl BotBrain {
             roles.map(|role| role.challenger == me.index).unwrap_or(false)
         };
         let is_goalie = roles.map(|r| r.goalie == me.index).unwrap_or(false);
+        // Python len(agent.friends) includes demolished teammates. Count the
+        // packet roster here rather than the living role-election subset.
+        let teammate_roster_size = cars.iter()
+            .filter(|car| car.team == me.team && car.index != me.index)
+            .count() + 1;
         let can_take_untargeted_fallback =
-            allows_untargeted_fallback(living_teammates.len(), is_challenger);
+            allows_untargeted_fallback(teammate_roster_size, is_challenger);
         self.teamplay_cover_owner = roles.and_then(|r| {
             if r.goalie != r.challenger { Some(r.goalie) } else { None }
         });
