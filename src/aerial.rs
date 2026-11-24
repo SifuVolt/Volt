@@ -11,7 +11,7 @@ use crate::{
     math::Vector,
     prediction::{BallSlice, BallTrajectory},
     shot_physics::{aerial_shot_is_viable, ShotType},
-    shot_parser::{parse_slice_for_shot_with_target, ShotTargets},
+    shot_parser::{parse_slice_for_shot_with_target, ParsedShot, ShotTargets},
     shot_planner::{
         parse_untargeted_aerial_budget, score_aerial_candidate,
         score_untargeted_aerial_candidate,
@@ -661,6 +661,20 @@ pub fn wall_shot_adjust_aerial(
         .clamp(-1.0, 1.0).asin();
     let adjusted = (tangent.normalize() * angle.cos() + normal * angle.sin()).normalize();
     (adjusted, Some(normal), target_height)
+}
+
+/// Python's fast-aerial floor is checked on the final parser result,
+/// after boost-budget re-parsing has had a chance to change the shot subtype.
+fn reject_low_fast_aerial(parsed: ParsedShot, predicted_height: f32, live_height: f32) -> ParsedShot {
+    if parsed.found
+        && parsed.shot_type == Some(ShotType::Aerial)
+        && parsed.fast
+        && (predicted_height <= 350.0 || live_height <= 350.0)
+    {
+        ParsedShot::default()
+    } else {
+        parsed
+    }
 }
 
 /// Fast-zone aerial scan from routines.fast_intercept_finder. It keeps the
