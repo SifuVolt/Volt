@@ -799,6 +799,7 @@ impl BotBrain {
         let enemy_near_ball = opponent_near_ball(frame, 1700.0);
         let mut status = "NO_SHOT";
         let cover_released = false;
+        let mut movement_vector = None;
         let mut movement_target = match plan.role {
             Role::Cover => {
                 status = "DEFEND";
@@ -807,6 +808,7 @@ impl BotBrain {
             Role::Support | Role::KickoffCheat | Role::KickoffBoost => {
                 let target = support_target(frame, self.last_support_target);
                 self.last_support_target = Some(target);
+                movement_vector = Some(ball.location);
                 target
             }
             Role::Challenge => {
@@ -820,6 +822,7 @@ impl BotBrain {
         if plan.role == Role::Support && !enemy_near_ball {
             if let Some(bump_target) = transition_bump_target(frame) {
                 movement_target = bump_target;
+                movement_vector = None;
             }
         }
 
@@ -849,7 +852,7 @@ impl BotBrain {
                 DriveRequest {
                     target: movement_target,
                     target_speed: if plan.role == Role::Challenge { 2300.0 } else { 1900.0 },
-                    vector: if plan.role == Role::Support { Some(ball.location) } else { None },
+                    vector: movement_vector,
                     boost_accel,
                     allow_handbrake: true,
                     preserve_momentum: plan.role == Role::Challenge,
