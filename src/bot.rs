@@ -3041,14 +3041,10 @@ impl BotBrain {
             let goal_aim = cached_ground_goal_aim_point(
                 &mut self.ground_shot_goal_aim_point, car, ball.location, shot.targets,
             );
+            // Python ground_shot always uses its cached relative goal aim,
+            // including routines created by the untargeted fast-intercept finder.
             let shot_vector = shot.side_shot.map_or_else(
-                || {
-                    if parser_has_targets {
-                        (goal_aim - shot.ball).flatten().normalize()
-                    } else {
-                        shot.shot_direction.flatten().normalize()
-                    }
-                },
+                || (goal_aim - shot.ball).flatten().normalize(),
                 |side| side.shot_direction.flatten().normalize(),
             );
             shot.shot_direction = shot_vector;
@@ -3056,6 +3052,12 @@ impl BotBrain {
             // Refresh the same hitbox-aware contact geometry used when the
             // candidate was selected. Untargeted touches stay centred on the
             // opponent-goal ray; targeted shots preserve their best face.
+            let contact_targets = if parser_has_targets {
+                shot.targets
+            } else {
+                let goal = foe_goal(team_side(car.team));
+                ShotTargets { left: goal, right: goal }
+            };
             let (contact_point, offset_target, contact_face, contact_quality) =
                 if let Some(side) = shot.side_shot {
                     let lateral = Vector::new(-shot_vector.y, shot_vector.x, 0.0).normalize();
@@ -3065,27 +3067,14 @@ impl BotBrain {
                         if side.side_sign < 0.0 { "left" } else { "right" },
                         shot.contact_quality,
                     )
-                } else if parser_has_targets {
+                } else {
                     select_ball_contact(
                         car,
                         shot.ball,
                         shot.ball_velocity,
-                        shot.targets,
+                        contact_targets,
                         t,
                         Some(shot.contact_face),
-                    )
-                } else {
-                    (
-                        shot.ball - shot_vector * BALL_RADIUS,
-                        crate::contact::hitbox_center_target(
-                            car,
-                            shot.ball,
-                            shot_vector,
-                            BALL_RADIUS + car.hitbox.length * 0.5,
-                            0.0,
-                        ),
-                        "centre",
-                        1.0,
                     )
                 };
             shot.contact_point = contact_point;
@@ -5050,52 +5039,48 @@ fn candidate_to_intercept(car:CarState,candidate:ShotCandidate,targets:ShotTarge
     };
     let contact_standoff = BALL_RADIUS + car.hitbox.length * 0.5;
 
-    let (mut contact_point,mut approach,mut contact_face,contact_quality,shot_direction,side_shot) =
-        if untargeted {
-            // fast_intercept_finder constructs routines without a target
-            // tuple. Python therefore uses the opponent-goal ray and a
-            // centred front contact, not select_ball_contact's side-face
-            // candidates or a forced goal-target flank route.
-            let goal_direction=(foe_goal(team_side(car.team))-candidate.ball)
-                .flatten().normalize();
-            let direction=if goal_direction.magnitude()>0.001 {
-                goal_direction
-            } else {
-                Vector::new(0.0,-team_side(car.team),0.0)
-            };
+    let (selection_targets, untargeted) = if untargeted {
+        // Python's fast_intercept_finder has no parser target pair; its
+        // select_ball_contact fallback uses agent.foe_goal.location.
+        let goal = foe_goal(team_side(car.team));
+        (ShotTargets { left: goal, right: goal }, true)
+    } else {
+        (selected_targets, false)
+    };
+    let (mut contact_point,mut approach,mut contact_face,contact_quality,shot_direction,side_shot) = {
+        let (point,approach,face,quality)=select_ball_contact(
+            car,
+            candidate.ball,
+            candidate.ball_velocity,
+            selection_targets,
+            candidate.time,
+            None,
+        );
+        let side=if untargeted { None } else {
+            select_side_shot(car,candidate,selection_targets)
+        };
+        let direction=side.map_or_else(
+            || {
+                if untargeted {
+                    (foe_goal(team_side(car.team))-candidate.ball).flatten().normalize()
+                } else {
+                    candidate.shot_direction
+                }
+            },
+            |s| s.shot_direction,
+        );
+        let (approach,point,face)=if let Some(side)=side {
+            let lateral=Vector::new(-side.shot_direction.y,side.shot_direction.x,0.0).normalize();
             (
-                candidate.ball-direction*BALL_RADIUS,
-                crate::contact::hitbox_center_target(
-                    car, candidate.ball, direction, contact_standoff, 0.0,
-                ),
-                "centre",
-                1.0,
-                direction,
-                None,
+                candidate.ball-lateral*side.lateral_distance*side.side_sign,
+                candidate.ball-lateral*BALL_RADIUS*side.side_sign,
+                if side.side_sign<0.0 {"left"} else {"right"},
             )
         } else {
-            let (point,approach,face,quality)=select_ball_contact(
-                car,
-                candidate.ball,
-                candidate.ball_velocity,
-                selected_targets,
-                candidate.time,
-                None,
-            );
-            let side=select_side_shot(car,candidate,selected_targets);
-            let direction=side.map_or(candidate.shot_direction,|s|s.shot_direction);
-            let (approach,point,face)=if let Some(side)=side {
-                let lateral=Vector::new(-side.shot_direction.y,side.shot_direction.x,0.0).normalize();
-                (
-                    candidate.ball-lateral*side.lateral_distance*side.side_sign,
-                    candidate.ball-lateral*BALL_RADIUS*side.side_sign,
-                    if side.side_sign<0.0 {"left"} else {"right"},
-                )
-            } else {
-                (approach,point,face)
-            };
-            (point,approach,face,quality,direction,side)
+            (approach,point,face)
         };
+        (point,approach,face,quality,direction,side)
+    };
     GroundIntercept {
         time:candidate.time, ball:candidate.ball, ball_velocity:candidate.ball_velocity,
         approach, shot_direction, contact_quality,
