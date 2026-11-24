@@ -1799,8 +1799,10 @@ impl BotBrain {
 
             // Noob Black's unfolded wall-shot scan competes with ordinary
             // ground/jump contacts, but never displaces an urgent save.
+            let replaceable_prelaunch_jump =
+                self.jump_shot.is_some_and(|shot| !shot.jumping);
             if is_challenger
-                && !committed_nonwall_shot_active
+                && (!committed_nonwall_shot_active || replaceable_prelaunch_jump)
                 && !urgent_save
                 && self.ground_flip.is_none()
                 && self.defense_flip.is_none()
@@ -1810,6 +1812,11 @@ impl BotBrain {
                     &me, &prediction.slices, me.team, opponent_goal, 5.0,
                 ) {
 
+                    if replaceable_prelaunch_jump {
+                        self.jump_shot = None;
+                        self.double_jump_shot = None;
+                        self.pending_double_jump = None;
+                    }
                     self.wall_drive_candidate = Some(wall);
                     self.teamplay_status = "WALL_PASS".to_owned();
                     self.teamplay_score = self.teamplay_score.max(78.0);
@@ -2059,12 +2066,20 @@ impl BotBrain {
         let can_jump = candidate.is_some_and(|candidate| candidate.can_jump);
         let use_jump = selected.filter(|shot| shot.shot_type != ShotType::Ground || can_jump);
         let intercept = selected.filter(|shot| shot.shot_type == ShotType::Ground && !can_jump);
+        let replaceable_prelaunch_jump =
+            self.jump_shot.is_some_and(|shot| !shot.jumping);
         if self.ground_flip.is_none() && self.defense_flip.is_none()
             && self.defense_recovery_target.is_none()
-            && self.aerial_shot.as_ref().is_none_or(|shot| !shot.aerialing && !shot.side_wall_active) {
+            && (self.aerial_shot.as_ref().is_none_or(|shot| !shot.aerialing && !shot.side_wall_active)
+                || replaceable_prelaunch_jump) {
             if let Some(wall) = find_wall_drive(
                 &me, &prediction.slices, me.team, opponent_goal, 5.0,
             ) {
+                if replaceable_prelaunch_jump {
+                    self.jump_shot = None;
+                    self.double_jump_shot = None;
+                    self.pending_double_jump = None;
+                }
                 self.wall_drive_candidate = Some(wall);
                 self.teamplay_status = "WALL_PASS".to_owned();
                 self.teamplay_score = self.teamplay_score.max(78.0);
@@ -3689,9 +3704,11 @@ impl BotBrain {
             controller.pitch = pd.pitch;
             controller.yaw = pd.yaw;
             controller.roll = pd.roll;
-            let ball_is_airborne = state.ball.z > 130.0;
-            let ball_is_above_car = state.ball.z > car.location.z + 65.0;
-            let hold_s = ball_is_airborne && ball_is_above_car && !state.quick;
+            // User-requested power-shot posture: every airborne-ball
+            // jump shot holds S-tilt during orientation, including quick
+            // launches and balls that are not 65 units above the car.
+            // Keep defaultPD's yaw/roll corrections for lateral alignment.
+            let hold_s = jump_shot_should_s_tilt(state.ball.z);
             if hold_s {
                 controller.pitch = 1.0;
                 controller.roll = if pd.yaw.abs() > 0.08 {
@@ -3705,7 +3722,7 @@ impl BotBrain {
         let delta_x = state.approach - xf;
         let d_direction = delta_x.normalize();
         if state.counter < 3
-            && car.forward().dot(d_direction).abs() > 0.5
+            && car.forward().dot(d_direction) > 0.5
             && t > 1.0e-6
         {
             let mut delta_v = delta_x.dot(car.forward()) / t;
@@ -3717,6 +3734,16 @@ impl BotBrain {
             if delta_v.abs() > throttle_accel * MIN_AIR_BOOST_TIME {
                 controller.throttle =
                     (delta_v / (throttle_accel * MIN_AIR_BOOST_TIME)).clamp(-1.0, 1.0);
+            }
+
+            // Once the nose is aligned with the actual hitbox contact target,
+            // spend boost to drive through the contact instead of relying on
+            // the earlier orientation phase's projected acceleration alone.
+            if jump_shot_boost_should_fire(
+                car.forward(), d_direction, delta_x.magnitude(), car.boost, t,
+            ) {
+                controller.boost = true;
+                controller.throttle = 1.0;
             }
         }
 
@@ -3828,6 +3855,25 @@ impl BotBrain {
     }
 }
 
+
+#[inline]
+fn jump_shot_should_s_tilt(predicted_ball_z: f32) -> bool {
+    predicted_ball_z > 130.0
+}
+
+#[inline]
+fn jump_shot_boost_should_fire(
+    car_forward: Vector,
+    target_direction: Vector,
+    target_distance: f32,
+    boost: f32,
+    time_remaining: f32,
+) -> bool {
+    boost > 0.0
+        && time_remaining > 0.06
+        && target_distance > 160.0
+        && car_forward.normalize().dot(target_direction.normalize()) > 0.85
+}
 
 fn defensive_aerial_eligible(
     me: CarState,
