@@ -218,6 +218,7 @@ pub struct BotBrain {
     last_message: TeamplayMessage,
     kickoff_contest_until: f32,
     was_kickoff: bool,
+    last_support_target: Option<Vector>,
 }
 
 impl Default for BotBrain {
@@ -240,6 +241,7 @@ impl BotBrain {
             last_message: shot_message("NO_SHOT", None, 0.0, None, false),
             kickoff_contest_until: -999.0,
             was_kickoff: false,
+            last_support_target: None,
         }
     }
 
@@ -802,7 +804,9 @@ impl BotBrain {
                 cover_target(frame)
             }
             Role::Support | Role::KickoffCheat | Role::KickoffBoost => {
-                support_target(frame, plan.challenger)
+                let target = support_target(frame, self.last_support_target);
+                self.last_support_target = Some(target);
+                target
             }
             Role::Challenge => {
                 // If no parser candidate exists, drive to the ball with a
