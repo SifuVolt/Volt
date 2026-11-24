@@ -6655,6 +6655,26 @@ mod tests {
     }
 
     #[test]
+    fn jump_shot_s_tilt_is_enabled_for_every_airborne_ball_height() {
+        assert!(!jump_shot_should_s_tilt(130.0));
+        assert!(jump_shot_should_s_tilt(130.01));
+        assert!(jump_shot_should_s_tilt(180.0));
+        assert!(jump_shot_should_s_tilt(900.0));
+    }
+
+    #[test]
+    fn jump_shot_boost_only_fires_when_nose_is_aligned_and_contact_is_ahead() {
+        let forward = Vector::new(0.0, 1.0, 0.0);
+        let ahead = Vector::new(0.0, 1.0, 0.0);
+        let behind = Vector::new(0.0, -1.0, 0.0);
+        assert!(jump_shot_boost_should_fire(forward, ahead, 500.0, 20.0, 0.3));
+        assert!(!jump_shot_boost_should_fire(forward, behind, 500.0, 20.0, 0.3));
+        assert!(!jump_shot_boost_should_fire(forward, ahead, 100.0, 20.0, 0.3));
+        assert!(!jump_shot_boost_should_fire(forward, ahead, 500.0, 0.0, 0.3));
+        assert!(!jump_shot_boost_should_fire(forward, ahead, 500.0, 20.0, 0.04));
+    }
+
+    #[test]
     fn half_flip_releases_jump_then_cancels_backflip() {
         let mut brain = BotBrain::new();
         let me = car(0, 0, Vector::ZERO);
