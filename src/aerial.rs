@@ -759,7 +759,9 @@ pub fn find_aerial_candidate(
         if time > horizon.min(6.0) {
             break;
         }
-        let sample_interval = if time < 1.5 { 0.05 } else { 0.10 };
+        // Match the planner's higher-resolution scan while preserving
+        // the denser urgent-save cadence.
+        let sample_interval = if urgent_save { 0.025 } else { 1.0 / 30.0 };
         if time - last_sample + 1.0e-5 < sample_interval {
             continue;
         }
