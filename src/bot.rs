@@ -6452,30 +6452,32 @@ mod tests {
                     targets: ShotTargets { left: Vector::ZERO, right: Vector::ZERO },
         };
 
-        let waiting = brain.run_jump_shot(
+        // Python dodges as soon as counter 3 is reached and the selected
+        // approach point is close; it does not wait for T <= 0.05s.
+        let controller = brain.run_jump_shot(
             me,
             BallState { location: state.ball, velocity: state.ball_velocity },
             &BallTrajectory { slices: Vec::new() },
             state,
             1.10,
         );
-        assert!(!waiting.jump, "Party Cannon holds the dodge until the final 0.05s");
-        assert!(brain.jump_shot.unwrap().dodge_started_at.is_none());
+        assert!(controller.jump);
+        assert!((controller.pitch + 1.0).abs() < 1e-6);
+        assert!(controller.yaw.abs() < 1e-6);
+        let committed = brain.jump_shot.unwrap();
+        assert!(committed.dodge_started_at.is_some());
+        assert_eq!(committed.counter, 4);
 
-        let controller = brain.run_jump_shot(
+        // Python sends the directional dodge as a fresh jump press, not a
+        // 0.6-second cached hold.
+        let followup = brain.run_jump_shot(
             me,
             BallState { location: state.ball, velocity: state.ball_velocity },
             &BallTrajectory { slices: Vec::new() },
-            brain.jump_shot.unwrap(),
-            1.16,
+            committed,
+            1.11,
         );
-        assert!(controller.jump);
-        let committed = brain.jump_shot.unwrap();
-        assert!(committed.dodge_started_at.is_some());
-        let (expected_yaw, expected_pitch) =
-            party_cannon_dodge_inputs(me, committed.shot_direction.flatten().normalize());
-        assert!((controller.pitch - expected_pitch).abs() < 1e-6);
-        assert!((controller.yaw - expected_yaw).abs() < 1e-6);
+        assert!(!followup.jump);
     }
 
     #[test]
