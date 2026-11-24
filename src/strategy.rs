@@ -186,31 +186,62 @@ pub fn cover_target(frame: &AgentFrame) -> Vector {
     )
 }
 
-pub fn support_target(frame: &AgentFrame, challenger: usize) -> Vector {
-    let side = team_side(frame.me.team);
-    let attack = -side;
+/// Port of the Python support.get_target() routine. It positions from the
+/// most advanced living teammate, adjusts the lane for own-half possession,
+/// and applies the source's small per-frame target smoothing.
+pub fn support_target(frame: &AgentFrame, previous_target: Option<Vector>) -> Vector {
+    let side_value = team_side(frame.me.team);
     let ball = frame.ball.location;
-    let teammate = frame.cars.iter()
-        .find(|car| car.index == challenger && car.team == frame.me.team)
+    let ball_x = ball.x;
+    let ball_y = ball.y * side_value;
+
+    let friends: Vec<CarState> = frame.cars.iter()
         .copied()
-        .unwrap_or(frame.me);
+        .filter(|car| car.team == frame.me.team && car.index != frame.me.index && !car.demolished)
+        .collect();
+    let my_y = frame.me.location.y * side_value;
+    let lead = friends.iter()
+        .filter(|friend| friend.location.y * side_value < my_y - 250.0)
+        .min_by(|a, b| {
+            (a.location.y * side_value).total_cmp(&(b.location.y * side_value))
+        });
 
-    let lateral = if frame.me.location.x >= ball.x { -1.0 } else { 1.0 };
-    let mut x = ball.x + lateral * 1150.0;
-    let mut y = ball.y - attack * 950.0;
+    let (mut target_x, mut target_y) = if let Some(lead) = lead {
+        // Python uses a 900-unit gap in 2v2 and 1150 in 3v3.
+        let support_gap = if friends.len() <= 1 { 900.0 } else { 1150.0 };
+        let lead_x = lead.location.x;
+        let lead_y = lead.location.y * side_value;
+        let target_x = lead_x * 0.58 + ball_x * 0.42;
+        let target_y = (lead_y + support_gap)
+            .min(ball_y + 1450.0)
+            .max(ball_y + 350.0);
+        (target_x, target_y)
+    } else if ball_y < -2500.0 {
+        (ball_x * 0.22, ball_y + 1150.0)
+    } else if ball_y < 640.0 {
+        (ball_x * 0.32, ball_y + 900.0)
+    } else {
+        (ball_x * 0.42, ball_y + 700.0)
+    };
 
-    // When the ball is in our own half, support deeper rather than
-    // abandoning the counter-attack lane.
-    if ball.y * side > 600.0 {
-        y -= attack * 450.0;
+    // In our half the support bot becomes a wide outlet / second defender.
+    if ball_y > 900.0 {
+        let lane = if frame.me.index % 2 == 0 { 1.0 } else { -1.0 };
+        target_x = lane * if ball_y > 2600.0 { 2250.0 } else { 1900.0 };
+        target_y = (ball_y - if ball_y > 2600.0 { 850.0 } else { 650.0 }).max(-500.0);
     }
-    // Do not stack on the challenger; open a passing lane to either flank.
-    let separation = (Vector::new(x, y, 0.0) - teammate.location).flatten();
-    if separation.magnitude() < 700.0 {
-        x += lateral * 650.0;
-    }
 
-    Vector::new(x.clamp(-3400.0, 3400.0), y.clamp(-4400.0, 4400.0), 0.0)
+    target_y = target_y.clamp(-4300.0, 4100.0);
+    target_x = target_x.clamp(-2550.0, 2550.0);
+    let mut target = Vector::new(target_x, target_y * side_value, 0.0);
+
+    if let Some(previous) = previous_target {
+        let shift = target - previous;
+        if shift.magnitude() < 500.0 {
+            target = previous + shift * 0.35;
+        }
+    }
+    target
 }
 
 pub fn kickoff_cheat_target(frame: &AgentFrame) -> Vector {
@@ -273,6 +304,71 @@ pub fn opponent_near_ball(frame: &AgentFrame, radius: f32) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn make_car(index: usize, team: u32, location: Vector) -> CarState {
+        use crate::math::Matrix3;
+        use crate::state::Hitbox;
+        use rlbot::flat::AirState;
+        CarState {
+            index, team, location, velocity: Vector::ZERO,
+            orientation: Matrix3::new(0.0, 0.0, 0.0),
+            angular_velocity: Vector::ZERO, demolished: false,
+            airborne: false, supersonic: false, jumped: false,
+            doublejumped: false, air_state: AirState::OnGround,
+            has_jumped: false, has_double_jumped: false, has_dodged: false,
+            dodge_timeout: 0.0, dodge_elapsed: 0.0, dodge_dir: Vector::ZERO,
+            flip_reset_available: false, boost: 50.0, hitbox: Hitbox::default(),
+        }
+    }
+
+    fn frame(me: CarState, cars: Vec<CarState>, ball: Vector) -> AgentFrame {
+        AgentFrame {
+            me, cars, ball: crate::state::BallState { location: ball, velocity: Vector::ZERO },
+            match_state: crate::state::MatchState::default(),
+            boost_pads: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn support_target_uses_the_most_advanced_living_teammate() {
+        let me = make_car(0, 0, Vector::new(0.0, -1000.0, 17.0));
+        let lead = make_car(1, 0, Vector::new(500.0, 0.0, 17.0));
+        let demolished = CarState { demolished: true, ..make_car(2, 0, Vector::new(-500.0, 100.0, 17.0)) };
+        let state = frame(
+            me,
+            vec![me, lead, demolished],
+            Vector::new(200.0, 400.0, 92.75),
+        );
+        let target = support_target(&state, None);
+        assert!((target.x - 374.0).abs() < 0.01);
+        assert!((target.y + 900.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn support_target_uses_wide_own_half_lane() {
+        let me = make_car(1, 0, Vector::new(0.0, -2000.0, 17.0));
+        let state = frame(
+            me, vec![me],
+            Vector::new(300.0, -3500.0, 92.75),
+        );
+        let target = support_target(&state, None);
+        assert_eq!(target.x, -1900.0);
+        assert_eq!(target.y, -2850.0);
+    }
+
+    #[test]
+    fn support_target_smooths_only_small_target_changes() {
+        let me = make_car(0, 0, Vector::new(0.0, -2000.0, 17.0));
+        let state = frame(
+            me, vec![me],
+            Vector::new(200.0, -1000.0, 92.75),
+        );
+        let raw = support_target(&state, None);
+        let previous = raw + Vector::new(100.0, 0.0, 0.0);
+        let smoothed = support_target(&state, Some(previous));
+        assert!((smoothed.x - (previous.x + (raw.x - previous.x) * 0.35)).abs() < 0.01);
+        assert!((smoothed.y - raw.y).abs() < 0.01);
+    }
 
     #[test]
     fn team_side_convention_matches_goal_coordinates() {
