@@ -1579,7 +1579,7 @@ impl BotBrain {
                 candidate = find_best_any_shot(
                     me, cars, prediction, shot_targets, match_state.gravity,
                     self.boost_accel, game_time, self.kickoff_contest_until,
-                    self.unlimited_boost, self.shot_search_horizon(game_time),
+                    is_challenger, self.unlimited_boost, self.shot_search_horizon(game_time),
                 );
                 teamplay_opportunity = candidate.is_some();
             }
@@ -1590,7 +1590,7 @@ impl BotBrain {
                 candidate = find_best_any_shot(
                     me, cars, prediction, shot_targets, match_state.gravity,
                     self.boost_accel, game_time, self.kickoff_contest_until,
-                    self.unlimited_boost, self.shot_search_horizon(game_time),
+                    is_challenger, self.unlimited_boost, self.shot_search_horizon(game_time),
                 );
             }
 
@@ -1605,7 +1605,7 @@ impl BotBrain {
                 candidate = find_best_pass_shot(
                     me, cars, ball.location, prediction, match_state.gravity,
                     self.boost_accel, game_time, self.kickoff_contest_until,
-                    urgent_save, true, self.unlimited_boost, self.shot_search_horizon(game_time),
+                    urgent_save, is_challenger, self.unlimited_boost, self.shot_search_horizon(game_time),
                 );
                 pass_candidate_selected = candidate.is_some();
             }
@@ -1618,7 +1618,7 @@ impl BotBrain {
                 candidate = find_best_any_shot(
                     me, cars, prediction, shot_targets, match_state.gravity,
                     self.boost_accel, game_time, self.kickoff_contest_until,
-                    self.unlimited_boost, self.shot_search_horizon(game_time),
+                    is_challenger, self.unlimited_boost, self.shot_search_horizon(game_time),
                 );
                 vulnerable_fallback_selected = candidate.is_some();
             }
@@ -1882,7 +1882,7 @@ impl BotBrain {
             candidate = find_best_any_shot(
                 me, cars, prediction, shot_targets, match_state.gravity,
                 self.boost_accel, game_time, self.kickoff_contest_until,
-                self.unlimited_boost, self.shot_search_horizon(game_time),
+                is_challenger, self.unlimited_boost, self.shot_search_horizon(game_time),
             );
             teamplay_opportunity = candidate.is_some();
         }
@@ -1892,7 +1892,7 @@ impl BotBrain {
             candidate = find_best_any_shot(
                 me, cars, prediction, shot_targets, match_state.gravity,
                 self.boost_accel, game_time, self.kickoff_contest_until,
-                self.unlimited_boost, self.shot_search_horizon(game_time),
+                is_challenger, self.unlimited_boost, self.shot_search_horizon(game_time),
             );
         }
         if candidate.is_none()
@@ -1902,7 +1902,7 @@ impl BotBrain {
             candidate = find_best_any_shot(
                 me, cars, prediction, shot_targets, match_state.gravity,
                 self.boost_accel, game_time, self.kickoff_contest_until,
-                self.unlimited_boost, self.shot_search_horizon(game_time),
+                is_challenger, self.unlimited_boost, self.shot_search_horizon(game_time),
             );
         }
         if let Some(candidate) = candidate {
