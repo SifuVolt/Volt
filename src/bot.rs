@@ -3085,9 +3085,13 @@ impl BotBrain {
                 state.intercept = shot;
                 self.ground_shot = Some(state);
             }
-            let approach_target = shot_approach_target(
-                car, shot.ball, offset_target.flatten(), shot_vector, t,
-            );
+            let approach_target = if parser_has_targets {
+                shot_approach_target(
+                    car, shot.ball, offset_target.flatten(), shot_vector, t,
+                )
+            } else {
+                offset_target.flatten()
+            };
             let ground_plan = crate::brain::ground_shot::calculate_ground_drive_plan(
                 car, ball, shot_vector, approach_target, t,
             );
@@ -5027,9 +5031,12 @@ fn select_side_shot(car:CarState,candidate:ShotCandidate,targets:ShotTargets)->O
 }
 
 fn candidate_to_intercept(car:CarState,candidate:ShotCandidate,targets:ShotTargets)->GroundIntercept {
-    let parser_has_targets =
-        (candidate.parser.targets.left - candidate.parser.targets.right).magnitude() > 1.0;
-    let untargeted = !parser_has_targets && !candidate.targeted;
+    // Python's find_any_shot and fast_intercept_finder both create routines
+    // with targets=None. Keep that distinction even if the planner used goal
+    // posts internally to score the candidate.
+    let untargeted = !candidate.targeted;
+    let parser_has_targets = candidate.targeted
+        && (candidate.parser.targets.left - candidate.parser.targets.right).magnitude() > 1.0;
     let selected_targets = if parser_has_targets {
         candidate.parser.targets
     } else if untargeted {
@@ -5037,15 +5044,11 @@ fn candidate_to_intercept(car:CarState,candidate:ShotCandidate,targets:ShotTarge
     } else {
         targets
     };
-    let contact_standoff = BALL_RADIUS + car.hitbox.length * 0.5;
-
-    let (selection_targets, untargeted) = if untargeted {
-        // Python's fast_intercept_finder has no parser target pair; its
-        // select_ball_contact fallback uses agent.foe_goal.location.
+    let selection_targets = if untargeted {
         let goal = foe_goal(team_side(car.team));
-        (ShotTargets { left: goal, right: goal }, true)
+        ShotTargets { left: goal, right: goal }
     } else {
-        (selected_targets, false)
+        selected_targets
     };
     let (mut contact_point,mut approach,mut contact_face,contact_quality,shot_direction,side_shot) = {
         let (point,approach,face,quality)=select_ball_contact(
