@@ -260,7 +260,6 @@ pub struct StrikeExecutor {
     dodge_started_at: Option<f32>,
     last_tick: Option<f32>,
     last_debug_at: f32,
-    jump_hold_duration: f32,
     current_jump_target: Vector,
     current_shot_direction: Vector,
     ground_flip: Option<GroundFlip>,
@@ -280,7 +279,6 @@ impl Default for StrikeExecutor {
             dodge_started_at: None,
             last_tick: None,
             last_debug_at: -999.0,
-            jump_hold_duration: 0.06,
             current_jump_target: Vector::ZERO,
             current_shot_direction: Vector::new(1.0, 0.0, 0.0),
             ground_flip: None,
@@ -353,12 +351,11 @@ impl StrikeExecutor {
         &mut self,
         candidate: ShotCandidate,
         now: f32,
-        jump_hold_duration: f32,
+        _jump_hold_duration: f32,
     ) {
         self.candidate = Some(candidate);
         self.phase_started = now;
         self.last_tick = Some(now);
-        self.jump_hold_duration = jump_hold_duration.clamp(0.06, JUMP_MAX_DURATION);
         self.jump_counter = 0;
         self.jump_started_at = None;
         self.dodge_started_at = None;
@@ -384,7 +381,6 @@ impl StrikeExecutor {
         self.dodge_started_at = None;
         self.last_tick = None;
         self.last_debug_at = -999.0;
-        self.jump_hold_duration = 0.06;
         self.current_jump_target = Vector::ZERO;
         self.current_shot_direction = Vector::new(1.0, 0.0, 0.0);
         self.ground_flip = None;
@@ -699,9 +695,18 @@ impl StrikeExecutor {
             (shot.ball.z - car.location.z).max(0.0)
         };
         let needed_jump_time = if shot.shot_type == ShotType::DoubleJump {
-            grid_jump_time(jump_height, true).unwrap_or_else(|| {
-                get_jump_time(jump_height, car.velocity.z, gravity.z).time as f32
-            })
+            let Some(grid_time) = grid_jump_time(jump_height, true) else {
+                if now - self.last_debug_at >= 0.25 {
+                    println!(
+                        "[VOLT DOUBLE JUMP ABORT] unreachable contact height={:.1}",
+                        jump_height,
+                    );
+                    self.last_debug_at = now;
+                }
+                self.reset();
+                return ControllerState::default();
+            };
+            grid_time
         } else {
             get_jump_time(jump_height, car.velocity.z, gravity.z).time as f32
         };
@@ -709,7 +714,8 @@ impl StrikeExecutor {
         let local_final_target = car.local_location(final_target);
         let mut speed_required = distance_remaining / time_remaining;
         let ball_speed_toward_shot = live_ball.velocity.dot(shot_direction);
-        if speed_required < 1900.0
+        if shot.shot_type == ShotType::Jump
+            && speed_required < 1900.0
             && car.boost > 50.0
             && time_remaining > 2.0
             && distance_remaining > 2560.0
@@ -719,7 +725,8 @@ impl StrikeExecutor {
         }
 
         let current_forward_speed = car.local_velocity().x;
-        let power_dodge_window = time_remaining < 0.35
+        let power_dodge_window = shot.shot_type == ShotType::Jump
+            && time_remaining < 0.35
             && time_remaining > 0.10
             && car.local_location(live_ball.location).x > 0.0
             && current_forward_speed > 700.0;
