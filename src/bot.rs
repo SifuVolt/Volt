@@ -3601,16 +3601,26 @@ impl BotBrain {
                 )
             });
 
+            let launch_window = t <= state.needed_jump_time * 1.18;
             let side_ready = state.side_mode
                 && distance_remaining < 180.0
-                && t <= state.needed_jump_time * 1.08;
+                && launch_window;
             let close_enough = velocity.abs() < 100.0
                 && distance_remaining < car.hitbox.length * 0.5;
             let aligned = local_offset_target.y.abs() < 92.0
                 && local_vf.x >= local_offset_target.x - car.hitbox.length / 3.0
                 && local_offset_target.x > 0.0;
-            let normal_ready = (close_enough || aligned)
-                && t <= state.needed_jump_time * 1.08;
+            // Start the jump while there is still room to shape the nose and
+            // use the selected front-hitbox contact in the air. Requiring the
+            // car to reach the old 92-unit lateral tolerance first delayed
+            // launch on slightly offset contacts until the dodge window was
+            // already closing.
+            let early_contact_lane = local_offset_target.x > 0.0
+                && local_offset_target.y.abs() <= 150.0
+                && distance_remaining
+                    <= contact_limit + car.local_velocity().x.max(0.0) * 0.22;
+            let normal_ready = (close_enough || aligned || early_contact_lane)
+                && launch_window;
 
             // A short-ETA / empty-boost shot cannot spend another packet
             // waiting for perfect alignment. Permit the quick jump only when
@@ -3774,9 +3784,12 @@ impl BotBrain {
         let delta_x = state.approach - xf;
         let d_direction = delta_x.normalize();
         if state.counter < 3
-            && car.forward().dot(d_direction).abs() > 0.5
+            && car.forward().dot(d_direction) > 0.15
             && t > 1.0e-6
         {
+            // Boost toward the live hitbox-aware contact target whenever the
+            // nose has a useful forward component. The previous 0.5 gate
+            // withheld boost during valid, moderately angled approaches.
             let mut delta_v = delta_x.dot(car.forward()) / t;
             if car.boost > 0.0 && delta_v >= self.boost_accel * MIN_AIR_BOOST_TIME {
                 controller.boost = true;
