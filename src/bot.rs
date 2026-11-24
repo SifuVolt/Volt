@@ -4929,8 +4929,7 @@ fn assign_roles(cars: &[CarState], ball: BallState, side: f32) -> Option<TeamRol
 }
 
 
-/// Port of tools.select_ball_contact: select centre/left/right/high/low
-/// contact using the car's current approach and the intended shot direction.
+/// Shared seven-point front-hitbox contact search used by live ground shots.
 fn select_ball_contact(
     car: CarState,
     ball: Vector,
@@ -5276,7 +5275,7 @@ fn select_contact_approach(car: CarState, ball: Vector, target: Vector) -> Vecto
 }
 
 /// Select a reachable single-jump contact using Volt's C-library jump-time
-/// model. The contact height is limited to the single-jump window; higher
+/// model and the shared seven-point front-hitbox geometry. The contact height is limited to the single-jump window; higher
 /// contacts are left for the later double-jump/aerial port.
 fn choose_jump_intercept(
     car: CarState,
