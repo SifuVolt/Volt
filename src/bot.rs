@@ -5132,19 +5132,13 @@ fn party_cannon_jump_front_contact(
     Some((contact.approach, contact.face))
 }
 
-fn contact_approach_from_label(ball:Vector,shot:Vector,label:&str,distance:f32)->Option<Vector> {
-    let shot=shot.flatten().normalize();
-    if shot.magnitude()<0.001 {return None;}
-    let lateral=Vector::new(-shot.y,shot.x,0.0).normalize();
-    let normal=match label {
-        "centre"=>-shot,
-        "left"=>(-shot+lateral*0.55).normalize(),
-        "right"=>(-shot-lateral*0.55).normalize(),
-        "high"=>(-shot+Vector::new(0.0,0.0,0.30)).normalize(),
-        "low"=>(-shot-Vector::new(0.0,0.0,0.30)).normalize(),
-        _=>return None,
-    };
-    Some(ball+normal*distance.max(120.0))
+fn contact_approach_from_label(
+    ball: Vector,
+    shot: Vector,
+    label: &str,
+    distance: f32,
+) -> Option<Vector> {
+    crate::contact::approach_from_face(ball, shot, label, distance)
 }
 
 fn shot_aim_point(ball: Vector, side: f32, airborne: bool) -> Vector {
@@ -5484,42 +5478,9 @@ fn shot_approach_target(
     shot_direction: Vector,
     time_left: f32,
 ) -> Vector {
-    let final_target = final_target.flatten();
-    if time_left <= 0.25 {
-        return final_target;
-    }
-
-    let shot_direction = shot_direction.flatten().normalize();
-    if shot_direction.magnitude() < 1.0 {
-        return final_target;
-    }
-
-    let car_to_ball = (ball - car.location).flatten().normalize();
-    if car_to_ball.magnitude() < 1.0 {
-        return final_target;
-    }
-
-    let alignment = car_to_ball.dot(shot_direction).clamp(-1.0, 1.0);
-    if alignment >= 0.88 {
-        return final_target;
-    }
-
-    let lateral = shot_direction.cross(Vector::new(0.0, 0.0, 1.0)).flatten().normalize();
-    if lateral.magnitude() < 1.0 {
-        return final_target;
-    }
-
-    let side_value = (car.location - ball).dot(lateral);
-    let car_side = if side_value < 0.0 { -1.0 } else { 1.0 };
-    let time_blend = ((time_left - 0.25) / 0.9).clamp(0.0, 1.0);
-    let alignment_blend = ((0.88 - alignment) / 1.35).clamp(0.0, 1.0);
-    let radius = 700.0 * time_blend * alignment_blend;
-
-    if radius < 80.0 {
-        final_target
-    } else {
-        final_target + lateral * (car_side * radius)
-    }
+    crate::contact::route_around_ball(
+        car, ball, final_target, shot_direction, time_left,
+    )
 }
 
 /// Estimate arrival time with turn-in cost and a short forward-acceleration
