@@ -44,7 +44,7 @@ pub fn default_drive(car: &CarState, input: DriveInput) -> DriveOutput {
         airborne: car.airborne,
         car_speed: car.local_velocity().x,
         world_speed: car.velocity.magnitude(),
-        up_z: car.up().z,
+        angular_velocity: car.angular_velocity,
         target_speed: input.target_speed,
         target_angles,
         local_target: Some(input.local_target),
