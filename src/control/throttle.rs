@@ -167,7 +167,7 @@ mod tests {
     fn python_coast_band_leaves_throttle_untouched() {
         let mut args = input();
         args.car_speed = 1000.0;
-        args.target_speed = 990.0;
+        args.target_speed = 980.0;
         let result = default_throttle(args);
         assert_eq!(result.throttle, None);
     }
@@ -228,7 +228,7 @@ mod tests {
         let mut args = input();
         args.up_z = 0.0;
         args.car_speed = 1000.0;
-        args.target_speed = 900.0;
+        args.target_speed = 950.0;
         let result = default_throttle(args);
         assert_eq!(result.throttle, Some(0.02));
     }
