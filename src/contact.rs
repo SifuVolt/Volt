@@ -115,10 +115,25 @@ pub fn select_front_contact(
         } else {
             0.0
         };
+        // Ground contacts use Party Cannon's speed-dependent path ETA
+        // rather than straight-line distance. Jump contacts retain the
+        // gravity-aware 3D reach cost because their launch window is vertical.
+        let reach_penalty = if flat_reach_cost {
+            crate::physics::drive::party_cannon_ground_eta(
+                car,
+                required_car_centre.flatten(),
+                991.6667,
+                true,
+            )
+            .map(|eta| eta * 0.28)
+            .unwrap_or(reach_cost * 0.00020)
+        } else {
+            reach_cost * 0.00020
+        };
         let score = shot_alignment
             + front_alignment.clamp(-1.0, 1.0) * 0.12
             + closing_alignment * closing_weight
-            - reach_cost * 0.00020;
+            - reach_penalty;
         scored.push((score, label, required_car_centre, incoming_normal));
     }
 
