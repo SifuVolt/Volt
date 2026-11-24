@@ -3705,8 +3705,8 @@ impl BotBrain {
                 || (t <= 0.0 && contact_distance > contact_limit + 150.0)
             {
                 println!(
-                    "[JUMP SHOT NO DODGE] id={} local_target_x={:.1} distance={:.1} T={:.3} counter={}",
-                    car.index, local_target.x, contact_distance, t, state.counter,
+                    "[JUMP SHOT NO DODGE] id={} local_ball_x={:.1} distance={:.1} T={:.3} counter={}",
+                    car.index, local_ball.x, contact_distance, t, state.counter,
                 );
                 state.counter = 5;
             }
