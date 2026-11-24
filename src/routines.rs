@@ -1066,6 +1066,7 @@ impl StrikeExecutor {
                 }
             }
             StrikePhase::JumpHold => {
+                let time_remaining = shot.time.clamp(-1.0, 6.0);
                 // Grid's double_jump holds the first press for 24 120-Hz
                 // frames, releases at least one frame, then sends one
                 // distinct second press. The previous Rust implementation
