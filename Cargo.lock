@@ -20,6 +20,7 @@ version = "3.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d240154aed9c57cd79282db0152b9cccc5d43bac3a0def6829b8e48af72862e1"
 dependencies = [
+ "glam",
  "libm",
 ]
 
@@ -40,6 +41,9 @@ name = "glam"
 version = "0.34.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "627003914c6057c9c8f0832ee4f870b5a4f599d0cfa83f4072675114860cd0ff"
+dependencies = [
+ "libm",
+]
 
 [[package]]
 name = "hashbrown"
@@ -253,3 +257,401 @@ checksum = "ae137229bcbd6cdf0f7b80a31df61766145077ddf49416a728b02cb3921ff3fc"
 dependencies = [
  "windows-link",
 ]
+[1m[92m Downloading[0m crates ...
+[1m[92m  Downloaded[0m foldhash v0.2.0
+[1m[92m  Downloaded[0m allocator-api2 v0.2.21
+[1m[92m  Downloaded[0m array-init-cursor v0.2.1
+[1m[92m  Downloaded[0m equivalent v1.0.3
+[1m[92m  Downloaded[0m scopeguard v1.2.0
+[1m[92m  Downloaded[0m dubins_paths v3.3.0
+[1m[92m  Downloaded[0m lock_api v0.4.14
+[1m[92m  Downloaded[0m thiserror-impl v2.0.21
+[1m[92m  Downloaded[0m thiserror v2.0.21
+[1m[92m  Downloaded[0m quote v1.0.47
+[1m[92m  Downloaded[0m kanal v0.1.1
+[1m[92m  Downloaded[0m rlbot v0.7.1
+[1m[92m  Downloaded[0m unicode-ident v1.0.27
+[1m[92m  Downloaded[0m planus v1.3.0
+[1m[92m  Downloaded[0m log v0.4.35
+[1m[92m  Downloaded[0m proc-macro2 v1.0.107
+[1m[92m  Downloaded[0m serde_derive v1.0.229
+[1m[92m  Downloaded[0m serde v1.0.229
+[1m[92m  Downloaded[0m serde_core v1.0.229
+[1m[92m  Downloaded[0m hashbrown v0.16.1
+[1m[92m  Downloaded[0m libm v0.2.16
+[1m[92m  Downloaded[0m mio v1.2.5
+[1m[92m  Downloaded[0m rlbot_flat v0.7.1
+[1m[92m  Downloaded[0m syn v3.0.10
+[1m[92m  Downloaded[0m glam v0.34.3
+[1m[92m  Downloaded[0m libc v0.2.191
+[1m[92m   Compiling[0m proc-macro2 v1.0.107
+[1m[92m   Compiling[0m unicode-ident v1.0.27
+[1m[92m   Compiling[0m quote v1.0.47
+[1m[92m   Compiling[0m serde_core v1.0.229
+[1m[92m   Compiling[0m serde v1.0.229
+[1m[92m   Compiling[0m allocator-api2 v0.2.21
+[1m[92m   Compiling[0m libc v0.2.191
+[1m[92m   Compiling[0m equivalent v1.0.3
+[1m[92m   Compiling[0m foldhash v0.2.0
+[1m[92m   Compiling[0m hashbrown v0.16.1
+[1m[92m   Compiling[0m array-init-cursor v0.2.1
+[1m[92m   Compiling[0m scopeguard v1.2.0
+[1m[92m   Compiling[0m thiserror v2.0.21
+[1m[92m   Compiling[0m libm v0.2.16
+[1m[92m   Compiling[0m planus v1.3.0
+[1m[92m   Compiling[0m lock_api v0.4.14
+[1m[92m   Compiling[0m glam v0.34.3
+[1m[92m   Compiling[0m syn v3.0.10
+[1m[92m   Compiling[0m log v0.4.35
+[1m[92m   Compiling[0m kanal v0.1.1
+[1m[92m   Compiling[0m serde_derive v1.0.229
+[1m[92m   Compiling[0m thiserror-impl v2.0.21
+[1m[92m   Compiling[0m mio v1.2.5
+[1m[92m   Compiling[0m dubins_paths v3.3.0
+[1m[92m   Compiling[0m rlbot_flat v0.7.1
+[1m[92m   Compiling[0m rlbot v0.7.1
+[1m[92m   Compiling[0m volt-rust v0.1.0 (/home/runner/work/Volt/Volt)
+[1m[33mwarning[0m[1m: unused variable: `aim`[0m
+   [1m[94m--> [0msrc/bot.rs:430:9
+    [1m[94m|[0m
+[1m[94m430[0m [1m[94m|[0m         aim: Vector,
+    [1m[94m|[0m         [1m[33m^^^[0m [1m[33mhelp: if this is intentional, prefix it with an underscore: `_aim`[0m
+    [1m[94m|[0m
+    [1m[94m= [0m[1mnote[0m: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+[1m[33mwarning[0m[1m: unused variable: `toward_goal_speed`[0m
+    [1m[94m--> [0msrc/bot.rs:1436:13
+     [1m[94m|[0m
+[1m[94m1436[0m [1m[94m|[0m         let toward_goal_speed = if to_own_goal.magnitude() > 1.0 {
+     [1m[94m|[0m             [1m[33m^^^^^^^^^^^^^^^^^[0m [1m[33mhelp: if this is intentional, prefix it with an underscore: `_toward_goal_speed`[0m
+
+[1m[33mwarning[0m[1m: unused variable: `current_ball`[0m
+    [1m[94m--> [0msrc/bot.rs:2543:9
+     [1m[94m|[0m
+[1m[94m2543[0m [1m[94m|[0m         current_ball: BallState,
+     [1m[94m|[0m         [1m[33m^^^^^^^^^^^^[0m [1m[33mhelp: if this is intentional, prefix it with an underscore: `_current_ball`[0m
+
+[1m[33mwarning[0m[1m: unused variable: `prediction`[0m
+    [1m[94m--> [0msrc/bot.rs:2545:9
+     [1m[94m|[0m
+[1m[94m2545[0m [1m[94m|[0m         prediction: &BallTrajectory,
+     [1m[94m|[0m         [1m[33m^^^^^^^^^^[0m [1m[33mhelp: if this is intentional, prefix it with an underscore: `_prediction`[0m
+
+[1m[33mwarning[0m[1m: variable does not need to be mutable[0m
+    [1m[94m--> [0msrc/bot.rs:4856:10
+     [1m[94m|[0m
+[1m[94m4856[0m [1m[94m|[0m     let (mut contact_point,mut approach,mut contact_face,contact_quality,shot_direction,side_shot) =
+     [1m[94m|[0m          [1m[94m----[0m[1m[33m^^^^^^^^^^^^^[0m
+     [1m[94m|[0m          [1m[94m|[0m
+     [1m[94m|[0m          [1m[94mhelp: remove this `mut`[0m
+     [1m[94m|[0m
+     [1m[94m= [0m[1mnote[0m: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+[1m[33mwarning[0m[1m: variable does not need to be mutable[0m
+    [1m[94m--> [0msrc/bot.rs:4856:28
+     [1m[94m|[0m
+[1m[94m4856[0m [1m[94m|[0m     let (mut contact_point,mut approach,mut contact_face,contact_quality,shot_direction,side_shot) =
+     [1m[94m|[0m                            [1m[94m----[0m[1m[33m^^^^^^^^[0m
+     [1m[94m|[0m                            [1m[94m|[0m
+     [1m[94m|[0m                            [1m[94mhelp: remove this `mut`[0m
+
+[1m[33mwarning[0m[1m: variable does not need to be mutable[0m
+    [1m[94m--> [0msrc/bot.rs:4856:41
+     [1m[94m|[0m
+[1m[94m4856[0m [1m[94m|[0m     let (mut contact_point,mut approach,mut contact_face,contact_quality,shot_direction,side_shot) =
+     [1m[94m|[0m                                         [1m[94m----[0m[1m[33m^^^^^^^^^^^^[0m
+     [1m[94m|[0m                                         [1m[94m|[0m
+     [1m[94m|[0m                                         [1m[94mhelp: remove this `mut`[0m
+
+[1m[33mwarning[0m[1m: fields `settings`, `friend_goal`, `foe_goal`, and `anti_target` are never read[0m
+  [1m[94m--> [0msrc/main.rs:83:5
+   [1m[94m|[0m
+[1m[94m79[0m [1m[94m|[0m struct VoltRustAgent {
+   [1m[94m|[0m        [1m[94m-------------[0m [1m[94mfields in this struct[0m
+[1m[94m...[0m
+[1m[94m83[0m [1m[94m|[0m     settings: AgentSettings,
+   [1m[94m|[0m     [1m[33m^^^^^^^^[0m
+[1m[94m84[0m [1m[94m|[0m     friend_goal: GoalState,
+   [1m[94m|[0m     [1m[33m^^^^^^^^^^^[0m
+[1m[94m85[0m [1m[94m|[0m     foe_goal: GoalState,
+   [1m[94m|[0m     [1m[33m^^^^^^^^[0m
+[1m[94m86[0m [1m[94m|[0m     foe_goal_shot: (crate::math::Vector, crate::math::Vector),
+[1m[94m87[0m [1m[94m|[0m     anti_target: (crate::math::Vector, crate::math::Vector),
+   [1m[94m|[0m     [1m[33m^^^^^^^^^^^[0m
+   [1m[94m|[0m
+   [1m[94m= [0m[1mnote[0m: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+[1m[33mwarning[0m[1m: function `opponent_eta` is never used[0m
+   [1m[94m--> [0msrc/aerial.rs:698:4
+    [1m[94m|[0m
+[1m[94m698[0m [1m[94m|[0m fn opponent_eta(opponent: CarState, target: Vector) -> f32 {
+    [1m[94m|[0m    [1m[33m^^^^^^^^^^^^[0m
+
+[1m[33mwarning[0m[1m: constant `MAX_SHOT_TIME` is never used[0m
+  [1m[94m--> [0msrc/shot_parser.rs:19:7
+   [1m[94m|[0m
+[1m[94m19[0m [1m[94m|[0m const MAX_SHOT_TIME: f64 = 6.0;
+   [1m[94m|[0m       [1m[33m^^^^^^^^^^^^^[0m
+
+[1m[33mwarning[0m[1m: constant `MAX_SHOT_SLOPE` is never used[0m
+  [1m[94m--> [0msrc/shot_parser.rs:20:7
+   [1m[94m|[0m
+[1m[94m20[0m [1m[94m|[0m const MAX_SHOT_SLOPE: f64 = 3.0;
+   [1m[94m|[0m       [1m[33m^^^^^^^^^^^^^^[0m
+
+[1m[33mwarning[0m[1m: constant `MAX_SHOT_0_SLOPE` is never used[0m
+  [1m[94m--> [0msrc/shot_parser.rs:21:7
+   [1m[94m|[0m
+[1m[94m21[0m [1m[94m|[0m const MAX_SHOT_0_SLOPE: f64 = 10.0;
+   [1m[94m|[0m       [1m[33m^^^^^^^^^^^^^^^^[0m
+
+[1m[33mwarning[0m[1m: constant `GROUND_MIN_SLOPE` is never used[0m
+  [1m[94m--> [0msrc/shot_parser.rs:22:7
+   [1m[94m|[0m
+[1m[94m22[0m [1m[94m|[0m const GROUND_MIN_SLOPE: f64 = 0.5;
+   [1m[94m|[0m       [1m[33m^^^^^^^^^^^^^^^^[0m
+
+[1m[33mwarning[0m[1m: constant `JUMP_MIN_SLOPE` is never used[0m
+  [1m[94m--> [0msrc/shot_parser.rs:23:7
+   [1m[94m|[0m
+[1m[94m23[0m [1m[94m|[0m const JUMP_MIN_SLOPE: f64 = 0.75;
+   [1m[94m|[0m       [1m[33m^^^^^^^^^^^^^^[0m
+
+[1m[33mwarning[0m[1m: constant `DOUBLE_MIN_SLOPE` is never used[0m
+  [1m[94m--> [0msrc/shot_parser.rs:24:7
+   [1m[94m|[0m
+[1m[94m24[0m [1m[94m|[0m const DOUBLE_MIN_SLOPE: f64 = 0.75;
+   [1m[94m|[0m       [1m[33m^^^^^^^^^^^^^^^^[0m
+
+[1m[33mwarning[0m[1m: constant `AERIAL_MIN_SLOPE` is never used[0m
+  [1m[94m--> [0msrc/shot_parser.rs:25:7
+   [1m[94m|[0m
+[1m[94m25[0m [1m[94m|[0m const AERIAL_MIN_SLOPE: f64 = 1.5;
+   [1m[94m|[0m       [1m[33m^^^^^^^^^^^^^^^^[0m
+
+[1m[33mwarning[0m[1m: constant `SAFE_MAX_SPEED` is never used[0m
+  [1m[94m--> [0msrc/shot_parser.rs:31:7
+   [1m[94m|[0m
+[1m[94m31[0m [1m[94m|[0m const SAFE_MAX_SPEED: f64 = 2100.0;
+   [1m[94m|[0m       [1m[33m^^^^^^^^^^^^^^[0m
+
+[1m[33mwarning[0m[1m: function `normalize3` is never used[0m
+  [1m[94m--> [0msrc/shot_parser.rs:73:4
+   [1m[94m|[0m
+[1m[94m73[0m [1m[94m|[0m fn normalize3(v: Vector) -> Vector { v.normalize() }
+   [1m[94m|[0m    [1m[33m^^^^^^^^^^[0m
+
+[1m[33mwarning[0m[1m: function `angle3` is never used[0m
+  [1m[94m--> [0msrc/shot_parser.rs:74:4
+   [1m[94m|[0m
+[1m[94m74[0m [1m[94m|[0m fn angle3(a: Vector, b: Vector) -> f64 {
+   [1m[94m|[0m    [1m[33m^^^^^^[0m
+
+[1m[33mwarning[0m[1m: constant `MIN_AIR_BOOST_TIME` is never used[0m
+  [1m[94m--> [0msrc/bot.rs:32:7
+   [1m[94m|[0m
+[1m[94m32[0m [1m[94m|[0m const MIN_AIR_BOOST_TIME: f32 = 1.0 / 30.0;
+   [1m[94m|[0m       [1m[33m^^^^^^^^^^^^^^^^^^[0m
+
+[1m[33mwarning[0m[1m: field `last_kickoff_time` is never read[0m
+   [1m[94m--> [0msrc/bot.rs:201:5
+    [1m[94m|[0m
+[1m[94m194[0m [1m[94m|[0m pub struct BotBrain {
+    [1m[94m|[0m            [1m[94m--------[0m [1m[94mfield in this struct[0m
+[1m[94m...[0m
+[1m[94m201[0m [1m[94m|[0m     last_kickoff_time: f32,
+    [1m[94m|[0m     [1m[33m^^^^^^^^^^^^^^^^^[0m
+    [1m[94m|[0m
+    [1m[94m= [0m[1mnote[0m: `BotBrain` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+
+[1m[33mwarning[0m[1m: function `party_cannon_jump_front_contact` is never used[0m
+    [1m[94m--> [0msrc/bot.rs:5003:4
+     [1m[94m|[0m
+[1m[94m5003[0m [1m[94m|[0m fn party_cannon_jump_front_contact(
+     [1m[94m|[0m    [1m[33m^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m
+
+[1m[33mwarning[0m[1m: function `choose_ground_intercept` is never used[0m
+    [1m[94m--> [0msrc/bot.rs:5649:4
+     [1m[94m|[0m
+[1m[94m5649[0m [1m[94m|[0m fn choose_ground_intercept(
+     [1m[94m|[0m    [1m[33m^^^^^^^^^^^^^^^^^^^^^^^[0m
+
+[1m[33mwarning[0m[1m: method `unlimited_boost` is never used[0m
+   [1m[94m--> [0msrc/state.rs:298:12
+    [1m[94m|[0m
+[1m[94m264[0m [1m[94m|[0m impl AgentSettings {
+    [1m[94m|[0m [1m[94m------------------[0m [1m[94mmethod in this implementation[0m
+[1m[94m...[0m
+[1m[94m298[0m [1m[94m|[0m     pub fn unlimited_boost(self) -> bool {
+    [1m[94m|[0m            [1m[33m^^^^^^^^^^^^^^^[0m
+
+[1m[33mwarning[0m: `volt-rust` (bin "volt-rust" test) generated 24 warnings (run `cargo fix --bin "volt-rust" -p volt-rust --tests` to apply 7 suggestions)
+[1m[92m    Finished[0m `test` profile [unoptimized + debuginfo] target(s) in 23.43s
+[1m[92m     Running[0m unittests src/main.rs (target/debug/build/volt-rust/108ca5eee318ca15/out/volt_rust-108ca5eee318ca15)
+
+running 155 tests
+test aerial::tests::aerial_refresh_detects_a_real_backboard_rebound ... ok
+test aerial::tests::aerial_candidate_requires_a_valid_boost_budget ... ok
+test aerial::tests::aerial_refresh_uses_outward_clear_direction_near_own_goal ... ok
+test aerial::tests::aerial_state_emits_jump_and_boost_controls ... ok
+test aerial::tests::aerial_throttle_uses_python_fixed_dt_and_separate_boost_window ... ok
+test aerial::tests::fast_aerial_releases_three_frames_then_holds_second_jump_three_frames ... ok
+test aerial::tests::party_cannon_contact_target_uses_hitbox_aware_standoff ... ok
+test aerial::tests::party_cannon_aerial_contact_uses_actual_hitbox_standoff_and_offset ... ok
+test aerial::tests::committed_aerial_refreshes_to_the_nearest_live_prediction_slice ... ok
+test aerial::tests::jump_shot_party_cannon_direction_is_raw_before_jump_wall_correction ... ok
+test aerial::tests::party_cannon_shot_power_uses_the_2300_speed_band ... ok
+test aerial::tests::party_cannon_wall_aerial_correction_uses_vertical_wall_clearance ... ok
+test approach::tests::dubins_approach_respects_start_and_end_pose ... ok
+test aerial::tests::party_cannon_wall_jump_adjusts_only_when_approach_crosses_wall_clearance ... ok
+test approach::tests::dubins_approach_lookahead_stays_inside_path ... ok
+test bot::tests::contact_approach_is_behind_the_ball_relative_to_goal ... ok
+test bot::tests::centred_slow_ball_does_not_fake_a_kickoff_outside_kickoff_phase ... ok
+test bot::tests::contact_selection_can_choose_a_flank_when_car_is_offset ... ok
+test bot::tests::deepest_player_holds_goalie_and_third_player_transitions ... ok
+test bot::tests::elected_three_player_cover_yields_to_a_comparable_teammate_shot ... ok
+test bot::tests::expired_jump_shot_is_cleared_instead_of_looping ... ok
+test bot::tests::goal_aim_moves_away_from_a_goalkeeper ... ok
+test bot::tests::grid_double_jump_holds_first_press_releases_then_sends_second_press ... ok
+test bot::tests::ground_contact_prefers_forward_velocity_toward_ball ... ok
+test bot::tests::ground_dodge_stays_forward_for_centre_contact ... ok
+test bot::tests::ground_dodge_uses_lateral_direction_only_for_side_geometry ... ok
+test bot::tests::ground_eta_accounts_for_speed_scrub_before_a_sharp_turn ... ok
+test bot::tests::ground_eta_uses_finite_boost_and_existing_turn_direction ... ok
+test bot::tests::ground_eta_increases_for_a_large_heading_change ... ok
+test bot::tests::half_flip_releases_jump_then_cancels_backflip ... ok
+test bot::tests::ground_flip_releases_jump_before_directional_dodge ... ok
+test bot::tests::hitbox_offset_moves_the_selected_car_centre_target ... ok
+test bot::tests::jump_contact_selection_uses_a_real_front_face ... ok
+test bot::tests::jump_intercept_uses_single_jump_height_and_timing_window ... ok
+test bot::tests::jump_shot_boost_only_fires_when_nose_is_aligned_and_contact_is_ahead ... ok
+test bot::tests::jump_shot_hitbox_target_uses_python_ball_radius_and_hitbox_offset ... ok
+test bot::tests::jump_shot_s_tilt_gate_requires_non_quick_airborne_ball_above_car ... ok
+test bot::tests::jump_shot_holds_first_jump_for_ten_hundredths_before_release ... ok
+test bot::tests::jump_shot_holds_jump_then_uses_directional_dodge ... ok
+test bot::tests::jump_shot_s_tilt_is_enabled_only_for_non_quick_balls_above_the_car ... ok
+test bot::tests::jump_shot_s_tilts_airborne_ball_and_quick_path_skips_tilt ... ok
+test bot::tests::jump_shot_tracks_prediction_and_accelerates_before_launch ... ok
+test bot::tests::jump_shot_uses_air_boost_to_correct_the_contact_path ... ok
+test bot::tests::kickoff_boost_selection_prefers_own_half_full_pads ... ok
+test bot::tests::kickoff_selects_nearest_teammate_as_kicker ... ok
+test bot::tests::kickoff_uses_authoritative_match_phase_even_when_ball_is_not_at_centre ... ok
+test bot::tests::one_player_is_always_the_challenger ... ok
+test bot::tests::opponent_arrival_time_rewards_a_facing_defender ... ok
+test bot::tests::predicted_goal_aim_leads_a_lateral_ball_toward_open_goal_space ... ok
+test bot::tests::role_path_relevance_matches_volt_travel_time_comparison ... ok
+test bot::tests::route_boost_is_blocked_by_an_enemy_near_the_ball ... ok
+test bot::tests::route_boost_selects_a_pad_on_the_car_ball_lane ... ok
+test bot::tests::selected_front_face_can_bias_a_clean_side_dodge ... ok
+test bot::tests::shot_approach_flank_fades_out_as_contact_nears ... ok
+test bot::tests::shot_lane_pressure_only_counts_defenders_between_ball_and_goal ... ok
+test bot::tests::shot_patience_waits_for_goal_alignment_when_the_car_can_reach_it ... ok
+test bot::tests::side_shot_requires_a_projected_goal_line_miss_and_enough_setup_time ... ok
+test bot::tests::speedflip_applies_the_python_diagonal_dodge_and_cancel_sequence ... ok
+test bot::tests::speedflip_kickoff_accelerates_then_starts_python_speedflip ... ok
+test bot::tests::teamplay_receive_lead_uses_contact_to_goal_distance ... ok
+test bot::tests::speedflip_kickoff_phase_three_uses_python_jump_release_and_forward_dodge ... ok
+test bot::tests::two_v_two_priority_keeps_emergency_defence_over_teammate_awareness ... ok
+test bot::tests::two_v_two_priority_yields_when_teammate_is_clearly_closer_and_facing_ball ... ok
+test bot::tests::untargeted_fallback_matches_python_team_size_gate ... ok
+test bot::tests::vulnerable_opponent_fallback_requires_close_ball_and_bad_facing ... ok
+test control::drive::tests::default_drive_keeps_pd_controls_when_airborne ... ok
+test control::drive::tests::default_drive_runs_pd_then_throttle ... ok
+test control::drive::tests::default_drive_reports_local_forward_speed ... ok
+test control::pd::tests::default_pd_maps_local_angular_velocity_to_axis_controls ... ok
+test control::pd::tests::default_pd_calculates_local_target_angles ... ok
+test control::pd::tests::default_pd_upside_down_reverses_roll_reference ... ok
+test control::throttle::tests::airborne_leaves_controller_fields_untouched ... ok
+test control::throttle::tests::aligned_boost_is_used_when_throttle_only_cannot_reach_target ... ok
+test control::throttle::tests::boost_is_not_used_when_target_angle_is_too_large ... ok
+test control::throttle::tests::reverse_target_uses_reverse_alignment_angle ... ok
+test control::throttle::tests::throttle_uses_python_acceleration_curve ... ok
+test control::throttle::tests::tight_turn_caps_requested_speed_using_curvature_table ... ok
+test defense::tests::ball_recovery_boosts_down_only_for_a_distant_floor_landing ... ok
+test defense::tests::goalie_holds_python_goal_line_target ... ok
+test defense::tests::ball_recovery_never_uses_downward_boost_for_wall_or_near_floor ... ok
+test defense::tests::landing_plane_matches_virx_wall_and_goal_line_branches ... ok
+test defense::tests::non_goalie_uses_python_transition_lane ... ok
+test defense::tests::recovery_uses_landing_plane_orientation_and_throttle ... ok
+test math::matrix::tests::local_coordinates_match_basis ... ok
+test math::matrix::tests::orientation_is_orthonormal ... ok
+test math::matrix::tests::zero_rotation_matches_world_axes ... ok
+test math::utils::tests::cap_in_field_respects_side_and_goal_mouth_bounds ... ok
+test math::utils::tests::interpolation_and_shape_helpers_are_consistent ... ok
+test math::utils::tests::field_geometry_excludes_walls_and_corner_cutouts ... ok
+test math::utils::tests::slope_and_quadratic_match_python_helpers ... ok
+test math::vector::tests::cap_is_component_wise_like_virxerlu_vector ... ok
+test math::vector::tests::python_vector_helpers_and_componentwise_ops_are_preserved ... ok
+test math::vector::tests::rotation_preserves_height ... ok
+test math::vector::tests::vector_math_works ... ok
+test math::vector::tests::zero_vector_normalizes_safely ... ok
+test mechanics::tests::wall_dash_requires_actual_side_wall_contact_before_jump ... ok
+test mechanics::tests::wall_dash_runs_jump_release_and_dodge_phases ... ok
+test mechanics::tests::wave_dash_releases_jump_then_repeats_landing_input ... ok
+test mechanics::tests::wave_dash_timeout_requests_the_python_recovery_handoff ... ok
+test mechanics::tests::wave_dash_selects_backward_direction_from_target_sign ... ok
+test physics::drive::tests::curvature_uses_python_speed_bands ... ok
+test physics::drive::tests::dodge_impulse_respects_speed_cap ... ok
+test physics::drive::tests::inside_turn_radius_matches_offset_circle_geometry ... ok
+test physics::drive::tests::steer_pd_is_cubic_and_clamped ... ok
+test physics::drive::tests::throttle_acceleration_matches_python_curve ... ok
+test physics::drive::tests::turn_radius_is_inverse_curvature ... ok
+test bot::tests::ground_contact_accounts_for_predicted_car_motion ... ok
+test physics::tests::jump_prediction_respects_gravity_and_hold_duration ... ok
+test bot::tests::kickoff_dodge_uses_python_jump_release_dodge_windows ... ok
+test physics::tests::second_jump_adds_impulse_at_its_scheduled_time ... ok
+test physics::tests::standard_profile_matches_volt_python_constants ... ok
+test physics::tests::zero_duration_does_not_apply_a_jump ... ok
+test planning::tests::airborne_car_must_be_attached_to_wall ... ok
+test planning::tests::noob_wall_jump_time_matches_low_and_high_branches ... ok
+test planning::tests::noob_wall_travel_profile_has_120hz_samples_and_uses_boost ... ok
+test planning::tests::wall_approach_geometry_recognizes_matching_wall_attachment ... ok
+test planning::tests::wall_approach_recognizes_a_ball_rolling_up_from_low_wall_height ... ok
+test planning::tests::wall_approach_geometry_uses_unfolded_ground_route_and_contact_offset ... ok
+test planning::tests::wall_surface_accepts_side_wall_and_opponent_back_wall ... ok
+test planning::tests::wall_unfolding_transforms_match_reference_geometry ... ok
+test planning::tests::wall_surface_excludes_own_back_wall_and_goal_mouth ... ok
+test planning::tests::wall_unfolding_uses_positive_side_for_zero_axis_coordinates ... ok
+test prediction::tests::absolute_prediction_rejects_invalid_clock_and_pre_first_sample_queries ... ok
+test prediction::tests::absolute_prediction_samples_become_packet_relative ... ok
+test prediction::tests::interpolation_returns_ball_state_between_samples ... ok
+test planning::tests::finder_returns_first_reachable_single_jump_wall_contact ... ok
+test prediction::tests::free_flight_matches_ballistic_equations ... ok
+test shot_parser::tests::generic_reachability_rejects_zero_time_and_over_speed ... ok
+test prediction::tests::invalid_sampling_inputs_return_empty_trajectory ... ok
+test prediction::tests::trajectory_includes_zero_and_requested_endpoint ... ok
+test shot_parser::tests::clib_travel_distance_has_direct_and_turn_path_cases ... ok
+test shot_parser::tests::parser_returns_ground_candidate_for_valid_low_ball ... ok
+test shot_physics::tests::ground_shots_require_grounded_car_and_reachable_ball_height ... ok
+test shot_parser::tests::untargeted_parser_preserves_no_target_aerial_validation ... ok
+test shot_physics::tests::aerial_validation_rejects_impossible_boost_and_speed_budget ... ok
+test shot_physics::tests::jump_time_returns_finite_press_and_contact_time ... ok
+test shot_physics::tests::reachable_fast_aerial_reports_launch_mode ... ok
+test shot_physics::tests::runtime_jump_viability_matches_clib_safe_false_wrapper ... ok
+test shot_physics::tests::safe_double_jump_uses_double_jump_height_window ... ok
+test shot_physics::tests::safe_jump_shots_reject_airborne_cars_and_out_of_range_heights ... ok
+test shot_physics::tests::single_and_double_jump_simulations_return_finite_contact_times ... ok
+test shot_planner::tests::fast_intercept_returns_the_first_reachable_prediction_slice ... ok
+test shot_planner::tests::grid_jump_time_matches_source_polynomial ... ok
+test shot_planner::tests::grid_profile_has_601_120hz_samples ... ok
+test shot_planner::tests::pass_target_leads_the_best_forward_teammate ... ok
+test shot_planner::tests::candidate_scan_only_returns_finite_source_scored_candidates ... ok
+test shot_planner::tests::untargeted_score_prefers_approach_from_behind_ball ... ok
+test state::frame_tests::boost_pad_defaults_to_active_until_first_packet_update ... ok
+test state::frame_tests::local_angular_velocity_can_be_restored_to_world_space ... ok
+test shot_planner::tests::untargeted_fallback_applies_opponent_eta_only_to_non_challenger ... ok
+test shot_planner::tests::untargeted_finder_returns_a_reachable_general_touch ... ok
+test state::frame_tests::match_state_default_is_safe_for_uninitialized_agent ... ok
+test teamplay::tests::protocol_rejects_enemy_invalid_status_and_out_of_range_values ... ok
+test teamplay::tests::protocol_accepts_messages_without_optional_receive_plan ... ok
+test teamplay::tests::python_protocol_round_trip_preserves_teamplay_fields ... ok
+
+test result: ok. 155 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+##[group]Run python3 -m py_compile training/visualizer/plot_volt_trace.py
+[36;1mpython3 -m py_compile training/visualizer/plot_volt_trace.py[0m
+shell: /usr/bin/bash -e {0}
+env:
+  CARGO_HOME: /home/runner/.cargo
+  CARGO_INCREMENTAL: 0
+  CARGO_TERM_COLOR: always
