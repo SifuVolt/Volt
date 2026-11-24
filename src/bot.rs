@@ -3377,6 +3377,7 @@ impl BotBrain {
             state.ball - state.shot_direction * contact_standoff - world_hitbox_offset;
 
         let local_ball = car.local_location(state.ball).flatten();
+        let local_target = car.local_location(state.approach).flatten();
         let contact_distance = car.location.distance(state.approach);
         let contact_limit = (92.75 + car.hitbox.length) * 1.02;
 
@@ -3601,15 +3602,7 @@ impl BotBrain {
         // The simulated held-jump acceleration must match the actual input
         // duration used by the explicit jump-shot sequence below.
         let hf = vf.z;
-        // Fast shots need the dodge while the ball is still in reach. Keep
-        // only the minimum legal first-jump hold on that path; normal shots
-        // retain the full height-building hold.
-        let jump_hold_duration = if state.quick {
-            JUMP_MINIMUM_HOLD
-        } else {
-            JUMP_MAX_DURATION
-        };
-        let tau = (jump_hold_duration - jump_elapsed).max(0.0);
+        let tau = (JUMP_MAX_DURATION - jump_elapsed).max(0.0);
         vf = vf + car.up() * (JUMP_ACCEL * tau);
         xf = xf + car.up() * (JUMP_ACCEL * tau * (t - 0.5 * tau));
 
@@ -3672,15 +3665,10 @@ impl BotBrain {
             let close_contact = contact_distance < contact_limit;
             let aligned_contact = contact_distance < contact_limit + 65.0
                 && shot_alignment > 0.985;
-            // If a fast intercept is about to pass, take the touch while the
-            // ball is still inside the dodge's practical reach. Do not wait
-            // for the car to become perfectly oriented to the shot vector.
-            let emergency_contact = state.quick
-                && t <= 0.12
-                && contact_distance <= contact_limit + 150.0;
             let dodge_window_open = jump_elapsed <= 1.25;
-            if (close_contact || aligned_contact || emergency_contact)
+            if (close_contact || aligned_contact)
                 && dodge_window_open
+                && (local_target.x > 0.0 || state.side_mode)
             {
                 let dodge_direction = if local_ball.magnitude() > 1.0 {
                     local_ball.normalize()
@@ -3700,11 +3688,12 @@ impl BotBrain {
                 controller.yaw = dodge_direction.y;
                 controller.roll = 0.0;
             } else if jump_elapsed > 1.25
-                || (t <= 0.0 && contact_distance > contact_limit + 150.0)
+                || local_target.x <= 0.0
+                || (contact_distance > contact_limit + 150.0 && t < 0.12)
             {
                 println!(
-                    "[JUMP SHOT NO DODGE] id={} local_ball_x={:.1} distance={:.1} T={:.3} counter={}",
-                    car.index, local_ball.x, contact_distance, t, state.counter,
+                    "[JUMP SHOT NO DODGE] id={} local_target_x={:.1} distance={:.1} T={:.3} counter={}",
+                    car.index, local_target.x, contact_distance, t, state.counter,
                 );
                 state.counter = 5;
             }
@@ -3721,8 +3710,8 @@ impl BotBrain {
         // hf is captured after the launch impulse and before held-jump accel,
         // exactly as in the Python routine.
         if state.counter < 3 {
-            if jump_elapsed <= jump_hold_duration
-                && (state.quick || jump_elapsed <= JUMP_MINIMUM_HOLD || hf <= state.approach.z)
+            if jump_elapsed <= JUMP_MAX_DURATION
+                && (jump_elapsed <= JUMP_MINIMUM_HOLD || hf <= state.approach.z)
             {
                 controller.jump = true;
             } else {
@@ -6110,117 +6099,6 @@ mod tests {
         assert!(committed.dodge_started_at.is_some());
         assert!((controller.pitch + committed.dodge_direction.x).abs() < 1e-6);
         assert!((controller.yaw - committed.dodge_direction.y).abs() < 1e-6);
-    }
-
-    #[test]
-    fn quick_jump_shot_releases_early_and_dodges_before_the_intercept() {
-        let mut brain = BotBrain::new();
-        let mut me = car(0, 0, Vector::new(250.0, -65.0, 100.0));
-        me.airborne = true;
-        me.air_state = AirState::InAir;
-        let state = JumpShotState {
-            started_at: 1.0,
-            intercept_time: 1.5,
-            ball: Vector::new(300.0, 0.0, 200.0),
-            ball_velocity: Vector::ZERO,
-            approach: Vector::new(200.0, 0.0, 0.0),
-            shot_direction: Vector::new(1.0, 0.0, 0.0),
-            contact_face: "centre",
-            contact_face_label: None,
-            goal_aim_point: Some(Vector::new(5120.0, 512.0, 300.0)),
-            needed_jump_time: 0.2,
-            jumping: true,
-            dodging: false,
-            jump_time: Some(1.0),
-            quick: true,
-            counter: 0,
-            patience_applied: true,
-            dodge_started_at: None,
-            dodge_direction: Vector::new(1.0, 0.0, 0.0),
-            side_mode: false,
-            side_sign: 1.0,
-            side_lateral_distance: 0.0,
-            targets: ShotTargets { left: Vector::ZERO, right: Vector::ZERO },
-        };
-        let ball = BallState { location: state.ball, velocity: state.ball_velocity };
-        let prediction = BallTrajectory { slices: Vec::new() };
-
-        let launch = brain.run_jump_shot(me, ball, &prediction, state, 1.0);
-        assert!(launch.jump, "quick path must still perform the first jump");
-
-        let min_hold = brain.run_jump_shot(
-            me, ball, &prediction, brain.jump_shot.unwrap(), 1.06,
-        );
-        assert!(min_hold.jump, "hold the first jump for the minimum duration");
-
-        let release_1 = brain.run_jump_shot(
-            me, ball, &prediction, brain.jump_shot.unwrap(), 1.0684,
-        );
-        assert!(!release_1.jump);
-        assert_eq!(brain.jump_shot.unwrap().counter, 1);
-
-        let release_2 = brain.run_jump_shot(
-            me, ball, &prediction, brain.jump_shot.unwrap(), 1.0767,
-        );
-        assert!(!release_2.jump);
-        assert_eq!(brain.jump_shot.unwrap().counter, 2);
-
-        let release_3 = brain.run_jump_shot(
-            me, ball, &prediction, brain.jump_shot.unwrap(), 1.0851,
-        );
-        assert!(!release_3.jump);
-        assert_eq!(brain.jump_shot.unwrap().counter, 3);
-
-        let dodge = brain.run_jump_shot(
-            me, ball, &prediction, brain.jump_shot.unwrap(), 1.0934,
-        );
-        assert!(dodge.jump, "fast shot must dodge after the short release sequence");
-        assert_eq!(brain.jump_shot.unwrap().counter, 4);
-    }
-
-    #[test]
-    fn jump_shot_dodges_at_contact_even_if_approach_point_is_behind_car() {
-        let mut brain = BotBrain::new();
-        let mut me = car(0, 0, Vector::new(210.0, -58.0, 200.0));
-        me.airborne = true;
-        me.air_state = AirState::InAir;
-        let state = JumpShotState {
-            started_at: 1.0,
-            intercept_time: 1.5,
-            ball: Vector::new(300.0, 0.0, 200.0),
-            ball_velocity: Vector::ZERO,
-            approach: Vector::new(200.0, 0.0, 0.0),
-            shot_direction: Vector::new(1.0, 0.0, 0.0),
-            contact_face: "centre",
-            contact_face_label: None,
-            goal_aim_point: Some(Vector::new(5120.0, 2000.0, 300.0)),
-            needed_jump_time: 0.2,
-            jumping: true,
-            dodging: false,
-            jump_time: Some(1.0),
-            quick: true,
-            counter: 3,
-            patience_applied: true,
-            dodge_started_at: None,
-            dodge_direction: Vector::new(1.0, 0.0, 0.0),
-            side_mode: false,
-            side_sign: 1.0,
-            side_lateral_distance: 0.0,
-            targets: ShotTargets { left: Vector::ZERO, right: Vector::ZERO },
-        };
-
-        let controller = brain.run_jump_shot(
-            me,
-            BallState { location: state.ball, velocity: state.ball_velocity },
-            &BallTrajectory { slices: Vec::new() },
-            state,
-            1.10,
-        );
-        assert!(controller.jump, "contact-first dodge must not require the approach point to be ahead");
-        let committed = brain.jump_shot.unwrap();
-        assert_eq!(committed.counter, 4);
-        assert!(committed.dodge_started_at.is_some());
-        assert!(committed.dodge_direction.x > 0.0, "dodge should point toward the live ball");
     }
 
     #[test]
