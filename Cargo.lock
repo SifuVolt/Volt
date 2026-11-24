@@ -257,30 +257,3 @@ checksum = "ae137229bcbd6cdf0f7b80a31df61766145077ddf49416a728b02cb3921ff3fc"
 dependencies = [
  "windows-link",
 ]
-[1m[92m Downloading[0m crates ...
-[1m[92m  Downloaded[0m foldhash v0.2.0
-[1m[92m  Downloaded[0m allocator-api2 v0.2.21
-[1m[92m  Downloaded[0m array-init-cursor v0.2.1
-[1m[92m  Downloaded[0m equivalent v1.0.3
-[1m[92m  Downloaded[0m scopeguard v1.2.0
-[1m[92m  Downloaded[0m dubins_paths v3.3.0
-[1m[92m  Downloaded[0m lock_api v0.4.14
-[1m[92m  Downloaded[0m thiserror-impl v2.0.21
-[1m[92m  Downloaded[0m thiserror v2.0.21
-[1m[92m  Downloaded[0m quote v1.0.47
-[1m[92m  Downloaded[0m kanal v0.1.1
-[1m[92m  Downloaded[0m rlbot v0.7.1
-[1m[92m  Downloaded[0m unicode-ident v1.0.27
-[1m[92m  Downloaded[0m planus v1.3.0
-[1m[92m  Downloaded[0m log v0.4.35
-[1m[92m  Downloaded[0m proc-macro2 v1.0.107
-[1m[92m  Downloaded[0m serde_derive v1.0.229
-[1m[92m  Downloaded[0m serde v1.0.229
-[1m[92m  Downloaded[0m serde_core v1.0.229
-[1m[92m  Downloaded[0m hashbrown v0.16.1
-[1m[92m  Downloaded[0m libm v0.2.16
-[1m[92m  Downloaded[0m mio v1.2.5
-[1m[92m  Downloaded[0m rlbot_flat v0.7.1
-[1m[92m  Downloaded[0m syn v3.0.10
-[1m[92m  Downloaded[0m glam v0.34.3
-[1m[92m  Downloaded[0m libc v0.2.191
