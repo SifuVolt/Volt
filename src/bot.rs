@@ -3475,13 +3475,23 @@ impl BotBrain {
             ).time as f32;
         }
 
-        // Aim through the exact centre of the opponent goal and the ball.
-        // No predicted post-hit blending, wall correction, side contact, or
-        // contact-face selection: this is deliberately a direct centre shot.
-        state.shot_direction = (goal_aim - state.ball).flatten().normalize();
+        // Match Python jump_shot's Party Cannon outgoing-shot prediction,
+        // then apply the jump-specific wall correction before constructing
+        // the centre hitbox contact. A pure goal-centre vector can put the
+        // approach point behind the car even when the predicted shot is valid.
+        let mut shot_direction = party_cannon_shot_direction(
+            car,
+            state.ball,
+            state.ball_velocity,
+            t,
+            goal_aim,
+            self.match_state.gravity,
+        ).flatten().normalize();
+        shot_direction = wall_shot_adjust_jump(state.ball, shot_direction).0.flatten().normalize();
+        state.shot_direction = shot_direction;
 
-        // Match Aerial's hitbox geometry: ball radius + half the real hitbox
-        // length, then subtract the car's rotated local hitbox offset.
+        // Exact Python _party_cannon_hitbox_target geometry: ball radius plus
+        // half the real hitbox length, less the rotated local hitbox offset.
         let contact_standoff = BALL_RADIUS + car.hitbox.length * 0.5;
         let world_hitbox_offset = car.forward() * car.hitbox.offset.x
             + car.up().cross(car.forward()) * car.hitbox.offset.y
@@ -3805,8 +3815,9 @@ impl BotBrain {
                 || (contact_distance > contact_limit + 150.0 && t < 0.12)
             {
                 println!(
-                    "[JUMP SHOT NO DODGE] id={} local_target_x={:.1} distance={:.1} T={:.3} counter={}",
-                    car.index, local_target.x, contact_distance, t, state.counter,
+                    "[JUMP SHOT NO DODGE] id={} local_target_x={:.1} local_ball_x={:.1} distance={:.1}/{:.1} aligned={} shot_align={:.3} T={:.3} jump_elapsed={:.3} quick={} counter={}",
+                    car.index, local_target.x, local_ball.x, contact_distance, contact_limit,
+                    close_contact || aligned_contact, shot_alignment, t, jump_elapsed, state.quick, state.counter,
                 );
                 state.counter = 5;
             }
