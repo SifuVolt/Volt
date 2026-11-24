@@ -3658,10 +3658,14 @@ impl BotBrain {
                 && t > 0.04
                 && state.ball.z <= car.location.z + 260.0;
 
-            if (side_ready || normal_ready || quick_ready)
-                && (runtime_reachable || quick_ready)
-            {
-                state.quick = quick_ready || t <= 0.45 || car.boost <= 5.0;
+            // Match Python's branch order: once the contact/alignment
+            // condition is met, commit to the jump. Reachability is checked
+            // only by the later abort branch; it must not veto a ready launch.
+            if side_ready || normal_ready || quick_ready {
+                // Python skips the S-tilt only for genuinely short ETA shots.
+                // Low boost may force an early launch, but it must not suppress
+                // the nose-up posture when there is still time to perform it.
+                state.quick = t <= 0.45;
                 println!(
                     "[JUMP SHOT TYPE] player={} quick={} T={:.3} needed_jump={:.3} distance={:.1} speed={:.1} target_speed={:.1} aligned={} side_ready={} quick_ready={} reachable={}",
                     car.index, state.quick, t, state.needed_jump_time,
@@ -4907,7 +4911,10 @@ fn relative_goal_aim_point(car:CarState,ball:Vector,targets:ShotTargets)->Vector
         foe_goal(team_side(car.team))
     };
     center.z=300.0;
-    if ball.y*team_side(car.team)<=0.0 {
+    // team_side points from the field centre toward this car's own goal.
+    // A ball in our half therefore has the same sign as team_side; Python's
+    // side() helper uses the opposite (attack-direction) convention.
+    if ball.y*team_side(car.team)>=0.0 {
         center.z=470.0;
         return center;
     }
@@ -5690,6 +5697,36 @@ mod tests {
             boost: 50.0,
             hitbox: Hitbox { length: 118.0, width: 84.0, height: 36.0, offset: Vector::ZERO },
         }
+    }
+
+    #[test]
+    fn jump_goal_aim_height_uses_our_half_not_the_opponents_half() {
+        let targets = ShotTargets {
+            left: Vector::new(-893.0, 5120.0, 300.0),
+            right: Vector::new(893.0, 5120.0, 300.0),
+        };
+
+        let blue = car(0, 0, Vector::ZERO);
+        let blue_own_half = relative_goal_aim_point(
+            blue, Vector::new(0.0, -1000.0, 150.0), targets,
+        );
+        let blue_opponent_half = relative_goal_aim_point(
+            blue, Vector::new(0.0, 1000.0, 150.0), targets,
+        );
+        assert!((blue_own_half.x).abs() < 1.0);
+        assert!((blue_own_half.y - 5120.0).abs() < 1.0);
+        assert!((blue_own_half.z - 470.0).abs() < 1.0);
+        assert!((blue_opponent_half.z - 310.0).abs() < 1.0);
+
+        let orange = car(1, 1, Vector::ZERO);
+        let orange_own_half = relative_goal_aim_point(
+            orange, Vector::new(0.0, 1000.0, 150.0), targets,
+        );
+        let orange_opponent_half = relative_goal_aim_point(
+            orange, Vector::new(0.0, -1000.0, 150.0), targets,
+        );
+        assert!((orange_own_half.z - 470.0).abs() < 1.0);
+        assert!((orange_opponent_half.z - 310.0).abs() < 1.0);
     }
 
     #[test]
