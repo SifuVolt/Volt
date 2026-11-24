@@ -891,6 +891,27 @@ mod tests {
     #[test]fn grid_jump_time_matches_source_polynomial(){assert!(grid_jump_time(200.0,false).is_some());assert!(grid_jump_time(350.0,true).is_some());assert!(grid_jump_time(5.0,true).is_some());}
     #[test]fn grid_profile_has_601_120hz_samples(){let(d,v)=grid_profile(test_car());assert_eq!(d.len(),601);assert_eq!(v.len(),601);assert!(d[600]>d[0]);}
     #[test]
+    fn untargeted_fallback_applies_opponent_eta_only_to_non_challenger() {
+        let me = test_car();
+        let mut friend = test_car();
+        friend.index = 1;
+        friend.location = Vector::new(0.0, -1800.0, 17.0);
+
+        let mut foe = test_car();
+        foe.index = 2;
+        foe.team = 1;
+        foe.location = Vector::new(0.0, -100.0, 17.0);
+        let ball = Vector::new(0.0, 0.0, 100.0);
+
+        assert!(!useful(
+            me, &[foe], &[friend], ball, 1.0, ShotType::Jump, false, false,
+        ));
+        assert!(useful(
+            me, &[foe], &[friend], ball, 1.0, ShotType::Jump, false, true,
+        ));
+    }
+
+    #[test]
     fn untargeted_score_prefers_approach_from_behind_ball() {
         let behind = test_car();
         let ball = Vector::new(0.0, 0.0, 180.0);
