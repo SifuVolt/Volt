@@ -6706,11 +6706,13 @@ mod tests {
     }
 
     #[test]
-    fn jump_shot_s_tilt_is_enabled_for_every_airborne_ball_height() {
-        assert!(!jump_shot_should_s_tilt(130.0));
-        assert!(jump_shot_should_s_tilt(130.01));
-        assert!(jump_shot_should_s_tilt(180.0));
-        assert!(jump_shot_should_s_tilt(900.0));
+    fn jump_shot_s_tilt_is_enabled_only_for_non_quick_balls_above_the_car() {
+        assert!(!jump_shot_should_s_tilt(false, 130.0, 0.0));
+        assert!(jump_shot_should_s_tilt(false, 130.01, 0.0));
+        assert!(jump_shot_should_s_tilt(false, 180.0, 0.0));
+        assert!(jump_shot_should_s_tilt(false, 900.0, 0.0));
+        assert!(!jump_shot_should_s_tilt(true, 900.0, 0.0));
+        assert!(!jump_shot_should_s_tilt(false, 180.0, 130.0));
     }
 
     #[test]
