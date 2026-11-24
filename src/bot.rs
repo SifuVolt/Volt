@@ -5248,10 +5248,9 @@ fn select_contact_approach(car: CarState, ball: Vector, target: Vector) -> Vecto
         })
         .unwrap_or(-shot_direction);
 
-    // Python uses max(120, agent.best_shot_value). Volt's standard
-    // best_shot_value is represented here by the same 300-unit approach
-    // standoff used by its shot planning configuration.
-    cap_in_field(&car, (ball + normal * 300.0).flatten())
+    // Python select_ball_contact returns ball + normal * max(120,
+    // best_shot_value); the configured best_shot_value is below 120.
+    cap_in_field(&car, (ball + normal * 120.0).flatten())
 }
 
 /// Select a reachable single-jump contact using Volt's C-library jump-time
