@@ -1840,39 +1840,10 @@ impl BotBrain {
                     }
                 }
             }
-            if candidate.is_none() && !urgent_save && self.ground_flip.is_none()
-                && self.defense_flip.is_none() && self.defense_recovery_target.is_none()
-            {
-                let kickoff = game_time < self.kickoff_contest_until;
-                let rejected_jump = self.jump_shot.is_some_and(|shot| {
-                    opponent_reaches_before(
-                        &opponents, shot.ball, shot.intercept_time - game_time,
-                        ShotType::Jump, kickoff,
-                    )
-                });
-                let rejected_double = self.double_jump_shot.is_some_and(|shot| {
-                    opponent_reaches_before(
-                        &opponents, shot.ball, shot.intercept_time - game_time,
-                        ShotType::DoubleJump, kickoff,
-                    )
-                });
-                if rejected_jump || rejected_double {
-                    self.jump_shot = None;
-                    self.double_jump_shot = None;
-                    self.teamplay_status = "SHOT_ABANDONED".to_owned();
-                    self.teamplay_score = 0.0;
-                    self.teamplay_contact_time = 10.0;
-                    self.teamplay_cover_released = false;
-                    self.teamplay_receive = None;
-                    return Plan {
-                        decision: if is_goalie { Decision::Goalkeeper } else { Decision::Transition },
-                        target: Vector::new(0.0, side * 5050.0, 0.0),
-                        target_speed: 1500.0,
-                        shot: None,
-                        jump: None,
-                    };
-                }
-            }
+            // The elected team attacker owns the challenge. Opponent ETA is
+            // not allowed to cancel a committed jump/double-jump shot here:
+            // Python's useful() bypasses this filter for the elected challenger.
+            // Keep the 1v1 opponent-rejection path separate.
         let selected_score = candidate.map(|shot| shot.score);
         let teamplay_targeted = candidate.is_some_and(|shot| shot.targeted);
         let use_pass_aerial_target = pass_candidate_selected
