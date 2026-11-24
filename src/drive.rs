@@ -68,7 +68,7 @@ pub fn drive_to(car: &CarState, request: DriveRequest) -> ControllerState {
         let braking_speed = (2.0 * 2800.0 * braking_distance).sqrt();
         target_speed = target_speed.min(braking_speed.max(450.0));
     } else if request.preserve_momentum {
-        target_speed = target_speed.max(1550.0);
+        target_speed = request.target_speed.max(1550.0).min(speed_for_heading(heading));
     }
 
     let speed = car.velocity.magnitude();
@@ -126,7 +126,8 @@ pub fn recover_in_air(car: &CarState, boost_accel: f32, target: Option<Vector>) 
     let velocity_target = if car.velocity.magnitude() > 300.0 {
         car.velocity
     } else {
-        target.unwrap_or(car.forward() * 100.0)
+        target.map(|point| point - car.location)
+            .unwrap_or(car.forward() * 100.0)
     };
     let local_forward = car.local(velocity_target);
     let local_up = car.local(Vector::new(0.0, 0.0, 1.0));

@@ -18,7 +18,6 @@ use rlbot::flat::ControllerState;
 
 const BALL_RADIUS: f32 = 92.75;
 const MAX_SPEED: f32 = 2300.0;
-const BOOST_CONSUMPTION: f32 = 33.333333;
 
 fn sign(value: f32) -> f32 {
     if value < 0.0 { -1.0 } else if value > 0.0 { 1.0 } else { 0.0 }
@@ -96,7 +95,7 @@ pub fn hitbox_contact_target(car: CarState, ball: Vector, shot_direction: Vector
     ball - shot_direction.normalize() * (BALL_RADIUS + half_length) - world_offset
 }
 
-fn align_to_direction(car: CarState, direction: Vector) -> ControllerState {
+fn align_to_direction(car: &CarState, direction: Vector) -> ControllerState {
     let local = car.local(direction);
     let (_, output) = default_pd(car, local, false, None);
     let mut controller = ControllerState::default();
@@ -125,6 +124,7 @@ pub struct StrikeExecutor {
     phase_started: f32,
     last_dodge_at: f32,
     jump_started: bool,
+    jump_hold_duration: f32,
     last_tick: Option<f32>,
 }
 
@@ -136,6 +136,7 @@ impl Default for StrikeExecutor {
             phase_started: 0.0,
             last_dodge_at: -999.0,
             jump_started: false,
+            jump_hold_duration: 0.06,
             last_tick: None,
         }
     }
@@ -159,6 +160,7 @@ impl StrikeExecutor {
         self.phase = StrikePhase::Approach;
         self.phase_started = 0.0;
         self.jump_started = false;
+        self.jump_hold_duration = 0.06;
         self.last_tick = None;
     }
 
@@ -170,14 +172,17 @@ impl StrikeExecutor {
     fn current_target(
         &self,
         car: CarState,
-        ball: BallState,
         targets: ShotTargets,
         gravity: Vector,
         time_remaining: f32,
     ) -> (Vector, Vector) {
         let shot = self.candidate.expect("strike candidate is set");
+        let predicted_ball = BallState {
+            location: shot.ball,
+            velocity: shot.ball_velocity,
+        };
         let predicted_direction = party_cannon_shot_direction(
-            car, ball, time_remaining, targets, gravity,
+            car, predicted_ball, time_remaining, targets, gravity,
         );
         let shot_direction = if shot.shot_direction.magnitude() > 0.001
             && shot.shot_type == ShotType::Ground
@@ -187,7 +192,7 @@ impl StrikeExecutor {
             predicted_direction
         };
 
-        let target = hitbox_contact_target(car, ball.location, shot_direction);
+        let target = hitbox_contact_target(car, shot.ball, shot_direction);
         (target, shot_direction)
     }
 
@@ -211,6 +216,10 @@ impl StrikeExecutor {
         if candidate.is_none() {
             if let Some(mut current) = self.candidate {
                 current.time -= elapsed_since_tick;
+                current.ball = current.ball
+                    + current.ball_velocity * elapsed_since_tick
+                    + gravity * (0.5 * elapsed_since_tick * elapsed_since_tick);
+                current.ball_velocity = current.ball_velocity + gravity * elapsed_since_tick;
                 self.candidate = Some(current);
             }
         }
@@ -239,7 +248,7 @@ impl StrikeExecutor {
 
         let time_remaining = shot.time.max(0.0);
         let (contact_target, shot_direction) = self.current_target(
-            car, ball, targets, gravity, time_remaining,
+            car, targets, gravity, time_remaining,
         );
         let distance_to_contact = car.location.distance(contact_target);
 
@@ -265,9 +274,9 @@ impl StrikeExecutor {
                 );
             }
 
-            let vertical_gap = (ball.location.z - BALL_RADIUS - car.location.z).max(0.0);
-            let jump_time = get_jump_time(vertical_gap, car.velocity.z, gravity.z)
-                .time as f32;
+            let vertical_gap = (shot.ball.z - BALL_RADIUS - car.location.z).max(0.0);
+            let jump_prediction = get_jump_time(vertical_gap, car.velocity.z, gravity.z);
+            let jump_time = jump_prediction.time as f32;
             let approach_distance = car.location.flat_distance(shot.approach);
             let launch_due = time_remaining <= jump_time.max(0.06) + 0.10
                 || approach_distance < 230.0
@@ -275,6 +284,7 @@ impl StrikeExecutor {
 
             if launch_due && !car.airborne {
                 self.jump_started = true;
+                self.jump_hold_duration = (jump_prediction.press as f32).clamp(0.06, 0.20);
                 self.set_phase(StrikePhase::JumpHold, now);
             } else {
                 return drive_to(
@@ -300,7 +310,7 @@ impl StrikeExecutor {
                 controller.boost = car.boost > 0.0
                     && shot.shot_type == ShotType::Aerial
                     && car.local(shot_direction).x > 0.6;
-                if now - self.phase_started >= 0.20 || car.airborne && now - self.phase_started >= 0.06 {
+                if now - self.phase_started >= self.jump_hold_duration {
                     self.set_phase(StrikePhase::JumpRelease, now);
                     controller.jump = false;
                 }
