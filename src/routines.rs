@@ -50,7 +50,7 @@ fn ground_shot_direction(
 ) -> Vector {
     let mut aim = target_center(targets);
     aim.z = 300.0;
-    let python_team_side = if car.team == 0 { 1.0 } else { -1.0 };
+    let python_team_side = if car.team == 0 { -1.0 } else { 1.0 };
     if live_ball.y * python_team_side <= 0.0 {
         aim.z = 470.0;
     } else if car.airborne {
@@ -1292,14 +1292,45 @@ impl SpeedFlip {
 
 #[derive(Debug, Clone, Default)]
 pub struct KickoffExecutor {
+    /// 0 = build speed, 1 = wait for speedflip landing,
+    /// 2 = close on ball, 3 = final kickoff dodge until contact.
+    phase: u8,
     speedflip: Option<SpeedFlip>,
-    speedflip_used: bool,
+    phase3_started_at: Option<f32>,
+    phase3_flip_started_at: Option<f32>,
+    phase3_ball_start: Vector,
+    phase3_velocity_start: Vector,
+    finished: bool,
 }
 
 impl KickoffExecutor {
     pub fn reset(&mut self) {
+        self.phase = 0;
         self.speedflip = None;
-        self.speedflip_used = false;
+        self.phase3_started_at = None;
+        self.phase3_flip_started_at = None;
+        self.phase3_ball_start = Vector::ZERO;
+        self.phase3_velocity_start = Vector::ZERO;
+        self.finished = false;
+    }
+
+    fn face_ball(car: CarState, ball: Vector) -> ControllerState {
+        let (_, pd) = default_pd(&car, car.local_location(ball), false, None);
+        let mut controller = ControllerState::default();
+        controller.steer = pd.steer;
+        controller.pitch = pd.pitch;
+        controller.yaw = pd.yaw;
+        controller.roll = pd.roll;
+        controller.throttle = 1.0;
+        controller
+    }
+
+    fn begin_contact_phase(&mut self, ball: BallState, now: f32) {
+        self.phase = 3;
+        self.phase3_started_at = Some(now);
+        self.phase3_flip_started_at = Some(now);
+        self.phase3_ball_start = ball.location;
+        self.phase3_velocity_start = ball.velocity;
     }
 
     pub fn tick_kicker(
@@ -1310,44 +1341,96 @@ impl KickoffExecutor {
         boost_accel: f32,
         now: f32,
     ) -> ControllerState {
-        if let Some(speedflip) = self.speedflip.as_mut() {
-            let output = speedflip.tick(car, now);
-            if speedflip.finished() {
-                self.speedflip = None;
-                self.speedflip_used = true;
-            }
-            return output;
+        let _ = boost_accel;
+        if self.finished {
+            return ControllerState::default();
         }
 
-        let local_target = car.local_location(ball.location);
+        let local_ball = car.local_location(ball.location);
         let distance = car.location.flat_distance(ball.location);
-        let angle = local_target.y.atan2(local_target.x).abs();
-        let forward_speed = car.local_velocity().x;
-        let right_handed = car.location.x * (if team == 0 { 1.0 } else { -1.0 }) > 0.0;
+        let speed = car.velocity.magnitude();
 
-        let eligible = !self.speedflip_used
-            && !car.airborne
-            && local_target.x > 0.0
-            && angle < 0.14
-            && distance > 3000.0
-            && (600.0..1600.0).contains(&forward_speed)
-            && car.boost >= 20.0;
+        match self.phase {
+            0 => {
+                // Python speedflip_kickoff phase 0: accelerate straight at
+                // the ball until 800 uu/s while it remains more than 1800 uu
+                // away. This is deliberately not goto's generic speedflip
+                // condition (which waits for 600-1600 forward speed and
+                // a 3000 uu waypoint).
+                let mut controller = Self::face_ball(car, ball.location);
+                controller.boost = car.boost > 0.0;
+                controller.jump = false;
+                if speed > 800.0 && distance > 1800.0 {
+                    let right_handed = car.location.x * (if team == 0 { 1.0 } else { -1.0 }) > 0.0;
+                    self.speedflip = Some(SpeedFlip::new(right_handed, true));
+                    self.phase = 1;
+                    controller = self.speedflip.as_mut().unwrap().tick(car, now);
+                }
+                controller
+            }
+            1 => {
+                if let Some(speedflip) = self.speedflip.as_mut() {
+                    let controller = speedflip.tick(car, now);
+                    if speedflip.finished() {
+                        self.speedflip = None;
+                    }
+                    return controller;
+                }
+                // Python phase 1 waits for the speedflip to land before
+                // beginning the final straight-line drive.
+                if !car.airborne {
+                    self.phase = 2;
+                }
+                ControllerState::default()
+            }
+            2 => {
+                let mut controller = Self::face_ball(car, ball.location);
+                controller.boost = speed < 2290.0 && car.boost > 0.0;
+                if distance < 1000.0 {
+                    self.begin_contact_phase(ball, now);
+                }
+                controller
+            }
+            3 => {
+                let started = *self.phase3_started_at.get_or_insert(now);
+                let flip_started = *self.phase3_flip_started_at.get_or_insert(now);
+                let mut controller = Self::face_ball(car, ball.location);
+                controller.boost = car.boost > 0.0
+                    && local_ball.y.atan2(local_ball.x).abs() < 0.35;
 
-        if eligible {
-            self.speedflip = Some(SpeedFlip::new(right_handed, true));
-            return self.speedflip.as_mut().unwrap().tick(car, now);
+                // Exact Python kickoff dodge: jump, three-frame release,
+                // then one forward dodge press, followed by a clean release.
+                let flip_time = (now - flip_started).max(0.0);
+                if flip_time < 1.0 / 60.0 {
+                    controller.jump = true;
+                    controller.pitch = 0.0;
+                } else if flip_time < 4.0 / 60.0 {
+                    controller.jump = false;
+                    controller.pitch = 0.0;
+                } else if flip_time < 5.0 / 60.0 {
+                    controller.jump = true;
+                    controller.pitch = -1.0;
+                } else {
+                    controller.jump = false;
+                    controller.pitch = 0.0;
+                }
+
+                let ball_displacement = (ball.location - self.phase3_ball_start).magnitude();
+                let velocity_change = (ball.velocity - self.phase3_velocity_start).magnitude();
+                let likely_contact = (ball_displacement > 100.0 && velocity_change > 250.0)
+                    || velocity_change > 500.0;
+                if likely_contact || now - started > 2.0 {
+                    self.finished = true;
+                    self.speedflip = None;
+                    return ControllerState::default();
+                }
+                controller
+            }
+            _ => {
+                self.finished = true;
+                ControllerState::default()
+            }
         }
-
-        drive_to(
-            &car,
-            DriveRequest {
-                target: ball.location,
-                target_speed: MAX_SPEED,
-                boost_accel,
-                allow_handbrake: false,
-                preserve_momentum: true,
-            },
-        )
     }
 }
 
@@ -1446,6 +1529,125 @@ mod tests {
             score: time,
             parser,
         }
+    }
+
+    #[test]
+    fn relative_goal_aim_uses_python_blue_and_orange_side_convention() {
+        let targets = ShotTargets {
+            left: Vector::new(-820.0, 5120.0, 350.0),
+            right: Vector::new(820.0, 5120.0, 350.0),
+        };
+        let mut blue = car(Vector::ZERO, Vector::ZERO);
+        blue.team = 0;
+        let mut orange = blue;
+        orange.team = 1;
+
+        assert_eq!(
+            ground_shot_direction(
+                &blue, Vector::new(0.0, -1000.0, 100.0),
+                Vector::new(0.0, -1000.0, 100.0), targets, Vector::new(0.0, 1.0, 0.0),
+            ),
+            Vector::new(0.0, 1.0, 0.0),
+        );
+        let blue_opponent_half = ground_shot_direction(
+            &blue, Vector::new(0.0, 1000.0, 100.0),
+            Vector::new(0.0, 1000.0, 100.0), targets, Vector::new(0.0, 1.0, 0.0),
+        );
+        let orange_own_half = ground_shot_direction(
+            &orange, Vector::new(0.0, 1000.0, 100.0),
+            Vector::new(0.0, 1000.0, 100.0), targets, Vector::new(0.0, 1.0, 0.0),
+        );
+        assert!(blue_opponent_half.magnitude() > 0.99);
+        assert!(orange_own_half.magnitude() > 0.99);
+    }
+
+    #[test]
+    fn kickoff_uses_python_speed_threshold_and_team_mirrored_handedness() {
+        let mut blue = car(Vector::new(100.0, 0.0, 17.0), Vector::new(900.0, 0.0, 0.0));
+        let ball = BallState { location: Vector::new(2200.0, 0.0, 92.0), velocity: Vector::ZERO };
+        let mut kickoff = KickoffExecutor::default();
+
+        let output = kickoff.tick_kicker(blue, ball, 0, 991.6667, 1.0);
+        assert_eq!(kickoff.phase, 1);
+        assert!(output.steer.abs() > 0.5);
+        assert!(output.boost);
+
+        let speedflip = kickoff.speedflip.as_ref().expect("kickoff must start speedflip");
+        assert_eq!(speedflip.direction, 1.0);
+
+        blue.team = 1;
+        let mut orange_kickoff = KickoffExecutor::default();
+        let _ = orange_kickoff.tick_kicker(blue, ball, 1, 991.6667, 1.0);
+        assert_eq!(
+            orange_kickoff.speedflip.as_ref().unwrap().direction,
+            -1.0,
+        );
+    }
+
+    #[test]
+    fn kickoff_waits_for_speedflip_landing_then_runs_contact_dodge() {
+        let mut kickoff = KickoffExecutor { phase: 1, ..Default::default() };
+        let airborne = {
+            let mut value = car(Vector::ZERO, Vector::new(900.0, 0.0, 200.0));
+            value.airborne = true;
+            value
+        };
+        let ball = BallState { location: Vector::new(1200.0, 0.0, 92.0), velocity: Vector::ZERO };
+
+        let waiting = kickoff.tick_kicker(airborne, ball, 0, 991.6667, 1.0);
+        assert_eq!(kickoff.phase, 1);
+        assert!(!waiting.jump);
+
+        let grounded = car(Vector::ZERO, Vector::new(1400.0, 0.0, 0.0));
+        let landing = kickoff.tick_kicker(grounded, ball, 0, 991.6667, 1.01);
+        assert_eq!(kickoff.phase, 2);
+        assert!(!landing.jump);
+
+        let close_ball = BallState { location: Vector::new(500.0, 0.0, 92.0), velocity: Vector::ZERO };
+        let _ = kickoff.tick_kicker(grounded, close_ball, 0, 991.6667, 1.02);
+        assert_eq!(kickoff.phase, 3);
+        assert_eq!(kickoff.phase3_started_at, Some(1.02));
+
+        let first_dodge = kickoff.tick_kicker(grounded, close_ball, 0, 991.6667, 1.025);
+        assert!(first_dodge.jump);
+        assert_eq!(first_dodge.pitch, 0.0);
+
+        let released = kickoff.tick_kicker(grounded, close_ball, 0, 991.6667, 1.07);
+        assert!(!released.jump);
+
+        let dodge = kickoff.tick_kicker(grounded, close_ball, 0, 991.6667, 1.09);
+        assert!(dodge.jump);
+        assert_eq!(dodge.pitch, -1.0);
+
+        let after_dodge = kickoff.tick_kicker(grounded, close_ball, 0, 991.6667, 1.10);
+        assert!(!after_dodge.jump);
+    }
+
+    #[test]
+    fn kickoff_finishes_on_ball_velocity_change_or_two_second_timeout() {
+        let mut kickoff = KickoffExecutor {
+            phase: 3,
+            phase3_started_at: Some(1.0),
+            phase3_flip_started_at: Some(1.0),
+            phase3_ball_start: Vector::ZERO,
+            phase3_velocity_start: Vector::ZERO,
+            ..Default::default()
+        };
+        let car = car(Vector::ZERO, Vector::ZERO);
+        let hit_ball = BallState {
+            location: Vector::new(0.0, 120.0, 0.0),
+            velocity: Vector::new(0.0, 300.0, 0.0),
+        };
+        let _ = kickoff.tick_kicker(car, hit_ball, 0, 991.6667, 1.1);
+        assert!(kickoff.finished);
+        assert!(!kickoff.tick_kicker(car, hit_ball, 0, 991.6667, 1.11).jump);
+
+        kickoff.reset();
+        kickoff.phase = 3;
+        kickoff.phase3_started_at = Some(1.0);
+        kickoff.phase3_flip_started_at = Some(1.0);
+        let _ = kickoff.tick_kicker(car, BallState::default(), 0, 991.6667, 3.01);
+        assert!(kickoff.finished);
     }
 
     #[test]
