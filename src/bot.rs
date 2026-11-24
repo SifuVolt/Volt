@@ -9,7 +9,7 @@ use crate::{
     control::{default_drive, default_pd, DriveInput},
     defense::GridDefense,
     math::{utils::cap_in_field, Vector},
-    physics::drive::{curvature, dodge_impulse, throttle_acceleration},
+    physics::drive::{curvature, dodge_impulse, steer_pd, throttle_acceleration},
     prediction::{BallSlice, BallTrajectory},
     planning::{find_wall_drive, wall_approach_geometry, WallDriveMode, WallDrivePlan},
     shot_physics::{double_jump_shot_is_viable, get_jump_time, ground_shot_is_viable, jump_shot_is_viable, ShotType},
@@ -29,6 +29,184 @@ const JUMP_ACCEL: f32 = 1458.3333;
 const JUMP_MAX_DURATION: f32 = 0.20;
 const JUMP_MINIMUM_HOLD: f32 = 0.06;
 const MIN_AIR_BOOST_TIME: f32 = 1.0 / 30.0;
+
+
+/// Party Cannon's jump-shot surface-aware dodge geometry. The Python routine
+/// supplies the outgoing direction; Party Cannon limits its vertical angle to
+/// what the car can rotate into before contact and computes a separate
+/// pre-dodge aim direction.
+fn party_cannon_predict_rotation(acceleration: f32, time: f32) -> f32 {
+    let max_angular_velocity = 5.5_f32;
+    let time_to_max = max_angular_velocity / acceleration;
+    if acceleration * time > max_angular_velocity {
+        acceleration * 0.5 * time_to_max * time_to_max
+            + max_angular_velocity * (time - time_to_max)
+    } else {
+        acceleration * 0.5 * time * time
+    }
+}
+
+fn party_cannon_time_to_jump(height: f32, normal: Vector, velocity: Vector, gravity: Vector) -> f32 {
+    const STICKY_ACCEL: f32 = 325.0;
+    let gravity_axis = gravity.dot(normal);
+    let g = if gravity_axis.abs() > 1.0e-5 { gravity_axis } else { -0.001 };
+    let height_after_jump = JUMP_SPEED * JUMP_MAX_DURATION
+        + JUMP_ACCEL * JUMP_MAX_DURATION * JUMP_MAX_DURATION * 0.5
+        - STICKY_ACCEL * 0.05 * (JUMP_MAX_DURATION - 0.025)
+        + g * JUMP_MAX_DURATION * JUMP_MAX_DURATION * 0.5;
+    let initial_velocity = JUMP_SPEED - 16.25
+        + (g + JUMP_ACCEL) * JUMP_MAX_DURATION;
+    let target_height = height.max(0.0);
+    let final_velocity = (
+        initial_velocity * initial_velocity
+            + 2.0 * g * (target_height - height_after_jump)
+    ).max(0.0).sqrt();
+
+    if target_height < height_after_jump {
+        let final_velocity = (
+            (JUMP_SPEED - 16.25).powi(2)
+                + 2.0 * (g + JUMP_ACCEL) * target_height
+        ).max(0.0).sqrt();
+        let denominator = g + JUMP_ACCEL;
+        if denominator.abs() < 1.0e-5 {
+            0.0
+        } else {
+            (final_velocity - JUMP_SPEED + 16.25) / denominator
+        }
+    } else if g.abs() < 1.0e-5 {
+        JUMP_MAX_DURATION
+    } else {
+        JUMP_MAX_DURATION + (final_velocity - initial_velocity) / g
+    }
+}
+
+/// Port of Party Cannon JumpShot.SetTargetLocation's vertical shot-angle
+/// and dodge-angle calculation. surface_point is a point on the contact
+/// surface; normal points from that surface into the arena.
+fn party_cannon_jump_directions(
+    car: CarState,
+    ball: Vector,
+    shot_direction: Vector,
+    target_location: Vector,
+    surface_point: Vector,
+    normal: Vector,
+    gravity: Vector,
+) -> (Vector, Vector) {
+    let normal = normal.normalize();
+    let shot_direction = shot_direction.normalize();
+    if normal.magnitude() < 0.001 || shot_direction.magnitude() < 0.001 {
+        return (shot_direction, shot_direction.flatten().normalize());
+    }
+
+    let height = (target_location - surface_point).dot(normal);
+    let jump_time = party_cannon_time_to_jump(
+        (height.max(50.0) - 17.0).max(0.0),
+        normal,
+        car.velocity,
+        gravity,
+    );
+    let mut angle = shot_direction.dot(normal).clamp(-1.0, 1.0).asin();
+    let dodge_angle = (angle + 0.25)
+        .min(std::f32::consts::PI * 0.4)
+        .min((party_cannon_predict_rotation(12.46, jump_time) + 0.2).max(0.6));
+    angle = dodge_angle - 0.25;
+
+    let flat_direction = (shot_direction - normal * shot_direction.dot(normal)).normalize();
+    if flat_direction.magnitude() < 0.001 {
+        return (shot_direction, shot_direction.flatten().normalize());
+    }
+    let mut adjusted_shot = (
+        flat_direction * angle.cos() + normal * angle.sin()
+    ).normalize();
+    let dodge_direction = (
+        flat_direction * dodge_angle.cos() + normal * dodge_angle.sin()
+    ).normalize();
+
+    // Party Cannon flattens a shot that would otherwise drive the target
+    // centre too close to the surface, using the ball's actual surface height.
+    if height < 40.0 {
+        let ball_height = (ball - surface_point).dot(normal);
+        let low_angle = ((ball_height - 40.0) / 165.0).clamp(-1.0, 1.0).asin();
+        adjusted_shot = (
+            flat_direction * low_angle.cos() + normal * low_angle.sin()
+        ).normalize();
+    }
+
+    (adjusted_shot, dodge_direction)
+}
+
+/// Party Cannon's Dodge action converts a world-space dodge vector into
+/// speed-compensated local yaw/pitch inputs. RLBot's +Y local axis is right.
+fn party_cannon_dodge_inputs(car: CarState, direction: Vector) -> (f32, f32) {
+    let forward = car.forward().flatten().normalize();
+    if forward.magnitude() < 0.001 {
+        return (0.0, -1.0);
+    }
+    let forward_perpendicular = Vector::new(forward.y, -forward.x, 0.0);
+    let mut local_x = -forward_perpendicular.dot(direction);
+    let mut local_y = -forward.dot(direction);
+
+    let forward_velocity = car.forward().dot(car.velocity);
+    let speed_ratio = forward_velocity.abs() / MAX_SPEED;
+    let backwards_dodge = if forward_velocity.abs() < 100.0 {
+        local_x < 0.0
+    } else {
+        (local_x >= 0.0) != (forward_velocity > 0.0)
+    };
+
+    if backwards_dodge {
+        local_x /= (16.0 / 15.0) * (1.0 + 1.5 * speed_ratio);
+    }
+    local_y /= 1.0 + 0.9 * speed_ratio;
+
+    let magnitude = (local_x * local_x + local_y * local_y).sqrt();
+    if magnitude > 0.001 {
+        local_x /= magnitude;
+        local_y /= magnitude;
+    }
+    (local_x, local_y)
+}
+
+/// Party Cannon's AimAt reference: aim along DodgeDirection while orienting
+/// the roof away from the dodge direction and the contact surface normal.
+fn party_cannon_jump_aim(car: CarState, dodge_direction: Vector, normal: Vector) -> ControllerState {
+    let local_target = car.local(dodge_direction);
+    let mut desired_up = dodge_direction.cross(dodge_direction.cross(-normal)).normalize();
+    if desired_up.magnitude() < 0.001 {
+        desired_up = normal;
+    }
+    let local_up = car.local(desired_up.normalize());
+    let pitch_angle = local_target.z.atan2(local_target.x);
+    let yaw_angle = local_target.y.atan2(local_target.x);
+    let roll_angle = local_up.y.atan2(local_up.z);
+
+    let mut controller = ControllerState::default();
+    controller.steer = steer_pd(yaw_angle, -car.angular_velocity.z * 0.01);
+    controller.pitch = steer_pd(pitch_angle, car.angular_velocity.y * 0.2);
+    controller.yaw = steer_pd(yaw_angle, -car.angular_velocity.z * 0.15);
+    controller.roll = steer_pd(roll_angle, car.angular_velocity.x * 0.25);
+    controller
+}
+
+fn party_cannon_jump_surface(car: CarState, wall_normal: Option<Vector>) -> (Vector, Vector) {
+    let normal = wall_normal
+        .map(Vector::normalize)
+        .filter(|normal| normal.magnitude() > 0.5)
+        .unwrap_or_else(|| {
+            let up = car.up().normalize();
+            if up.z.abs() < 0.95 { up } else { Vector::new(0.0, 0.0, 1.0) }
+        });
+    let surface_point = if normal.z > 0.5 {
+        Vector::ZERO
+    } else if normal.x.abs() > normal.y.abs() {
+        Vector::new(-normal.x.signum() * 4096.0, 0.0, 0.0)
+    } else if normal.y.abs() > 0.5 {
+        Vector::new(0.0, -normal.y.signum() * 5120.0, 0.0)
+    } else {
+        car.location - normal * 17.0
+    };
+    (surface_point, normal)
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Role {
@@ -3386,8 +3564,32 @@ impl BotBrain {
         } else {
             goal_shot
         };
-        let (adjusted_shot, wall_normal, _) = wall_shot_adjust_jump(state.ball, blended_shot);
-        state.shot_direction = adjusted_shot;
+        let (wall_adjusted_shot, wall_normal, _) =
+            wall_shot_adjust_jump(state.ball, blended_shot);
+        state.shot_direction = wall_adjusted_shot;
+
+        // Use Party Cannon's surface-aware shot/dodge pair before rebuilding
+        // the selected Python hitbox contact. ShotDirection is the outgoing
+        // ball direction; DodgeDirection is the orientation target before
+        // the flip and is intentionally not the same vector.
+        let (surface_point, surface_normal) =
+            party_cannon_jump_surface(car, wall_normal);
+        if !state.side_mode {
+            let party_target = state.ball - state.shot_direction * 165.0;
+            let (party_shot, party_dodge) = party_cannon_jump_directions(
+                car,
+                state.ball,
+                state.shot_direction,
+                party_target,
+                surface_point,
+                surface_normal,
+                self.match_state.gravity,
+            );
+            state.shot_direction = party_shot;
+            state.dodge_direction = party_dodge;
+        } else {
+            state.dodge_direction = state.shot_direction.flatten().normalize();
+        }
 
         if state.side_mode {
             let lateral = Vector::new(
@@ -3726,31 +3928,29 @@ impl BotBrain {
         // Match Python jump_shot's first-jump hold and three release frames.
         // The directional dodge is a single fresh jump press, not a timed hold.
 
-        let local_shot_direction = car
-            .local(state.shot_direction.flatten())
-            .flatten()
-            .normalize();
-        let (_, pd) = default_pd(&car, local_shot_direction, false, None);
+        // Party Cannon aims toward its independently calculated DodgeDirection
+        // and aligns the roof against the contact surface. Volt's Python S-tilt
+        // remains layered on top for airborne-ball power shots.
+        let mut party_aim = party_cannon_jump_aim(
+            car, state.dodge_direction, surface_normal,
+        );
 
-        // Exact Python orientation rule: defaultPD aims the shot, then S
-        // (positive pitch = nose up) is held only for a non-quick airborne
-        // ball that is above the car. Keep defaultPD yaw and its paired roll.
         if state.counter < 3 && !state.dodging {
-            controller.steer = pd.steer;
-            controller.pitch = pd.pitch;
-            controller.yaw = pd.yaw;
-            controller.roll = pd.roll;
             let ball_is_airborne = state.ball.z > 130.0;
             let ball_is_above_car = state.ball.z > car.location.z + 65.0;
             let hold_s = ball_is_airborne && ball_is_above_car && !state.quick;
             if hold_s {
-                controller.pitch = 1.0;
-                controller.roll = if pd.yaw.abs() > 0.08 {
-                    -0.20 * pd.yaw.signum()
+                party_aim.pitch = 1.0;
+                party_aim.roll = if party_aim.yaw.abs() > 0.08 {
+                    -0.20 * party_aim.yaw.signum()
                 } else {
                     0.0
                 };
             }
+            controller.steer = party_aim.steer;
+            controller.pitch = party_aim.pitch;
+            controller.yaw = party_aim.yaw;
+            controller.roll = party_aim.roll;
         }
 
         let delta_x = state.approach - xf;
@@ -3777,28 +3977,30 @@ impl BotBrain {
         // Counter 3 is the single directional-dodge window. Keep the existing
         // contact-distance gate so the bot doesn't spend its flip too early.
         if state.counter == 3 {
-            if contact_distance < contact_limit
+            // Party Cannon waits until the final 0.05s, after releasing jump
+            // for three packets. The flip is along ShotDirection, not toward
+            // the instantaneous car-to-ball vector.
+            if t <= 0.05
+                && contact_distance < contact_limit
                 && (local_target.x > 0.0 || state.side_mode)
             {
-                let dodge_direction = if local_ball.magnitude() > 1.0 {
-                    local_ball.normalize()
-                } else {
-                    Vector::new(1.0, 0.0, 0.0)
-                };
-                state.dodge_direction = dodge_direction;
+                let dodge_world = state.shot_direction.flatten().normalize();
+                let (dodge_yaw, dodge_pitch) =
+                    party_cannon_dodge_inputs(car, dodge_world);
                 state.dodge_started_at = Some(game_time);
                 state.counter = 4;
                 self.last_flip_time = game_time;
                 println!(
-                    "[JUMP SHOT PHASE] player={} phase=forward_dodge elapsed={:.3} distance={:.1} T={:.3}",
-                    car.index, jump_elapsed, contact_distance, t,
+                    "[JUMP SHOT PHASE] player={} phase=party_cannon_directional_dodge elapsed={:.3} distance={:.1} T={:.3} dodge=({:.2},{:.2})",
+                    car.index, jump_elapsed, contact_distance, t, dodge_yaw, dodge_pitch,
                 );
                 controller.jump = true;
-                controller.pitch = -dodge_direction.x;
-                controller.yaw = dodge_direction.y;
+                controller.pitch = dodge_pitch;
+                controller.yaw = dodge_yaw;
                 controller.roll = 0.0;
-            } else if local_target.x <= 0.0
-                || (contact_distance > contact_limit + 150.0 && t < 0.12)
+            } else if t <= 0.05
+                && (local_target.x <= 0.0
+                    || contact_distance > contact_limit + 150.0)
             {
                 println!(
                     "[JUMP SHOT NO DODGE] id={} local_target_x={:.1} distance={:.1} T={:.3} counter={}",
