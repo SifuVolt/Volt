@@ -3632,9 +3632,7 @@ impl BotBrain {
             controller.pitch = pd.pitch.max(-0.35);
             controller.yaw = pd.yaw;
             controller.roll = pd.roll;
-            let ball_airborne = state.ball.z > 130.0;
-            let ball_above_car = state.ball.z > car.location.z + 65.0;
-            if !state.quick && ball_airborne && ball_above_car {
+            if jump_shot_should_s_tilt(state.quick, state.ball.z, car.location.z) {
                 // S-tilt only for a genuinely airborne ball above the car.
                 // The quick path skips this setup and prioritises the dodge.
                 controller.pitch = 1.0;
@@ -3788,8 +3786,8 @@ impl BotBrain {
 
 
 #[inline]
-fn jump_shot_should_s_tilt(predicted_ball_z: f32) -> bool {
-    predicted_ball_z > 130.0
+fn jump_shot_should_s_tilt(quick: bool, predicted_ball_z: f32, car_z: f32) -> bool {
+    !quick && predicted_ball_z > 130.0 && predicted_ball_z > car_z + 65.0
 }
 
 #[inline]
@@ -6296,6 +6294,14 @@ mod tests {
     }
 
     #[test]
+    fn jump_shot_s_tilt_gate_requires_non_quick_airborne_ball_above_car() {
+        assert!(jump_shot_should_s_tilt(false, 200.0, 100.0));
+        assert!(!jump_shot_should_s_tilt(true, 200.0, 100.0));
+        assert!(!jump_shot_should_s_tilt(false, 130.0, 0.0));
+        assert!(!jump_shot_should_s_tilt(false, 150.0, 100.0));
+    }
+
+    #[test]
     fn jump_shot_s_tilts_airborne_ball_and_quick_path_skips_tilt() {
         let mut brain = BotBrain::new();
         // Put the car airborne and inside the calculated front-contact
@@ -6339,7 +6345,10 @@ mod tests {
         let quick = JumpShotState { quick: true, ..state };
         let fast = brain.run_jump_shot(me, BallState { location: quick.ball, velocity: quick.ball_velocity }, &BallTrajectory { slices: Vec::new() }, quick, 1.0);
         assert!(fast.jump, "quick shots still perform the first jump");
-        assert_ne!(fast.pitch, 1.0, "quick shots skip the S-tilt and prioritise the dodge");
+        assert!(
+            !jump_shot_should_s_tilt(true, quick.ball.z, me.location.z),
+            "quick shots must bypass the forced S-tilt even if PD independently requests positive pitch"
+        );
 
         let release_1 = brain.run_jump_shot(
             me,
