@@ -3721,13 +3721,11 @@ impl BotBrain {
             state.approach =
                 state.ball - lateral * state.side_lateral_distance * state.side_sign;
         } else {
-            // Python _party_cannon_hitbox_target: ball radius plus half the
-            // actual hitbox length, with the current contact label rebuilt
-            // against the refreshed shot vector.
+            // Match Python's initial Party Cannon hitbox-centre target and
+            // preserve its selected legacy face until the dynamic front-face
+            // search below chooses the best point for the actual impact pose.
             let contact_standoff = 92.75 + car.hitbox.length * 0.5;
             let nominal_target = state.ball - state.shot_direction * contact_standoff;
-            // VirxERLU exposes hitbox offset in local forward/right/up axes;
-            // convert it to world space exactly as Python Aerial does.
             let world_hitbox_offset = car.forward() * car.hitbox.offset.x
                 + car.up().cross(car.forward()) * car.hitbox.offset.y
                 + car.up() * car.hitbox.offset.z;
@@ -3742,6 +3740,8 @@ impl BotBrain {
             });
 
             if let Some(normal) = wall_normal {
+                // Python disables front-face selection for wall shots and
+                // applies this tangential/gravity correction instead.
                 let tangent = state.shot_direction - normal * state.shot_direction.dot(normal);
                 if tangent.magnitude() > 0.001 {
                     offset_target = offset_target - tangent.normalize() * 25.0;
@@ -3757,6 +3757,22 @@ impl BotBrain {
                     offset_target = offset_target
                         - self.match_state.gravity * (0.5 * jump_time * jump_time);
                 }
+            } else if let Some((selected_target, selected_label)) =
+                crate::contact::select_jump_front_contact(
+                    car,
+                    state.ball,
+                    state.shot_direction,
+                    t,
+                    state.jumping,
+                    state.contact_face_label,
+                    self.match_state.gravity,
+                )
+            {
+                // This is the seven-point, angular-velocity-aware front-face
+                // selection from the Python jump_shot routine. Keep the
+                // selected label between frames to prevent face oscillation.
+                state.contact_face_label = Some(selected_label);
+                offset_target = selected_target;
             }
 
             state.approach = offset_target;
