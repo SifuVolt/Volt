@@ -3663,8 +3663,10 @@ impl BotBrain {
                 self.match_state.gravity,
             );
             state.shot_direction = party_shot;
-            state.dodge_direction = party_dodge;
-        } else {
+            if state.counter < 4 {
+                state.dodge_direction = party_dodge;
+            }
+        } else if state.counter < 4 {
             state.dodge_direction = state.shot_direction.flatten().normalize();
         }
 
@@ -4064,6 +4066,9 @@ impl BotBrain {
                 let dodge_world = state.shot_direction.flatten().normalize();
                 let (dodge_yaw, dodge_pitch) =
                     party_cannon_dodge_inputs(car, dodge_world);
+                // Cache Party Cannon's local dodge input on the first airborne
+                // dodge frame, as its Dodge action does with _input.
+                state.dodge_direction = Vector::new(dodge_yaw, dodge_pitch, 0.0);
                 state.dodge_started_at = Some(game_time);
                 state.counter = 4;
                 self.last_flip_time = game_time;
@@ -4086,9 +4091,16 @@ impl BotBrain {
                 state.counter = 5;
             }
         } else if state.counter == 4 {
-            // Python's counter-4 branch only marks the dodge as active.
-            // It does not keep jump/pitch/yaw held on subsequent packets.
             state.dodging = true;
+            // Party Cannon keeps its cached directional input active for
+            // 0.6s after the airborne dodge starts.
+            if state.dodge_started_at
+                .is_some_and(|started| game_time - started < 0.6)
+            {
+                controller.jump = true;
+                controller.yaw = state.dodge_direction.x;
+                controller.pitch = state.dodge_direction.y;
+            }
         } else if state.counter == 5 {
             self.jump_shot = None;
             return self.start_ball_recovery(car);
