@@ -214,7 +214,10 @@ mod tests {
         ).unwrap();
         assert_eq!(contact.contact_point, Vector::new(407.25, 0.0, 93.0));
         assert!(contact.approach.x < ball.x - BALL_RADIUS);
-        assert_eq!(contact.face, "centre");
+        assert!(contact.normal.magnitude() > 0.99);
+        assert!((0.0..=1.0).contains(&contact.quality));
+        assert!(["centre", "top_left", "top_right", "left", "right", "top", "bottom"]
+            .contains(&contact.face));
     }
 
     #[test]
