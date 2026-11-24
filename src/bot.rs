@@ -6181,7 +6181,7 @@ mod tests {
     #[test]
     fn jump_shot_dodges_at_contact_even_if_approach_point_is_behind_car() {
         let mut brain = BotBrain::new();
-        let mut me = car(0, 0, Vector::new(250.0, -65.0, 0.0));
+        let mut me = car(0, 0, Vector::new(210.0, -58.0, 200.0));
         me.airborne = true;
         me.air_state = AirState::InAir;
         let state = JumpShotState {
