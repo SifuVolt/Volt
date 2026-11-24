@@ -695,6 +695,7 @@ impl BotBrain {
                 frame.match_state.gravity,
                 boost_accel,
                 now,
+                ball.location.z,
                 self.kickoff_contest_until,
                 min_height,
                 max_height,
