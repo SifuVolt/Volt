@@ -3703,30 +3703,10 @@ impl BotBrain {
             wall_shot_adjust_jump(state.ball, blended_shot);
         state.shot_direction = wall_adjusted_shot;
 
-        // Use Party Cannon's surface-aware shot/dodge pair before rebuilding
-        // the selected Python hitbox contact. ShotDirection is the outgoing
-        // ball direction; DodgeDirection is the orientation target before
-        // the flip and is intentionally not the same vector.
-        let (surface_point, surface_normal) =
-            party_cannon_jump_surface(car, wall_normal);
-        if !state.side_mode {
-            let party_target = state.ball - state.shot_direction * 165.0;
-            let (party_shot, party_dodge) = party_cannon_jump_directions(
-                state.ball,
-                state.shot_direction,
-                party_target,
-                surface_point,
-                surface_normal,
-                self.match_state.gravity,
-            );
-            state.shot_direction = party_shot;
-            if state.counter < 4 {
-                state.dodge_direction = party_dodge;
-            }
-        } else if state.counter < 4 {
-            state.dodge_direction = state.shot_direction.flatten().normalize();
-        }
-
+        // Keep the Python Volt shot vector unchanged after WallShot.adjust_jump.
+        // The Python jump routine uses that vector for both the hitbox contact
+        // line and its defaultPD air-orientation target; Party Cannon's separate
+        // surface-angle controller is not part of this routine.
         if state.side_mode {
             let lateral = Vector::new(
                 -state.shot_direction.y,
@@ -3920,48 +3900,13 @@ impl BotBrain {
             let aligned = local_offset_target.y.abs() < 92.0
                 && local_vf.x >= local_offset_target.x - car.hitbox.length / 3.0
                 && local_offset_target.x > 0.0;
-            // Start the jump while there is still room to shape the nose and
-            // use the selected front-hitbox contact in the air. Requiring the
-            // car to reach the old 92-unit lateral tolerance first delayed
-            // launch on slightly offset contacts until the dodge window was
-            // already closing.
-            let early_contact_lane = local_offset_target.x > 0.0
-                && local_offset_target.y.abs() <= 150.0
-                && distance_remaining
-                    <= contact_limit + car.local_velocity().x.max(0.0) * 0.22;
-            let party_cannon_ready = party_cannon_ready_to_jump(
-                car,
-                state.approach,
-                surface_point,
-                surface_normal,
-                self.match_state.gravity,
-                t,
-            );
-            let normal_ready = ((close_enough || aligned || early_contact_lane)
-                && launch_window)
-                || party_cannon_ready;
+            // Exact Python launch gate: close contact or the predicted
+            // forward/lateral alignment, and only inside the 1.08 jump-time
+            // window. Do not add an earlier "quick" or Party Cannon readiness
+            // path; quick only disables S-tilt after this same launch trigger.
+            let normal_ready = (close_enough || aligned) && launch_window;
 
-            // A short-ETA / empty-boost shot cannot spend another packet
-            // waiting for perfect alignment. Permit the quick jump only when
-            // the car is already in the front contact lane and close enough
-            // that the jump+dodge can finish the touch.
-            let quick_eta_pressure = t <= 0.45
-                || (car.boost <= 5.0 && t <= state.needed_jump_time * 1.15);
-            let quick_contact_ready = local_ball.x > 0.0
-                && local_target.x > 0.0
-                && local_target.y.abs() <= 180.0
-                && contact_distance <= contact_limit + 100.0
-                && time_to_contact >= 0.0
-                && time_to_contact <= t.max(0.0) + 0.08;
-            let quick_ready = quick_eta_pressure
-                && quick_contact_ready
-                && t > 0.04
-                && state.ball.z <= car.location.z + 260.0;
-
-            // Match Python's branch order: once the contact/alignment
-            // condition is met, commit to the jump. Reachability is checked
-            // only by the later abort branch; it must not veto a ready launch.
-            if side_ready || normal_ready || quick_ready {
+            if side_ready || normal_ready {
                 // Python skips the S-tilt only for genuinely short ETA shots.
                 // Low boost may force an early launch, but it must not suppress
                 // the nose-up posture when there is still time to perform it.
@@ -4073,35 +4018,34 @@ impl BotBrain {
         // Match Python jump_shot's first-jump hold and three release frames.
         // The directional dodge is a single fresh jump press, not a timed hold.
 
-        // Party Cannon aims toward its independently calculated DodgeDirection
-        // and aligns the roof against the contact surface. Volt's Python S-tilt
-        // remains layered on top for airborne-ball power shots.
-        let mut party_aim = party_cannon_jump_aim(
-            car, state.dodge_direction, surface_normal,
-        );
-
+        // Python Volt calls defaultPD on the goal-directed shot vector.
+        // Keep its yaw/roll alignment, then apply the original S-tilt override
+        // only for an airborne ball above the car.
         if state.counter < 3 && !state.dodging {
+            let local_shot_direction =
+                car.local(state.shot_direction.flatten().normalize()).flatten();
+            let (_, mut aim) = default_pd(&car, local_shot_direction, false, None);
             let ball_is_airborne = state.ball.z > 130.0;
             let ball_is_above_car = state.ball.z > car.location.z + 65.0;
             let hold_s = ball_is_airborne && ball_is_above_car && !state.quick;
             if hold_s {
-                party_aim.pitch = 1.0;
-                party_aim.roll = if party_aim.yaw.abs() > 0.08 {
-                    -0.20 * party_aim.yaw.signum()
+                aim.pitch = 1.0;
+                aim.roll = if aim.yaw.abs() > 0.08 {
+                    -0.20 * aim.yaw.signum()
                 } else {
                     0.0
                 };
             }
-            controller.steer = party_aim.steer;
-            controller.pitch = party_aim.pitch;
-            controller.yaw = party_aim.yaw;
-            controller.roll = party_aim.roll;
+            controller.steer = aim.steer;
+            controller.pitch = aim.pitch;
+            controller.yaw = aim.yaw;
+            controller.roll = aim.roll;
         }
 
         let delta_x = state.approach - xf;
         let d_direction = delta_x.normalize();
         if state.counter < 3
-            && car.forward().dot(d_direction) > 0.15
+            && car.forward().dot(d_direction).abs() > 0.5
             && t > 1.0e-6
         {
             // Boost toward the live hitbox-aware contact target whenever the
@@ -4122,33 +4066,35 @@ impl BotBrain {
         // Counter 3 is the single directional-dodge window. Keep the existing
         // contact-distance gate so the bot doesn't spend its flip too early.
         if state.counter == 3 {
-            // Party Cannon waits until the final 0.05s, after releasing jump
-            // for three packets. The flip is along ShotDirection, not toward
-            // the instantaneous car-to-ball vector.
-            if t <= 0.05
-                && contact_distance < contact_limit
+            // Exact Python dodge timing: after the three jump-release frames,
+            // dodge immediately if the selected hitbox approach is still close
+            // and in front. Aim the dodge at the predicted ball in car-local
+            // coordinates, not at Party Cannon's separate world-space vector.
+            if contact_distance
+                < (92.75 + car.hitbox.length) * 1.02
                 && (local_target.x > 0.0 || state.side_mode)
             {
-                let dodge_world = state.shot_direction.flatten().normalize();
-                let (dodge_yaw, dodge_pitch) =
-                    party_cannon_dodge_inputs(car, dodge_world);
-                // Cache Party Cannon's local dodge input on the first airborne
-                // dodge frame, as its Dodge action does with _input.
-                state.dodge_direction = Vector::new(dodge_yaw, dodge_pitch, 0.0);
-                state.dodge_started_at = Some(game_time);
+                let local_ball_for_dodge = car.local_location(state.ball).flatten();
+                let dodge_direction = if local_ball_for_dodge.magnitude() > 1.0 {
+                    local_ball_for_dodge.normalize()
+                } else {
+                    Vector::new(1.0, 0.0, 0.0)
+                };
+                controller.pitch = -dodge_direction.x;
+                controller.yaw = dodge_direction.y;
+                controller.jump = true;
+                state.dodging = true;
                 state.counter = 4;
                 self.last_flip_time = game_time;
                 println!(
-                    "[JUMP SHOT PHASE] player={} phase=party_cannon_directional_dodge elapsed={:.3} distance={:.1} T={:.3} dodge=({:.2},{:.2})",
-                    car.index, jump_elapsed, contact_distance, t, dodge_yaw, dodge_pitch,
+                    "[JUMP SHOT PHASE] player={} phase=python_directional_dodge elapsed={:.3} distance={:.1} T={:.3} dodge=({:.2},{:.2})",
+                    car.index, jump_elapsed, contact_distance, t,
+                    controller.yaw, controller.pitch,
                 );
-                controller.jump = true;
-                controller.pitch = dodge_pitch;
-                controller.yaw = dodge_yaw;
-                controller.roll = 0.0;
-            } else if t <= 0.05
-                && (local_target.x <= 0.0
-                    || contact_distance > contact_limit + 150.0)
+            } else if local_target.x <= 0.0
+                || (contact_distance
+                    > (92.75 + car.hitbox.length) * 1.02 + 150.0
+                    && t < 0.12)
             {
                 println!(
                     "[JUMP SHOT NO DODGE] id={} local_target_x={:.1} distance={:.1} T={:.3} counter={}",
@@ -4158,15 +4104,6 @@ impl BotBrain {
             }
         } else if state.counter == 4 {
             state.dodging = true;
-            // Party Cannon keeps its cached directional input active for
-            // 0.6s after the airborne dodge starts.
-            if let Some((yaw, pitch)) = state.dodge_started_at.and_then(|started| {
-                party_cannon_cached_dodge_input(started, game_time, state.dodge_direction)
-            }) {
-                controller.jump = true;
-                controller.yaw = yaw;
-                controller.pitch = pitch;
-            }
         } else if state.counter == 5 {
             self.jump_shot = None;
             return self.start_ball_recovery(car);
