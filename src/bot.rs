@@ -46,7 +46,7 @@ fn party_cannon_predict_rotation(acceleration: f32, time: f32) -> f32 {
     }
 }
 
-fn party_cannon_time_to_jump(height: f32, normal: Vector, velocity: Vector, gravity: Vector) -> f32 {
+fn party_cannon_time_to_jump(height: f32, normal: Vector, gravity: Vector) -> f32 {
     const STICKY_ACCEL: f32 = 325.0;
     let gravity_axis = gravity.dot(normal);
     let g = if gravity_axis.abs() > 1.0e-5 { gravity_axis } else { -0.001 };
@@ -84,7 +84,6 @@ fn party_cannon_time_to_jump(height: f32, normal: Vector, velocity: Vector, grav
 /// and dodge-angle calculation. surface_point is a point on the contact
 /// surface; normal points from that surface into the arena.
 fn party_cannon_jump_directions(
-    car: CarState,
     ball: Vector,
     shot_direction: Vector,
     target_location: Vector,
@@ -102,7 +101,6 @@ fn party_cannon_jump_directions(
     let jump_time = party_cannon_time_to_jump(
         (height.max(50.0) - 17.0).max(0.0),
         normal,
-        car.velocity,
         gravity,
     );
     let mut angle = shot_direction.dot(normal).clamp(-1.0, 1.0).asin();
@@ -189,13 +187,27 @@ fn party_cannon_jump_aim(car: CarState, dodge_direction: Vector, normal: Vector)
 }
 
 fn party_cannon_jump_surface(car: CarState, wall_normal: Option<Vector>) -> (Vector, Vector) {
+    let attached_wall_normal = {
+        let up = car.up().normalize();
+        if car.location.x.abs() > 3900.0
+            && up.x * -car.location.x.signum() > 0.65
+        {
+            Some(Vector::new(-car.location.x.signum(), 0.0, 0.0))
+        } else if car.location.y.abs() > 4950.0
+            && up.y * -car.location.y.signum() > 0.65
+        {
+            Some(Vector::new(0.0, -car.location.y.signum(), 0.0))
+        } else {
+            None
+        }
+    };
+    // Do not use car.up() as the surface normal for an airborne floor shot:
+    // the car's roof rotates during S-tilt, while Party Cannon's surface stays
+    // fixed to the arena floor.
     let normal = wall_normal
-        .map(Vector::normalize)
-        .filter(|normal| normal.magnitude() > 0.5)
-        .unwrap_or_else(|| {
-            let up = car.up().normalize();
-            if up.z.abs() < 0.95 { up } else { Vector::new(0.0, 0.0, 1.0) }
-        });
+        .or(attached_wall_normal)
+        .unwrap_or(Vector::new(0.0, 0.0, 1.0))
+        .normalize();
     let surface_point = if normal.z > 0.5 {
         Vector::ZERO
     } else if normal.x.abs() > normal.y.abs() {
@@ -7007,3 +7019,74 @@ mod tests {
     }
 
 }
+
+
+#[cfg(test)]
+mod party_cannon_jump_tests {
+    use super::*;
+    use crate::math::Matrix3;
+    use crate::state::Hitbox;
+    use rlbot::flat::AirState;
+
+    fn car(forward: Vector, velocity: Vector) -> CarState {
+        let yaw = forward.y.atan2(forward.x);
+        CarState {
+            index: 0,
+            team: 0,
+            location: Vector::new(0.0, 0.0, 17.0),
+            velocity,
+            orientation: Matrix3::new(0.0, yaw, 0.0),
+            angular_velocity: Vector::ZERO,
+            demolished: false,
+            airborne: true,
+            supersonic: false,
+            jumped: true,
+            doublejumped: false,
+            air_state: AirState::InAir,
+            has_jumped: true,
+            has_double_jumped: false,
+            has_dodged: false,
+            dodge_timeout: 0.0,
+            dodge_elapsed: 0.0,
+            dodge_dir: Vector::ZERO,
+            flip_reset_available: false,
+            boost: 0.0,
+            hitbox: Hitbox::default(),
+        }
+    }
+
+    #[test]
+    fn party_cannon_forward_dodge_maps_to_nose_down() {
+        let me = car(Vector::new(1.0, 0.0, 0.0), Vector::ZERO);
+        let (yaw, pitch) =
+            party_cannon_dodge_inputs(me, Vector::new(1.0, 0.0, 0.0));
+        assert!(yaw.abs() < 1.0e-5);
+        assert!((pitch + 1.0).abs() < 1.0e-5);
+    }
+
+    #[test]
+    fn party_cannon_right_dodge_maps_to_positive_yaw() {
+        let me = car(Vector::new(1.0, 0.0, 0.0), Vector::ZERO);
+        let (yaw, pitch) =
+            party_cannon_dodge_inputs(me, Vector::new(0.0, 1.0, 0.0));
+        assert!((yaw - 1.0).abs() < 1.0e-5);
+        assert!(pitch.abs() < 1.0e-5);
+    }
+
+    #[test]
+    fn party_cannon_jump_direction_respects_surface_rotation_limit() {
+        let me = car(Vector::new(1.0, 0.0, 0.0), Vector::ZERO);
+        let (shot, dodge) = party_cannon_jump_directions(
+            Vector::new(0.0, 0.0, 180.0),
+            Vector::new(1.0, 0.0, 0.8).normalize(),
+            Vector::new(0.0, 0.0, 150.0),
+            Vector::ZERO,
+            Vector::new(0.0, 0.0, 1.0),
+            Vector::new(0.0, 0.0, -650.0),
+        );
+        assert!((shot.magnitude() - 1.0).abs() < 1.0e-5);
+        assert!((dodge.magnitude() - 1.0).abs() < 1.0e-5);
+        assert!(dodge.z >= shot.z);
+    }
+}
+
