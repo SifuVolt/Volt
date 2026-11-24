@@ -499,6 +499,7 @@ impl BotBrain {
                     DriveRequest {
                         target: cheat,
                         target_speed: 1850.0,
+                        vector: None,
                         boost_accel,
                         allow_handbrake: false,
                         preserve_momentum: false,
@@ -848,6 +849,7 @@ impl BotBrain {
                 DriveRequest {
                     target: movement_target,
                     target_speed: if plan.role == Role::Challenge { 2300.0 } else { 1900.0 },
+                    vector: if plan.role == Role::Support { Some(ball.location) } else { None },
                     boost_accel,
                     allow_handbrake: true,
                     preserve_momentum: plan.role == Role::Challenge,
