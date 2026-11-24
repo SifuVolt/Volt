@@ -3338,6 +3338,9 @@ impl BotBrain {
 
         let t = state.intercept_time - game_time;
         let time_remaining = t.clamp(0.000001, 6.0);
+        // This jump-shot controller uses a single centre-line contact. Ignore
+        // legacy flank/side-shot metadata once this routine owns the shot.
+        state.side_mode = false;
 
         // Python refreshes its predicted ball slice every packet until the
         // jump begins. A committed shot must follow the moving intercept,
@@ -3359,96 +3362,19 @@ impl BotBrain {
             ).time as f32;
         }
 
-        // Recalculate the goal-directed shot vector and contact approach each
-        // frame, as Python jump_shot.run does after it has committed to the
-        // predicted ball slice.
-        // Python jump_shot calls Aerial._party_cannon_shot_direction
-        // directly, then applies WallShot.adjust_jump after blending. Do not
-        // use party_cannon_contact_geometry here: that helper already applies
-        // the aerial wall correction and would double-correct this shot.
-        let predicted_shot = party_cannon_shot_direction(
-            car,
-            state.ball,
-            state.ball_velocity,
-            time_remaining,
-            goal_aim,
-            self.match_state.gravity,
-        );
-        let goal_shot = (goal_aim - state.ball).flatten().normalize();
-        let predicted_shot = predicted_shot.flatten().normalize();
-        let blended_shot = if goal_shot.magnitude() > 0.001
-            && predicted_shot.magnitude() > 0.001
-        {
-            (goal_shot * 0.65 + predicted_shot * 0.35).normalize()
-        } else {
-            goal_shot
-        };
-        let (adjusted_shot, wall_normal, _) = wall_shot_adjust_jump(state.ball, blended_shot);
-        state.shot_direction = adjusted_shot;
+        // Aim through the exact centre of the opponent goal and the ball.
+        // No predicted post-hit blending, wall correction, side contact, or
+        // contact-face selection: this is deliberately a direct centre shot.
+        state.shot_direction = (goal_aim - state.ball).flatten().normalize();
 
-        if state.side_mode {
-            let lateral = Vector::new(
-                -state.shot_direction.y,
-                state.shot_direction.x,
-                0.0,
-            ).normalize();
-            state.approach =
-                state.ball - lateral * state.side_lateral_distance * state.side_sign;
-        } else {
-            // Python _party_cannon_hitbox_target: ball radius plus half the
-            // actual hitbox length, with the current contact label rebuilt
-            // against the refreshed shot vector.
-            let contact_standoff = 92.75 + car.hitbox.length * 0.5;
-            let nominal_target = state.ball - state.shot_direction * contact_standoff;
-            // VirxERLU exposes hitbox offset in local forward/right/up axes;
-            // convert it to world space exactly as Python Aerial does.
-            let world_hitbox_offset = car.forward() * car.hitbox.offset.x
-                + car.up().cross(car.forward()) * car.hitbox.offset.y
-                + car.up() * car.hitbox.offset.z;
-            let hitbox_target = nominal_target - world_hitbox_offset;
-            let mut offset_target = contact_approach_from_label(
-                state.ball,
-                state.shot_direction,
-                state.contact_face,
-                contact_standoff,
-            ).map_or(hitbox_target, |refreshed| {
-                refreshed + hitbox_target - nominal_target
-            });
-
-            if let Some(normal) = wall_normal {
-                let tangent = state.shot_direction - normal * state.shot_direction.dot(normal);
-                if tangent.magnitude() > 0.001 {
-                    offset_target = offset_target - tangent.normalize() * 25.0;
-                }
-                if normal.z.abs() < 0.95 {
-                    let jump_time = get_jump_time(
-                        state.ball.z - car.location.z,
-                        car.velocity.z,
-                        self.match_state.gravity.z,
-                    ).time as f32;
-                    offset_target.z = state.ball.z
-                        + (offset_target.z - state.ball.z).clamp(-120.0, 120.0);
-                    offset_target = offset_target
-                        - self.match_state.gravity * (0.5 * jump_time * jump_time);
-                }
-            }
-
-            if wall_normal.is_none() {
-                if let Some((selected_target, label)) = party_cannon_jump_front_contact(
-                    car,
-                    state.ball,
-                    state.shot_direction,
-                    time_remaining,
-                    self.match_state.gravity,
-                    state.jumping,
-                    state.contact_face_label,
-                ) {
-                    offset_target = selected_target;
-                    state.contact_face_label = Some(label);
-                }
-            }
-            state.approach = offset_target;
-        }
+        // Match Aerial's hitbox geometry: ball radius + half the real hitbox
+        // length, then subtract the car's rotated local hitbox offset.
+        let contact_standoff = BALL_RADIUS + car.hitbox.length * 0.5;
+        let world_hitbox_offset = car.forward() * car.hitbox.offset.x
+            + car.up().cross(car.forward()) * car.hitbox.offset.y
+            + car.up() * car.hitbox.offset.z;
+        state.approach =
+            state.ball - state.shot_direction * contact_standoff - world_hitbox_offset;
 
         let local_ball = car.local_location(state.ball).flatten();
         let local_target = car.local_location(state.approach).flatten();
@@ -3460,16 +3386,9 @@ impl BotBrain {
         // This must not be replaced by the airborne jump controller.
         if !state.jumping {
             let t_j = t - state.needed_jump_time * 1.15;
+            // Drive straight toward the same centre-contact point used in
+            // flight. Do not add a flank/side approach offset.
             let mut final_target = state.approach.flatten();
-            if t_j > 0.0 && (state.targets.left - state.targets.right).magnitude() > 1.0 && !state.side_mode {
-                final_target = shot_approach_target(
-                    car,
-                    state.ball,
-                    final_target,
-                    state.shot_direction,
-                    t_j,
-                );
-            }
 
             let mut distance_remaining = car.location.flat_distance(final_target);
             final_target = cap_in_field(&car, final_target);
@@ -3691,7 +3610,6 @@ impl BotBrain {
         // The directional dodge is a single fresh jump press, not a timed hold.
 
         let delta_x = state.approach - xf;
-        let d_direction = delta_x.normalize();
         let local_aim = if delta_x.magnitude() > 50.0 {
             car.local(delta_x)
         } else {
@@ -3707,7 +3625,11 @@ impl BotBrain {
             controller.pitch = pd.pitch.max(-0.35);
             controller.yaw = pd.yaw;
             controller.roll = pd.roll;
-            if jump_shot_should_s_tilt(state.ball.z) {
+            let ball_airborne = state.ball.z > 130.0;
+            let ball_above_car = state.ball.z > car.location.z + 65.0;
+            if !state.quick && ball_airborne && ball_above_car {
+                // S-tilt only for a genuinely airborne ball above the car.
+                // The quick path skips this setup and prioritises the dodge.
                 controller.pitch = 1.0;
                 controller.roll = if pd.yaw.abs() > 0.08 {
                     -0.20 * pd.yaw.signum()
