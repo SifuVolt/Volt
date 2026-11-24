@@ -7088,7 +7088,9 @@ mod party_cannon_jump_tests {
 
     #[test]
     fn party_cannon_ready_to_jump_requires_contact_plane_alignment() {
-        let me = car(Vector::new(1.0, 0.0, 0.0), Vector::ZERO);
+        let mut me = car(Vector::new(1.0, 0.0, 0.0), Vector::ZERO);
+        me.airborne = false;
+        me.air_state = AirState::OnGround;
         let ready = party_cannon_ready_to_jump(
             me,
             Vector::new(0.0, 0.0, 100.0),
