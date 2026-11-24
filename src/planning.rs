@@ -719,6 +719,25 @@ mod tests {
 
 
     #[test]
+    fn wall_approach_recognizes_a_ball_rolling_up_from_low_wall_height() {
+        let car = car(Vector::ZERO, Vector::ZERO, 30.0);
+        let slice = BallSlice {
+            time: 2.5,
+            location: Vector::new(4000.0, 0.0, 110.0),
+            velocity: Vector::new(900.0, 0.0, 0.0),
+        };
+        let geometry = wall_approach_geometry(
+            &car,
+            slice,
+            0,
+            Vector::new(0.0, 5120.0, 300.0),
+            WallDriveMode::SingleJump,
+            2.5,
+        );
+        assert!(geometry.is_some(), "low ball with sufficient outward wall velocity must use wall approach");
+    }
+
+    #[test]
     fn wall_approach_geometry_uses_unfolded_ground_route_and_contact_offset() {
         let car = car(Vector::ZERO, Vector::ZERO, 25.0);
         let slice = BallSlice {
