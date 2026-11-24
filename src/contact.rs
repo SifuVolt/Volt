@@ -101,6 +101,122 @@ pub fn hitbox_center_target(
     target
 }
 
+
+/// Select the jump-shot front-face contact exactly as Volt's Python routine.
+///
+/// The hitbox is evaluated at a short predicted impact orientation. Each
+/// candidate is scored by outgoing shot alignment, front-face alignment, and
+/// how far the required car centre is from the predicted car centre.
+pub fn select_jump_front_contact(
+    car: CarState,
+    ball: Vector,
+    shot_direction: Vector,
+    time_remaining: f32,
+    jumping: bool,
+    previous_label: Option<&'static str>,
+    gravity: Vector,
+) -> Option<(Vector, &'static str)> {
+    fn rotate_axis_angle(vector: Vector, axis: Vector, angle: f32) -> Vector {
+        let axis = axis.normalize();
+        if axis.magnitude() < 0.001 || angle.abs() < 1.0e-6 {
+            return vector;
+        }
+        let (sine, cosine) = angle.sin_cos();
+        vector * cosine
+            + axis.cross(vector) * sine
+            + axis * (axis.dot(vector) * (1.0 - cosine))
+    }
+
+    let shot_forward = shot_direction.flatten().normalize();
+    let car_forward = car.forward().normalize();
+    let car_up = car.up().normalize();
+    if shot_forward.magnitude() < 0.001
+        || car_forward.magnitude() < 0.001
+        || car_up.magnitude() < 0.001
+    {
+        return None;
+    }
+
+    let car_right = car_forward.cross(car_up).normalize();
+    if car_right.magnitude() < 0.001 {
+        return None;
+    }
+    let car_up = car_right.cross(car_forward).normalize();
+
+    let orientation_horizon = if jumping {
+        time_remaining.max(0.0).min(0.18)
+    } else {
+        0.0
+    };
+    let angular_speed = car.angular_velocity.magnitude();
+    let mut impact_forward = car_forward;
+    let mut impact_up = car_up;
+    if angular_speed > 0.05 && orientation_horizon > 0.0 {
+        let axis = car.angular_velocity / angular_speed;
+        let angle = (angular_speed * orientation_horizon).min(0.65);
+        impact_forward = rotate_axis_angle(car_forward, axis, angle).normalize();
+        impact_up = rotate_axis_angle(car_up, axis, angle).normalize();
+    }
+
+    let impact_right = impact_up.cross(impact_forward).normalize();
+    let impact_up = impact_forward.cross(impact_right).normalize();
+    let half_length = car.hitbox.length * 0.5;
+    let half_width = car.hitbox.width * 0.5;
+    let half_height = car.hitbox.height * 0.5;
+    let world_hitbox_offset =
+        impact_forward * car.hitbox.offset.x
+        + impact_right * car.hitbox.offset.y
+        + impact_up * car.hitbox.offset.z;
+
+    let candidates: [(&'static str, f32, f32); 7] = [
+        ("centre", 0.0, 0.0),
+        ("top_left", -half_width * 0.82, half_height * 0.82),
+        ("top_right", half_width * 0.82, half_height * 0.82),
+        ("left", -half_width * 0.88, 0.0),
+        ("right", half_width * 0.88, 0.0),
+        ("top", 0.0, half_height * 0.88),
+        ("bottom", 0.0, -half_height * 0.70),
+    ];
+
+    let impact_horizon = time_remaining.max(0.0).min(0.30);
+    let predicted_car = car.location
+        + car.velocity * impact_horizon
+        + gravity * (0.5 * impact_horizon * impact_horizon);
+
+    let mut scored: Vec<(f32, &'static str, Vector)> = Vec::with_capacity(7);
+    for (label, lateral_offset, vertical_offset) in candidates {
+        let front_point_offset = impact_forward * half_length
+            + impact_right * lateral_offset
+            + impact_up * vertical_offset
+            + world_hitbox_offset;
+        let predicted_contact_point = predicted_car + front_point_offset;
+        let incoming_normal = (ball - predicted_contact_point).normalize();
+        if incoming_normal.magnitude() < 0.001 {
+            continue;
+        }
+
+        let shot_alignment = incoming_normal.dot(shot_forward);
+        let front_alignment = incoming_normal.dot(impact_forward);
+        let required_car_centre =
+            ball - shot_forward * BALL_RADIUS - front_point_offset;
+        let reach_cost = required_car_centre.distance(predicted_car);
+        let score = shot_alignment
+            + front_alignment.clamp(-1.0, 1.0) * 0.12
+            - reach_cost * 0.00020;
+        scored.push((score, label, required_car_centre));
+    }
+
+    let best = scored.iter().max_by(|a, b| a.0.total_cmp(&b.0))?;
+    if let Some(previous) = previous_label {
+        if let Some(old) = scored.iter().find(|candidate| candidate.1 == previous) {
+            if old.0 >= best.0 - 0.06 {
+                return Some((old.2, old.1));
+            }
+        }
+    }
+    Some((best.2, best.1))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
