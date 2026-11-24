@@ -167,6 +167,54 @@ fn party_cannon_dodge_inputs(car: CarState, direction: Vector) -> (f32, f32) {
 
 /// Party Cannon's AimAt reference: aim along DodgeDirection while orienting
 /// the roof away from the dodge direction and the contact surface normal.
+/// Port of Party Cannon JumpShot.ReadyToJump. Predict the car centre at
+/// the intercept using its jump impulse, jump acceleration and sticky force,
+/// then compare only the component parallel to the contact surface.
+fn party_cannon_ready_to_jump(
+    car: CarState,
+    target: Vector,
+    surface_point: Vector,
+    normal: Vector,
+    gravity: Vector,
+    time_remaining: f32,
+) -> bool {
+    if car.airborne || time_remaining <= 0.0 {
+        return false;
+    }
+    let normal = normal.normalize();
+    if normal.magnitude() < 0.5 {
+        return false;
+    }
+    let target_height = ((target - surface_point).dot(normal) - 17.0).clamp(1.0, 270.0);
+    let time_to_jump = party_cannon_time_to_jump(target_height, normal, gravity).max(0.15);
+    if time_remaining >= time_to_jump {
+        return false;
+    }
+
+    let up = car.up().normalize();
+    let jump_time_remaining = JUMP_MAX_DURATION;
+    let stick_time_remaining = 0.05;
+    let jump_velocity = up * (JUMP_SPEED * time_remaining);
+    let jump_acceleration = up
+        * (JUMP_ACCEL * jump_time_remaining
+            * (time_remaining - 0.5 * jump_time_remaining));
+    let sticky_acceleration = up
+        * (325.0 * stick_time_remaining
+            * (time_remaining - 0.5 * stick_time_remaining));
+    let predicted_location = car.location
+        + car.velocity * time_remaining
+        + gravity * (0.5 * time_remaining * time_remaining)
+        + jump_velocity
+        + jump_acceleration
+        - sticky_acceleration
+        - gravity * (0.5 * time_remaining * time_remaining);
+    let delta = predicted_location - target;
+    let surface_distance = (delta - normal * delta.dot(normal)).magnitude();
+    let allowed_distance = 50.0 - normal.z * 20.0;
+    let vertical_velocity = car.velocity.dot(up);
+    vertical_velocity.abs() < 200.0 && surface_distance < allowed_distance
+}
+
 fn party_cannon_cached_dodge_input(
     started_at: f32,
     game_time: f32,
@@ -3881,8 +3929,17 @@ impl BotBrain {
                 && local_offset_target.y.abs() <= 150.0
                 && distance_remaining
                     <= contact_limit + car.local_velocity().x.max(0.0) * 0.22;
-            let normal_ready = (close_enough || aligned || early_contact_lane)
-                && launch_window;
+            let party_cannon_ready = party_cannon_ready_to_jump(
+                car,
+                state.approach,
+                surface_point,
+                surface_normal,
+                self.match_state.gravity,
+                t,
+            );
+            let normal_ready = ((close_enough || aligned || early_contact_lane)
+                && launch_window)
+                || party_cannon_ready;
 
             // A short-ETA / empty-boost shot cannot spend another packet
             // waiting for perfect alignment. Permit the quick jump only when
@@ -7027,6 +7084,29 @@ mod party_cannon_jump_tests {
             party_cannon_dodge_inputs(me, Vector::new(0.0, 1.0, 0.0));
         assert!((yaw - 1.0).abs() < 1.0e-5);
         assert!(pitch.abs() < 1.0e-5);
+    }
+
+    #[test]
+    fn party_cannon_ready_to_jump_requires_contact_plane_alignment() {
+        let me = car(Vector::new(1.0, 0.0, 0.0), Vector::ZERO);
+        let ready = party_cannon_ready_to_jump(
+            me,
+            Vector::new(0.0, 0.0, 100.0),
+            Vector::ZERO,
+            Vector::new(0.0, 0.0, 1.0),
+            Vector::new(0.0, 0.0, -650.0),
+            0.10,
+        );
+        let too_far = party_cannon_ready_to_jump(
+            me,
+            Vector::new(200.0, 0.0, 100.0),
+            Vector::ZERO,
+            Vector::new(0.0, 0.0, 1.0),
+            Vector::new(0.0, 0.0, -650.0),
+            0.10,
+        );
+        assert!(ready);
+        assert!(!too_far);
     }
 
     #[test]
