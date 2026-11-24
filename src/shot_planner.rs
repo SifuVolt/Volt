@@ -33,6 +33,22 @@ fn cap(v:f32,a:f32,b:f32)->f32 { v.max(a).min(b) }
 fn team_side(team:u32)->f32 { if team==0 {-1.0} else {1.0} }
 fn center(t:ShotTargets)->Vector { (t.left+t.right)*0.5 }
 
+// A valid contact is the primary selection criterion: choose the earliest
+// reachable intercept, using shot quality only to break same-time ties.
+// This deliberately prevents a much later, prettier setup from replacing
+// an earlier ground/jump contact that the parser has already validated.
+fn prefer_earlier_candidate(
+    time: f32,
+    score: f32,
+    best: Option<(f32, f32)>,
+) -> bool {
+    let Some((best_time, best_score)) = best else {
+        return true;
+    };
+    time < best_time - 1.0e-4
+        || ((time - best_time).abs() <= 1.0e-4 && score < best_score)
+}
+
 fn aim_point(ball:Vector,vel:Vector,t:ShotTargets,g:f32)->Vector {
     let c=center(t);
     let half=(t.right-t.left).flatten().magnitude()*0.5;
@@ -402,7 +418,7 @@ fn find_best_shot_with_double_jump(
         let mut value=if urgent_save {remaining+match kind {ShotType::Ground=>0.0,ShotType::Jump=>0.005,ShotType::DoubleJump=>0.015,ShotType::Aerial=>0.025}}
             else {score(me,&friends,slice.location,slice.velocity,kind,remaining,targets,gravity.z)};
         if kind==ShotType::DoubleJump && me.boost>0.0 {value+=0.25;}
-        if value<best.map_or(f32::INFINITY,|b|b.score) {
+        if prefer_earlier_candidate(t, value, best.map(|candidate| (candidate.time, candidate.score))) {
             best=Some(ShotCandidate{time:t,ball:slice.location,ball_velocity:slice.velocity,
                 approach:parsed.approach_target,shot_direction:parsed.shot_vector,
                 shot_type:kind,targeted:true,can_jump:!in_own_net,fast:parsed.fast,score:value,parser:parsed});
@@ -427,7 +443,7 @@ fn find_best_shot_with_double_jump(
                     let mut value=if urgent_save {remaining+0.015}
                         else {score(me,&friends,grid.ball,slice.velocity,ShotType::DoubleJump,remaining,targets,gravity.z)};
                     if me.boost>0.0 {value+=0.25;}
-                    if value<best.map_or(f32::INFINITY,|b|b.score) {
+                    if prefer_earlier_candidate(grid.time, value, best.map(|candidate| (candidate.time, candidate.score))) {
                         let direction=(center(targets)-grid.ball).normalize();
                         let parser=ParsedShot{
                             found:true,fast:false,shot_type:Some(ShotType::DoubleJump),
@@ -632,7 +648,7 @@ pub fn find_best_any_shot(
 
         let mut value = score_any(me, &friends, slice.location, slice.velocity, kind, remaining);
         if kind == ShotType::DoubleJump && me.boost > 0.0 { value += 0.25; }
-        if value < best.map_or(f32::INFINITY, |candidate| candidate.score) {
+        if prefer_earlier_candidate(time, value, best.map(|candidate| (candidate.time, candidate.score))) {
             let direction = (center(targets) - slice.location).flatten().normalize();
             let mut parser = parsed;
             parser.targets = targets;
@@ -677,7 +693,7 @@ pub fn find_best_any_shot(
                         me, &friends, grid.ball, nearest.velocity, ShotType::DoubleJump, remaining,
                     );
                     if me.boost > 0.0 { value += 0.25; }
-                    if value < best.map_or(f32::INFINITY, |candidate| candidate.score) {
+                    if prefer_earlier_candidate(grid.time, value, best.map(|candidate| (candidate.time, candidate.score))) {
                         let direction = (center(targets) - grid.ball).flatten().normalize();
                         let parser = ParsedShot {
                             found: true,
@@ -898,6 +914,19 @@ mod tests {
     fn test_car()->CarState {CarState{index:0,team:0,location:Vector::new(0.0,-1000.0,17.0),velocity:Vector::new(0.0,1200.0,0.0),orientation:Matrix3::new(0.0,1.5707963,0.0),angular_velocity:Vector::ZERO,demolished:false,airborne:false,supersonic:false,jumped:false,doublejumped:false,air_state:AirState::OnGround,has_jumped:false,has_double_jumped:false,has_dodged:false,dodge_timeout:0.0,dodge_elapsed:0.0,dodge_dir:Vector::ZERO,flip_reset_available:false,boost:50.0,hitbox:Hitbox{length:118.0,width:84.0,height:36.0,offset:Vector::ZERO}}}
     #[test]fn grid_jump_time_matches_source_polynomial(){assert!(grid_jump_time(200.0,false).is_some());assert!(grid_jump_time(350.0,true).is_some());assert!(grid_jump_time(5.0,true).is_some());}
     #[test]fn grid_profile_has_601_120hz_samples(){let(d,v)=grid_profile(test_car());assert_eq!(d.len(),601);assert_eq!(v.len(),601);assert!(d[600]>d[0]);}
+    #[test]
+    fn intercept_selection_prefers_earliest_valid_contact_over_later_score() {
+        assert!(prefer_earlier_candidate(1.0, 2.0, Some((1.5, 0.1))));
+        assert!(!prefer_earlier_candidate(1.5, 0.1, Some((1.0, 2.0))));
+    }
+
+    #[test]
+    fn intercept_selection_uses_score_only_for_same_time_ties() {
+        assert!(prefer_earlier_candidate(1.0, 0.5, Some((1.0, 1.0))));
+        assert!(!prefer_earlier_candidate(1.0, 1.5, Some((1.0, 1.0))));
+        assert!(prefer_earlier_candidate(1.0, 0.0, None));
+    }
+
     #[test]
     fn untargeted_score_prefers_approach_from_behind_ball() {
         let behind = test_car();
