@@ -902,6 +902,7 @@ mod tests {
         foe.team = 1;
         foe.location = Vector::new(0.0, -100.0, 17.0);
         foe.orientation = Matrix3::new(0.0, 0.0, 0.0);
+        foe.boost = 0.0;
         let ball = Vector::new(0.0, 0.0, 100.0);
 
         assert!(!useful(
