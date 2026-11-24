@@ -212,6 +212,8 @@ pub struct BoostPadState {
     pub location: Vector,
     pub large: bool,
     pub active: bool,
+    /// RLBot's remaining pad respawn timer in seconds.
+    pub timer: f32,
 }
 
 impl BoostPadState {
@@ -224,12 +226,14 @@ impl BoostPadState {
             location: Vector::new(pad.location.x, pad.location.y, pad.location.z),
             large: pad.is_full_boost,
             active: true,
+            timer: 0.0,
         }
     }
 
     pub fn update(&mut self, packet: &GamePacket) {
         if let Some(state) = packet.boost_pads.get(self.index) {
             self.active = state.is_active;
+            self.timer = state.timer.max(0.0);
         }
     }
 }
