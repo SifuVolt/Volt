@@ -206,7 +206,11 @@ pub fn party_cannon_ground_eta(
     boost_accel: f32,
     allow_dodges: bool,
 ) -> Option<f32> {
-    if car.airborne {
+    let surface_up = car.up().normalize();
+    if car.airborne || surface_up.z < 0.95 {
+        // This port intentionally handles the floor plane only. Wall and
+        // airborne paths fall back to Volt's existing surface-aware estimate
+        // rather than applying a flat Dubins-style approximation to them.
         return None;
     }
 
@@ -267,6 +271,22 @@ pub fn party_cannon_ground_eta(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn party_cannon_turn_radius_matches_source_lookup_points() {
+        assert!((party_cannon_turn_radius(500.0) - 251.0).abs() < 1.0e-4);
+        assert!((party_cannon_turn_radius(1000.0) - 425.0).abs() < 1.0e-4);
+        assert!((party_cannon_turn_radius(1500.0) - 727.0).abs() < 1.0e-4);
+        assert!((party_cannon_turn_radius(1750.0) - 909.0).abs() < 1.0e-4);
+        assert!((party_cannon_turn_radius(2300.0) - 1136.0).abs() < 1.0e-4);
+    }
+
+    #[test]
+    fn party_cannon_speed_after_turn_matches_zero_angle_and_slows_for_turns() {
+        assert!((party_cannon_speed_after_turn(1000.0, 0.0, 1.0) - 1000.0).abs() < 1.0e-4);
+        assert!(party_cannon_speed_after_turn(2000.0, 1.0, 1.0) < 2000.0);
+    }
+
+
 
     #[test]
     fn throttle_acceleration_matches_python_curve() {
