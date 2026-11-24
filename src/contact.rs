@@ -167,6 +167,12 @@ pub fn approach_from_face(
         "right" => (-shot - lateral * 0.55).normalize(),
         "high" => (-shot + Vector::new(0.0, 0.0, 0.30)).normalize(),
         "low" => (-shot - Vector::new(0.0, 0.0, 0.30)).normalize(),
+        // Labels emitted by the shared front-hitbox search. A top-face
+        // contact places the car centre below the ball; bottom places it above.
+        "top_left" => (-shot + lateral * 0.55 - Vector::new(0.0, 0.0, 0.30)).normalize(),
+        "top_right" => (-shot - lateral * 0.55 - Vector::new(0.0, 0.0, 0.30)).normalize(),
+        "top" => (-shot - Vector::new(0.0, 0.0, 0.30)).normalize(),
+        "bottom" => (-shot + Vector::new(0.0, 0.0, 0.30)).normalize(),
         _ => return None,
     };
     Some(ball + normal * standoff.max(120.0))
