@@ -682,6 +682,18 @@ fn opponent_eta(opponent: CarState, target: Vector) -> f32 {
 }
 
 
+fn reject_low_fast_aerial(parsed: ParsedShot, predicted_height: f32, live_height: f32) -> ParsedShot {
+    if parsed.found
+        && parsed.shot_type == Some(ShotType::Aerial)
+        && parsed.fast
+        && (predicted_height <= 350.0 || live_height <= 350.0)
+    {
+        ParsedShot::default()
+    } else {
+        parsed
+    }
+}
+
 /// Fast-zone aerial scan from routines.fast_intercept_finder. It keeps the
 /// first normal aerial if one exists; otherwise it falls back to the first
 /// fast aerial whose live and predicted ball heights both clear 350 units.
@@ -803,18 +815,6 @@ pub fn find_aerial_candidate(
             false,
         );
 
-        // Python rejects a parser-classified fast aerial when either the
-        // predicted contact or the live ball is at/below 350 uu. Reclassifying
-        // it later inside Aerial.run is too late: its reachability was tested
-        // with fast-aerial launch physics.
-        if parsed.found
-            && parsed.shot_type == Some(ShotType::Aerial)
-            && parsed.fast
-            && (slice.location.z <= 350.0 || live_ball_height <= 350.0)
-        {
-            parsed = Default::default();
-        }
-
         // Reserve the same post-launch boost margin before accepting the
         // targeted parser result. Only a normal targeted aerial suppresses
         // Python's separate untargeted aerial check for this slice.
@@ -857,6 +857,11 @@ pub fn find_aerial_candidate(
                 }
             }
         }
+
+        // Apply Python's 350-unit fast-aerial guard after the boost-reserve
+        // reparse, because reducing the approach budget can change the parser's
+        // fast/normal classification.
+        parsed = reject_low_fast_aerial(parsed, slice.location.z, live_ball_height);
 
         let normal_aerial_available = parsed.found
             && parsed.shot_type == Some(ShotType::Aerial)
@@ -1034,6 +1039,22 @@ mod tests {
             boost,
             hitbox: Hitbox { length: 118.0, width: 84.0, height: 36.0, offset: Vector::ZERO },
         }
+    }
+
+    #[test]
+    fn fast_aerial_height_gate_applies_to_the_final_budgeted_parser_result() {
+        let valid = ParsedShot {
+            found: true,
+            fast: true,
+            shot_type: Some(ShotType::Aerial),
+            ..ParsedShot::default()
+        };
+        assert!(!reject_low_fast_aerial(valid, 350.0, 900.0).found);
+        assert!(!reject_low_fast_aerial(valid, 900.0, 350.0).found);
+        assert!(reject_low_fast_aerial(valid, 350.1, 350.1).found);
+
+        let normal = ParsedShot { fast: false, ..valid };
+        assert!(reject_low_fast_aerial(normal, 100.0, 100.0).found);
     }
 
     #[test]
