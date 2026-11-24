@@ -23,7 +23,7 @@ use crate::{
     shot_planner::{find_best_any_shot, find_best_pass_shot, find_best_shot, find_fast_intercept, ShotCandidate},
     state::{AgentFrame, TeamplayMessage},
     strategy::{
-        build_plan, choose_boost_pad, cover_target, kickoff_cheat_target,
+        build_plan, choose_boost_pad, choose_support_pad, cover_target, kickoff_cheat_target,
         kickoff_kicker, opponent_near_ball, support_target, Role,
     },
 };
@@ -824,9 +824,14 @@ impl BotBrain {
 
         // Low-boost collection is opportunistic. A cover player only leaves
         // the defensive lane for a nearby pad, and never during a goal threat.
-        if !urgent && plan.role != Role::Cover && me.boost < 24.0 {
+        if !urgent && plan.role == Role::Support {
+            if let Some(pad) = choose_support_pad(frame, movement_target) {
+                movement_target = pad;
+                status = "LOW_BOOST";
+            }
+        } else if !urgent && plan.role != Role::Cover && me.boost < 24.0 {
             if let Some(pad) = choose_boost_pad(frame, movement_target, enemy_near_ball) {
-                if me.location.flat_distance(pad) < 900.0 || plan.role == Role::Support {
+                if me.location.flat_distance(pad) < 900.0 {
                     movement_target = pad;
                     status = "LOW_BOOST";
                 }
