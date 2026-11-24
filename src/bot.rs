@@ -3690,26 +3690,24 @@ impl BotBrain {
         // Match Python jump_shot's first-jump hold and three release frames.
         // The directional dodge is a single fresh jump press, not a timed hold.
 
-        let local_shot_direction = car
-            .local(state.shot_direction.flatten())
-            .flatten()
-            .normalize();
-        let (_, pd) = default_pd(&car, local_shot_direction, false, None);
+        let delta_x = state.approach - xf;
+        let d_direction = delta_x.normalize();
+        let local_aim = if delta_x.magnitude() > 50.0 {
+            car.local(delta_x)
+        } else {
+            car.local(state.shot_direction.flatten())
+        };
+        let (_, pd) = default_pd(&car, local_aim, false, None);
 
-        // Exact Python orientation rule: defaultPD aims the shot, then S
-        // (positive pitch = nose up) is held only for a non-quick airborne
-        // ball that is above the car. Keep defaultPD yaw and its paired roll.
+        // Track the same hitbox-aware contact point as Aerial, rather than
+        // steering only at the outgoing shot vector. Keep the nose from
+        // being driven sharply downward during the power-building approach.
         if state.counter < 3 && !state.dodging {
             controller.steer = pd.steer;
-            controller.pitch = pd.pitch;
+            controller.pitch = pd.pitch.max(-0.35);
             controller.yaw = pd.yaw;
             controller.roll = pd.roll;
-            // User-requested power-shot posture: every airborne-ball
-            // jump shot holds S-tilt during orientation, including quick
-            // launches and balls that are not 65 units above the car.
-            // Keep defaultPD's yaw/roll corrections for lateral alignment.
-            let hold_s = jump_shot_should_s_tilt(state.ball.z);
-            if hold_s {
+            if jump_shot_should_s_tilt(state.ball.z) {
                 controller.pitch = 1.0;
                 controller.roll = if pd.yaw.abs() > 0.08 {
                     -0.20 * pd.yaw.signum()
@@ -3719,38 +3717,37 @@ impl BotBrain {
             }
         }
 
-        let delta_x = state.approach - xf;
-        let d_direction = delta_x.normalize();
-        if state.counter < 3
-            && car.forward().dot(d_direction) > 0.5
-            && t > 1.0e-6
-        {
-            let mut delta_v = delta_x.dot(car.forward()) / t;
-            if car.boost > 0.0 && delta_v >= self.boost_accel * MIN_AIR_BOOST_TIME {
-                controller.boost = true;
-                delta_v -= self.boost_accel * MIN_AIR_BOOST_TIME;
-            }
-            let throttle_accel = 66.0 + (2.0 / 3.0);
-            if delta_v.abs() > throttle_accel * MIN_AIR_BOOST_TIME {
-                controller.throttle =
-                    (delta_v / (throttle_accel * MIN_AIR_BOOST_TIME)).clamp(-1.0, 1.0);
-            }
-
-            // Once the nose is aligned with the actual hitbox contact target,
-            // spend boost to drive through the contact instead of relying on
-            // the earlier orientation phase's projected acceleration alone.
-            if jump_shot_boost_should_fire(
-                car.forward(), d_direction, delta_x.magnitude(), car.boost, t,
-            ) {
-                controller.boost = true;
-                controller.throttle = 1.0;
-            }
+        // Match Aerial's Party Cannon forward-projection boost controller.
+        // It is demand-based per packet (not a fixed pulse pattern), so the
+        // jump shot keeps the aerial's acceleration behaviour while we leave
+        // any separate feather/pulse policy undecided.
+        if state.counter < 3 && t > 0.0 && delta_x.magnitude() > 1.0 {
+            let forward_need = delta_x.dot(car.forward()) / t;
+            let contact_direction = delta_x.normalize();
+            let forward_angle = car.forward()
+                .dot(contact_direction)
+                .clamp(-1.0, 1.0)
+                .acos();
+            controller.boost = forward_need
+                >= (self.boost_accel + 66.667) * (13.0 / 120.0)
+                && forward_angle < 0.4
+                && car.boost > 0.0;
+            controller.throttle = (forward_need / (66.667 * (1.0 / 120.0)))
+                .clamp(-1.0, 1.0);
         }
 
-        // Counter 3 is the single directional-dodge window. Keep the existing
-        // contact-distance gate so the bot doesn't spend its flip too early.
+        // A ground jump retains its dodge for about 1.25 seconds after the
+        // first jump. Dodge as soon as contact is genuinely ready; if the
+        // car is already aligned, allow a small earlier contact margin.
         if state.counter == 3 {
-            if contact_distance < contact_limit
+            let shot_alignment = car.forward().flatten().normalize()
+                .dot(state.shot_direction.flatten().normalize());
+            let close_contact = contact_distance < contact_limit;
+            let aligned_contact = contact_distance < contact_limit + 65.0
+                && shot_alignment > 0.985;
+            let dodge_window_open = jump_elapsed <= 1.25;
+            if (close_contact || aligned_contact)
+                && dodge_window_open
                 && (local_target.x > 0.0 || state.side_mode)
             {
                 let dodge_direction = if local_ball.magnitude() > 1.0 {
@@ -3770,7 +3767,8 @@ impl BotBrain {
                 controller.pitch = -dodge_direction.x;
                 controller.yaw = dodge_direction.y;
                 controller.roll = 0.0;
-            } else if local_target.x <= 0.0
+            } else if jump_elapsed > 1.25
+                || local_target.x <= 0.0
                 || (contact_distance > contact_limit + 150.0 && t < 0.12)
             {
                 println!(
