@@ -917,7 +917,7 @@ mod tests {
         };
         let candidate = find_best_any_shot(
             car, &[], &prediction, targets, Vector::new(0.0, 0.0, -650.0),
-            991.6667, 0.0, -999.0, false, 3.0,
+            991.6667, 0.0, -999.0, false, false, 3.0,
         );
         assert!(candidate.is_some());
         assert!(candidate.unwrap().score.is_finite());
