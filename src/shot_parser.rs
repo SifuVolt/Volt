@@ -16,19 +16,11 @@ use crate::{
 use std::f64::consts::PI;
 
 const SIM_DT: f64 = 1.0 / 60.0;
-const MAX_SHOT_TIME: f64 = 6.0;
-const MAX_SHOT_SLOPE: f64 = 3.0;
-const MAX_SHOT_0_SLOPE: f64 = 10.0;
-const GROUND_MIN_SLOPE: f64 = 0.5;
-const JUMP_MIN_SLOPE: f64 = 0.75;
-const DOUBLE_MIN_SLOPE: f64 = 0.75;
-const AERIAL_MIN_SLOPE: f64 = 1.5;
 const NO_ADJUST: f64 = 0.001;
 const MIN_ADJUST: f64 = 0.5;
 const MAX_ADJUST: f64 = 2.0;
 const BRAKE_FORCE: f64 = 3500.0;
 const MAX_SPEED: f64 = 2300.0;
-const SAFE_MAX_SPEED: f64 = 2100.0;
 const MAX_SPEED_NO_BOOST: f64 = 1410.0;
 const BOOST_CONSUMPTION: f64 = 100.0 / 3.0;
 
@@ -70,11 +62,6 @@ impl V2 {
 fn sign(value: f64) -> f64 { if value > 0.0 { 1.0 } else if value < 0.0 { -1.0 } else { 0.0 } }
 fn dot3(a: Vector, b: Vector) -> f64 { a.x as f64*b.x as f64 + a.y as f64*b.y as f64 + a.z as f64*b.z as f64 }
 fn cross3(a: Vector, b: Vector) -> Vector { a.cross(b) }
-fn normalize3(v: Vector) -> Vector { v.normalize() }
-fn angle3(a: Vector, b: Vector) -> f64 {
-    let aa=a.normalize(); let bb=b.normalize();
-    (dot3(aa,bb)).clamp(-1.0,1.0).acos()
-}
 fn angle2(a: Vector, b: Vector) -> f64 {
     let aa=V2::from(a).norm(); let bb=V2::from(b).norm();
     aa.dot(bb).clamp(-1.0,1.0).acos()

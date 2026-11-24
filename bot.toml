@@ -1,4 +1,3 @@
-
 #:schema https://rlbot.org/schemas/agent.json
 
 [settings]
@@ -9,7 +8,7 @@ run_command = ".\\target\\release\\volt-rust.exe"
 hivemind = false
 
 [details]
-description = "Volt rewritten in Rust"
-developer = ""
+description = "Modular Rust Rocket League bot based on Python Volt reachability, mechanics, and teamplay"
+developer = "SifuVolt"
 language = "Rust"
-tags = ["1v1"]
+tags = ["1v1", "2v2", "3v3"]

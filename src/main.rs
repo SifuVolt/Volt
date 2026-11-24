@@ -1,22 +1,28 @@
 pub mod aerial;
+pub mod brain;
+pub mod defense;
+pub mod drive;
+pub mod mechanics;
 pub mod physics;
-pub mod prediction;
 pub mod planning;
+pub mod prediction;
+pub mod routines;
 pub mod shot_physics;
 pub mod shot_parser;
 pub mod shot_planner;
-pub mod mechanics;
+pub mod strategy;
 pub mod teamplay;
-pub mod bot;
+
 mod control;
-mod defense;
 mod math;
 mod state;
 
-use crate::bot::BotBrain;
+use crate::brain::BotBrain;
 use crate::prediction::{AbsoluteBallSlice, BallTrajectory};
-use crate::state::{AgentFrame, AgentSettings, BoostAmountMode, BotPersistentState, BoostPadState, GoalState, MatchState};
+use crate::state::{AgentFrame, AgentSettings, BoostPadState, GoalState, MatchState, TeamplayMessage};
+use crate::shot_parser::ShotTargets;
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use rlbot::{
@@ -40,13 +46,10 @@ struct VoltRustAgent {
     team: u32,
     match_state: MatchState,
     settings: AgentSettings,
-    friend_goal: GoalState,
-    foe_goal: GoalState,
-    foe_goal_shot: (crate::math::Vector, crate::math::Vector),
-    anti_target: (crate::math::Vector, crate::math::Vector),
-    persistent: BotPersistentState,
+    foe_goal_targets: ShotTargets,
     ball_prediction: Vec<AbsoluteBallSlice>,
     boost_pads: Vec<BoostPadState>,
+    teammate_comms: HashMap<usize, TeamplayMessage>,
     brain: BotBrain,
     last_comms_signature: Vec<u8>,
     last_comms_send_time: f32,
@@ -60,47 +63,27 @@ impl BotAgent for VoltRustAgent {
         field_info: Arc<FieldInfo>,
         _packet_queue: &mut PacketQueue,
     ) -> Self {
-        println!(
-            "Volt-Rust initialized for player {}",
-            controllable_info.index
-        );
-
-        let settings = AgentSettings::from_match_configuration(&match_config);
-        let friend_goal = GoalState::new(team as usize, 820.0, 350.0);
-        let foe_goal = GoalState::new(1usize.saturating_sub(team as usize), 760.0, 300.0);
-
-        let foe_goal_width_direction =
-            (foe_goal.right_post - foe_goal.left_post).normalize();
-        let foe_goal_shot = (
-            foe_goal.left_post + foe_goal_width_direction * 39.0,
-            foe_goal.right_post - foe_goal_width_direction * 39.0,
-        );
-
-        let friend_goal_width_direction =
-            (friend_goal.right_post - friend_goal.left_post).normalize();
-        let anti_target = (
-            friend_goal.right_post + friend_goal_width_direction * 100.0,
-            friend_goal.left_post - friend_goal_width_direction * 100.0,
-        );
-
-        let mut brain = BotBrain::new_with_boost_accel(settings.boost_accel);
-        brain.set_unlimited_boost(settings.boost_amount == BoostAmountMode::Unlimited);
+        let settings = AgentSettings::from_match_configuration(match_config.as_ref());
+        let opponent_team = 1usize.saturating_sub(team as usize);
+        let foe_goal = GoalState::new(opponent_team, 820.0, 350.0);
+        let foe_goal_targets = ShotTargets {
+            left: foe_goal.left_post,
+            right: foe_goal.right_post,
+        };
+        let boost_pads = field_info.boost_pads.iter().enumerate()
+            .map(|(index, pad)| BoostPadState::from_field_info(index, pad))
+            .collect();
 
         Self {
             index: controllable_info.index,
             team,
             match_state: MatchState::default(),
             settings,
-            friend_goal,
-            foe_goal,
-            foe_goal_shot,
-            anti_target,
-            persistent: BotPersistentState::new(),
+            foe_goal_targets,
             ball_prediction: Vec::new(),
-            boost_pads: field_info.boost_pads.iter().enumerate().map(|(index, pad)| {
-                BoostPadState::from_field_info(index, pad)
-            }).collect(),
-            brain,
+            boost_pads,
+            teammate_comms: HashMap::new(),
+            brain: BotBrain::new(),
             last_comms_signature: Vec::new(),
             last_comms_send_time: -999.0,
         }
@@ -117,6 +100,7 @@ impl BotAgent for VoltRustAgent {
         {
             return;
         }
+
         if let Some((sender, message)) = crate::teamplay::decode(
             match_comm.index as usize,
             match_comm.team,
@@ -125,7 +109,7 @@ impl BotAgent for VoltRustAgent {
             &match_comm.content,
             self.match_state.time,
         ) {
-            self.persistent.teammate_comms.insert(sender, message);
+            self.teammate_comms.insert(sender, message);
         }
     }
 
@@ -134,9 +118,7 @@ impl BotAgent for VoltRustAgent {
         ball_prediction: &BallPrediction,
         _packet_queue: &mut PacketQueue,
     ) {
-        self.ball_prediction = ball_prediction
-            .slices
-            .iter()
+        self.ball_prediction = ball_prediction.slices.iter()
             .map(|slice| AbsoluteBallSlice {
                 game_seconds: slice.game_seconds,
                 location: crate::math::Vector::new(
@@ -164,41 +146,24 @@ impl BotAgent for VoltRustAgent {
             game_time,
         );
 
-        // Decode the packet once into the same stable per-tick objects used
-        // throughout VirxERLU: self, teammates/opponents, ball, match and pads.
         let Some(frame) = AgentFrame::from_packet(
             game_packet,
             self.index as usize,
             self.team as usize,
             &self.boost_pads,
         ) else {
-            // Always submit a controller for this player on every active
-            // packet. A temporarily incomplete packet must not leave the
-            // previous frame's throttle/boost/jump input latched.
+            // Never leave last packet's controls latched if a packet is
+            // temporarily incomplete.
             packet_queue.push(PlayerInput {
                 player_index: self.index,
                 controller_state: ControllerState::default(),
             });
             return;
         };
-        self.match_state = frame.match_state;
-        self.persistent.time = frame.match_state.time;
-        self.persistent.odd_tick += 1;
-        if self.persistent.odd_tick > 3 {
-            self.persistent.odd_tick = 0;
-        }
-        if !self.persistent.kickoff_flag
-            && frame.match_state.round_active
-            && frame.match_state.kickoff
-        {
-            self.persistent.kickoff_done = false;
-            self.persistent.kickoff_routine_started = false;
-        }
-        self.persistent.kickoff_flag =
-            frame.match_state.round_active && frame.match_state.kickoff;
-        self.boost_pads = frame.boost_pads.clone();
 
-        // VirxERLU does not run gameplay routines outside Active/Kickoff.
+        self.match_state = frame.match_state;
+        self.boost_pads.clone_from(&frame.boost_pads);
+
         if !frame.match_state.round_active {
             packet_queue.push(PlayerInput {
                 player_index: self.index,
@@ -207,30 +172,23 @@ impl BotAgent for VoltRustAgent {
             return;
         }
 
-        self.persistent.teammate_comms.retain(|_, message| {
+        self.teammate_comms.retain(|_, message| {
             (game_time - message.received_at) <= 1.0
         });
-        self.brain.set_teammate_comms(&self.persistent.teammate_comms);
+        self.brain.set_teammate_comms(&self.teammate_comms);
 
-        let controller: ControllerState = self.brain.tick(
-            frame.me,
-            &frame.cars,
-            frame.ball,
+        let (controller, message) = self.brain.tick(
+            &frame,
             &prediction,
-            game_time,
-            frame.match_state,
-            &frame.boost_pads,
-            crate::shot_parser::ShotTargets {
-                left: self.foe_goal_shot.0,
-                right: self.foe_goal_shot.1,
-            },
+            self.foe_goal_targets,
+            self.settings.boost_accel,
+            self.settings.unlimited_boost(),
         );
 
-        let teamplay_message = self.brain.teamplay_message(game_time);
         if let Some(content) = crate::teamplay::encode(
             self.index as usize,
             self.team,
-            &teamplay_message,
+            &message,
         ) {
             let changed = content != self.last_comms_signature;
             let refresh_due = game_time - self.last_comms_send_time >= 0.25;
@@ -263,12 +221,10 @@ fn main() {
 
     let agent_id = agent_id.unwrap_or_else(|| "sifu/volt-rust".into());
 
-    println!("Volt-Rust connecting...");
-
+    println!("Volt-Rust autonomous brain connecting...");
     let connection = RLBotConnection::new(&server_addr)
         .expect("Failed to connect to RLBot");
-
-    println!("Volt-Rust connected!");
+    println!("Volt-Rust connected.");
 
     run_bot_agents::<VoltRustAgent>(
         agent_id.clone(),

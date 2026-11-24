@@ -61,10 +61,13 @@ impl GridDefense {
         pads.iter()
             .copied()
             .filter(|pad| {
+                let pad_distance = car.location.distance(pad.location);
                 (pad.location.x.abs() > 3000.0 || pad.location.y.abs() > 4000.0)
                     && pad.location.distance(-goal) < car_goal_distance
                     && Self::sign(pad.location.x) == Self::sign(car.location.x)
-                    && pad.active
+                    // Python accepts an inactive pad when its respawn timer
+                    // expires before the car's straight-line arrival estimate.
+                    && (pad.active || pad.timer <= pad_distance / 2300.0)
             })
             .min_by(|a, b| {
                 // Python sorts (not boost.large, score): every full pad is
@@ -474,6 +477,33 @@ mod tests {
     }
 
     #[test]
+    fn defensive_pad_selection_accepts_only_pads_that_respawn_before_arrival() {
+        let mut car_state = car(0, Vector::new(3500.0, -3000.0, 17.0));
+        car_state.boost = 20.0;
+        let goal = Vector::new(0.0, 5120.0, 300.0);
+        let respawning_location = Vector::new(3500.0, -4100.0, 70.0);
+        let arrival = car_state.location.distance(respawning_location) / 2300.0;
+        let pads = [
+            BoostPadState {
+                index: 0,
+                location: respawning_location,
+                large: true,
+                active: false,
+                timer: (arrival - 0.1).max(0.0),
+            },
+            BoostPadState {
+                index: 1,
+                location: Vector::new(3600.0, -4050.0, 70.0),
+                large: true,
+                active: false,
+                timer: arrival + 1.0,
+            },
+        ];
+        let selected = GridDefense::choose_pad(car_state, goal, &pads, false);
+        assert_eq!(selected.map(|pad| pad.index), Some(0));
+    }
+
+    #[test]
     fn goalie_holds_python_goal_line_target() {
         let mut defense = GridDefense::default();
         let me = car(0, Vector::new(0.0, -4000.0, 0.0));
@@ -537,7 +567,7 @@ mod tests {
         let mut me = car(0, Vector::new(0.0, -1000.0, 1000.0));
         me.boost = 50.0;
         me.airborne = true;
-        me.orientation = Matrix3::new(-std::f32::consts::FRAC_PI_2, 0.0, 0.0);
+        me.orientation = Matrix3::new(std::f32::consts::FRAC_PI_2, 0.0, 0.0);
         let controller = GridDefense::ball_recovery_controller(me, -650.0);
         assert!(controller.boost);
         assert_eq!(controller.throttle, 1.0);
@@ -549,13 +579,13 @@ mod tests {
         wall_car.boost = 50.0;
         wall_car.airborne = true;
         wall_car.velocity = Vector::new(1000.0, 0.0, 0.0);
-        wall_car.orientation = Matrix3::new(-std::f32::consts::FRAC_PI_2, 0.0, 0.0);
+        wall_car.orientation = Matrix3::new(std::f32::consts::FRAC_PI_2, 0.0, 0.0);
         assert!(!GridDefense::ball_recovery_controller(wall_car, -650.0).boost);
 
         let mut near_floor = car(0, Vector::new(0.0, 0.0, 250.0));
         near_floor.boost = 50.0;
         near_floor.airborne = true;
-        near_floor.orientation = Matrix3::new(-std::f32::consts::FRAC_PI_2, 0.0, 0.0);
+        near_floor.orientation = Matrix3::new(std::f32::consts::FRAC_PI_2, 0.0, 0.0);
         assert!(!GridDefense::ball_recovery_controller(near_floor, -650.0).boost);
     }
 }
