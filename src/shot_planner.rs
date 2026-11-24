@@ -114,9 +114,21 @@ pub fn opponent_reaches_before(
     foe_eta(*foe, ball) + margin < time_remaining
 }
 
-fn useful(_me:CarState,foes:&[CarState],friends:&[CarState],ball:Vector,t:f32,kind:ShotType,kickoff:bool,challenger:bool)->bool {
-    if kind==ShotType::Aerial || t<=0.0 || foes.is_empty() || kickoff || (!friends.is_empty()&&challenger) {return true;}
-    !opponent_reaches_before(foes, ball, t, kind, kickoff)
+fn useful(
+    _me: CarState,
+    _foes: &[CarState],
+    _friends: &[CarState],
+    _ball: Vector,
+    time_remaining: f32,
+    _kind: ShotType,
+    _kickoff: bool,
+    _challenger: bool,
+) -> bool {
+    // This finder is called only for the active attacker. An opponent's
+    // estimated arrival must not make the attacker abandon a valid shot:
+    // challenge and contact execution decide the outcome, not a proximity
+    // veto. Keep opponent ETA available for defensive/goalie decisions only.
+    time_remaining > 0.0
 }
 fn score(me:CarState,friends:&[CarState],ball:Vector,vel:Vector,kind:ShotType,t:f32,targets:ShotTargets,g:f32)->f32 {
     if unrealistic(ball,targets,me.team) {return f32::INFINITY;}
@@ -914,6 +926,19 @@ mod tests {
     fn test_car()->CarState {CarState{index:0,team:0,location:Vector::new(0.0,-1000.0,17.0),velocity:Vector::new(0.0,1200.0,0.0),orientation:Matrix3::new(0.0,1.5707963,0.0),angular_velocity:Vector::ZERO,demolished:false,airborne:false,supersonic:false,jumped:false,doublejumped:false,air_state:AirState::OnGround,has_jumped:false,has_double_jumped:false,has_dodged:false,dodge_timeout:0.0,dodge_elapsed:0.0,dodge_dir:Vector::ZERO,flip_reset_available:false,boost:50.0,hitbox:Hitbox{length:118.0,width:84.0,height:36.0,offset:Vector::ZERO}}}
     #[test]fn grid_jump_time_matches_source_polynomial(){assert!(grid_jump_time(200.0,false).is_some());assert!(grid_jump_time(350.0,true).is_some());assert!(grid_jump_time(5.0,true).is_some());}
     #[test]fn grid_profile_has_601_120hz_samples(){let(d,v)=grid_profile(test_car());assert_eq!(d.len(),601);assert_eq!(v.len(),601);assert!(d[600]>d[0]);}
+    #[test]
+    fn attacker_shot_usefulness_is_not_vetoed_by_nearby_opponent() {
+        let me = test_car();
+        let mut foe = test_car();
+        foe.index = 1;
+        foe.team = 1;
+        foe.location = Vector::new(0.0, -100.0, 17.0);
+        assert!(useful(
+            me, &[foe], &[], Vector::new(0.0, 0.0, 150.0),
+            1.0, ShotType::Jump, false, false,
+        ));
+    }
+
     #[test]
     fn intercept_selection_prefers_earliest_valid_contact_over_later_score() {
         assert!(prefer_earlier_candidate(1.0, 2.0, Some((1.5, 0.1))));
