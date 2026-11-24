@@ -538,6 +538,9 @@ impl BotBrain {
         let plan = build_plan(frame, prediction);
         let urgent = plan.urgent_save;
         let challenger = plan.role == Role::Challenge || urgent;
+        // Do not cancel a committed shot merely because teammate ETA changes
+        // flip the elected role for a frame. An explicit teammate SHOT_FOUND
+        // claim is handled below; launched routines are never yielded.
         let horizon = if urgent { 3.0 } else { 5.5 };
 
         let mut candidate = if challenger {
@@ -596,11 +599,14 @@ impl BotBrain {
         // refresh, jump/second-jump timing, pitchback and boost controller.
         candidate = candidate.filter(|shot| shot.shot_type != ShotType::Aerial);
 
+        let priority_candidate = candidate.or_else(|| self.strike.active_candidate());
+        let may_yield_committed_approach = challenger || self.strike.is_approaching();
         let teammate_claimed = !urgent
-            && challenger
-            && teammate_has_priority_shot(&self.teammate_comms, now, candidate);
+            && may_yield_committed_approach
+            && teammate_has_priority_shot(&self.teammate_comms, now, priority_candidate);
         if teammate_claimed {
             candidate = None;
+            self.strike.cancel_approach();
         }
 
         // Noob Black wall-route reachability is evaluated independently
@@ -714,6 +720,7 @@ impl BotBrain {
                 me,
                 ball,
                 Some(shot),
+                prediction,
                 targets,
                 frame.match_state.gravity,
                 boost_accel,
@@ -737,6 +744,7 @@ impl BotBrain {
                 me,
                 ball,
                 None,
+                prediction,
                 targets,
                 frame.match_state.gravity,
                 boost_accel,

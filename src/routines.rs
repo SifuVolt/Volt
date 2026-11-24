@@ -6,11 +6,14 @@
 //! contact dodge, and the source-sequenced kickoff speedflip.
 
 use crate::{
-    control::default_pd,
+    aerial::wall_shot_adjust_jump,
+    control::{default_drive, default_pd, DriveInput},
     drive::{drive_to, DriveRequest},
-    math::Vector,
-    shot_parser::ShotTargets,
-    shot_physics::{get_jump_time, ShotType},
+    math::{utils::{cap, cap_in_field}, Vector},
+    physics::drive::dodge_impulse,
+    prediction::{BallSlice, BallTrajectory},
+    shot_parser::{runtime_ground_reachability, ShotTargets},
+    shot_physics::{get_jump_time, jump_shot_is_viable, ShotType},
     shot_planner::ShotCandidate,
     state::{BallState, CarState},
 };
@@ -110,22 +113,36 @@ fn align_to_direction(car: &CarState, direction: Vector) -> ControllerState {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum StrikePhase {
     Approach,
+    /// Python jump_shot's jump, orientation, counter, and directional-dodge sequence.
+    JumpFlight,
+    /// Double-jump path retained separately from the single-jump dodge.
     JumpHold,
     JumpRelease,
     SecondJump,
     Flight,
-    Dodge,
 }
+
+const JUMP_SPEED: f32 = 291.6667;
+const JUMP_ACCEL: f32 = 1458.3333;
+const JUMP_MAX_DURATION: f32 = 0.20;
+const MIN_AIR_BOOST_TIME: f32 = 1.0 / 30.0;
+const AIR_THROTTLE_ACCEL: f32 = 66.666667;
+const MAX_JUMP_SHOT_AGE: f32 = 0.80;
 
 #[derive(Debug, Clone)]
 pub struct StrikeExecutor {
     candidate: Option<ShotCandidate>,
     phase: StrikePhase,
     phase_started: f32,
-    last_dodge_at: f32,
-    jump_started: bool,
-    jump_hold_duration: f32,
+    jump_started_at: Option<f32>,
+    jump_counter: u8,
+    quick_shot: bool,
+    dodge_started_at: Option<f32>,
     last_tick: Option<f32>,
+    last_debug_at: f32,
+    jump_hold_duration: f32,
+    current_jump_target: Vector,
+    current_shot_direction: Vector,
 }
 
 impl Default for StrikeExecutor {
@@ -134,12 +151,47 @@ impl Default for StrikeExecutor {
             candidate: None,
             phase: StrikePhase::Approach,
             phase_started: 0.0,
-            last_dodge_at: -999.0,
-            jump_started: false,
-            jump_hold_duration: 0.06,
+            jump_started_at: None,
+            jump_counter: 0,
+            quick_shot: false,
+            dodge_started_at: None,
             last_tick: None,
+            last_debug_at: -999.0,
+            jump_hold_duration: 0.06,
+            current_jump_target: Vector::ZERO,
+            current_shot_direction: Vector::new(1.0, 0.0, 0.0),
         }
     }
+}
+
+fn controller_from_drive_output(
+    output: crate::control::DriveOutput,
+    car: &CarState,
+) -> ControllerState {
+    let mut controller = ControllerState::default();
+    controller.steer = output.controls.steer;
+    controller.pitch = output.controls.pitch;
+    controller.yaw = output.controls.yaw;
+    controller.roll = output.controls.roll;
+    if let Some(throttle) = output.throttle {
+        controller.throttle = throttle;
+    }
+    if let Some(handbrake) = output.handbrake {
+        controller.handbrake = handbrake;
+    }
+    if let Some(boost) = output.boost {
+        controller.boost = boost && car.boost > 0.0;
+    }
+    controller
+}
+
+fn nearest_prediction_slice(
+    prediction: &BallTrajectory,
+    time: f32,
+) -> Option<BallSlice> {
+    prediction.slices.iter().copied().min_by(|a, b| {
+        (a.time - time).abs().total_cmp(&(b.time - time).abs())
+    })
 }
 
 impl StrikeExecutor {
@@ -147,17 +199,30 @@ impl StrikeExecutor {
         Self::default()
     }
 
+    /// A strike owns the car from candidate acquisition, not merely after the
+    /// first jump press. This prevents a one-frame parser miss from erasing
+    /// the committed approach before launch.
     pub fn active(&self) -> bool {
-        self.phase != StrikePhase::Approach
+        self.candidate.is_some()
     }
 
     pub fn active_candidate(&self) -> Option<ShotCandidate> {
         self.candidate
     }
 
-    /// Hand off a reachable Noob Black wall contact directly into the jump
-    /// phase. The wall approach controller has already driven to the launch
-    /// point; this avoids sending the car back through a ground waypoint.
+    pub fn is_approaching(&self) -> bool {
+        self.candidate.is_some() && self.phase == StrikePhase::Approach
+    }
+
+    /// Cancel only an unlaunched approach when teamplay transfers the
+    /// challenge. Once jump flight begins, finish the committed contact.
+    pub fn cancel_approach(&mut self) {
+        if self.is_approaching() {
+            self.reset();
+        }
+    }
+
+    /// Transfer a wall approach directly to its launch routine.
     pub fn start_from_wall(
         &mut self,
         candidate: ShotCandidate,
@@ -165,20 +230,35 @@ impl StrikeExecutor {
         jump_hold_duration: f32,
     ) {
         self.candidate = Some(candidate);
-        self.phase = StrikePhase::JumpHold;
         self.phase_started = now;
-        self.jump_hold_duration = jump_hold_duration.clamp(0.06, 0.20);
-        self.jump_started = true;
         self.last_tick = Some(now);
+        self.jump_hold_duration = jump_hold_duration.clamp(0.06, JUMP_MAX_DURATION);
+        self.jump_counter = 0;
+        self.jump_started_at = None;
+        self.dodge_started_at = None;
+        self.current_jump_target = candidate.approach;
+        self.current_shot_direction = candidate.shot_direction.flatten().normalize();
+        self.phase = if candidate.shot_type == ShotType::Jump {
+            StrikePhase::JumpFlight
+        } else {
+            StrikePhase::JumpHold
+        };
     }
 
     pub fn reset(&mut self) {
         self.candidate = None;
         self.phase = StrikePhase::Approach;
         self.phase_started = 0.0;
-        self.jump_started = false;
-        self.jump_hold_duration = 0.06;
+        self.jump_started_at = None;
+        self.jump_counter = 0;
+        self.quick_shot = false;
+        self.dodge_started_at = None;
         self.last_tick = None;
+        self.last_debug_at = -999.0;
+        self.jump_hold_duration = 0.06;
+        self.second_jump_used = false;
+        self.current_jump_target = Vector::ZERO;
+        self.current_shot_direction = Vector::new(1.0, 0.0, 0.0);
     }
 
     fn set_phase(&mut self, phase: StrikePhase, now: f32) {
@@ -186,174 +266,519 @@ impl StrikeExecutor {
         self.phase_started = now;
     }
 
-    fn current_target(
-        &self,
-        car: CarState,
+    fn refresh_committed_candidate(
+        &mut self,
+        next: Option<ShotCandidate>,
+        prediction: &BallTrajectory,
+        now: f32,
+        gravity: Vector,
+    ) {
+        let elapsed = self.last_tick
+            .map(|last| (now - last).max(0.0))
+            .unwrap_or(0.0);
+        self.last_tick = Some(now);
+
+        match (self.candidate, next) {
+            (None, Some(candidate)) => self.candidate = Some(candidate),
+            (Some(current), Some(candidate)) if self.phase == StrikePhase::Approach => {
+                // Keep the chosen shot family stable through approach. A
+                // different family may replace it only when its contact is
+                // materially earlier, not because two adjacent scans scored
+                // nearly equal candidates differently.
+                if current.shot_type == candidate.shot_type
+                    || candidate.time + 0.20 < current.time
+                {
+                    self.candidate = Some(candidate);
+                } else {
+                    let mut updated = current;
+                    updated.time = (updated.time - elapsed).max(-1.0);
+                    if updated.time >= 0.0 {
+                        if let Some(slice) = nearest_prediction_slice(prediction, updated.time) {
+                            updated.ball = slice.location;
+                            updated.ball_velocity = slice.velocity;
+                        }
+                    }
+                    self.candidate = Some(updated);
+                }
+            }
+            (Some(mut current), Some(_)) => {
+                // Once launch has begun, never swap the contact underneath
+                // the airborne routine. Advance the committed intercept clock
+                // even when the planner continues to return a fresh candidate.
+                current.time -= elapsed;
+                self.candidate = Some(current);
+            }
+            (Some(mut current), None) => {
+                current.time -= elapsed;
+                if self.phase == StrikePhase::Approach && current.time >= 0.0 {
+                    if let Some(slice) = nearest_prediction_slice(
+                        prediction,
+                        current.time,
+                    ) {
+                        current.ball = slice.location;
+                        current.ball_velocity = slice.velocity;
+                        // Keep the finder clock synchronized to the actual
+                        // prediction slice rather than accumulating timer drift.
+                        current.time = slice.time;
+                    } else {
+                        // No prediction is a transient sensor gap, not a
+                        // reason to erase a committed intercept.
+                        current.ball = current.ball
+                            + current.ball_velocity * elapsed
+                            + gravity * (0.5 * elapsed * elapsed);
+                        current.ball_velocity = current.ball_velocity + gravity * elapsed;
+                    }
+                }
+                self.candidate = Some(current);
+            }
+            (None, None) => {}
+        }
+    }
+
+    fn refreshed_jump_geometry(
+        car: &CarState,
+        shot: ShotCandidate,
         targets: ShotTargets,
         gravity: Vector,
         time_remaining: f32,
-    ) -> (Vector, Vector) {
-        let shot = self.candidate.expect("strike candidate is set");
-        let predicted_ball = BallState {
-            location: shot.ball,
-            velocity: shot.ball_velocity,
-        };
+    ) -> (Vector, Vector, Option<Vector>) {
+        let goal = target_center(targets);
         let predicted_direction = party_cannon_shot_direction(
-            car, predicted_ball, time_remaining, targets, gravity,
+            *car,
+            BallState {
+                location: shot.ball,
+                velocity: shot.ball_velocity,
+            },
+            time_remaining.max(1.0 / 120.0),
+            targets,
+            gravity,
         );
-        let shot_direction = if shot.shot_direction.magnitude() > 0.001
-            && shot.shot_type == ShotType::Ground
+        let goal_direction = (goal - shot.ball).flatten().normalize();
+        let predicted_direction = predicted_direction.flatten().normalize();
+        let blended = if goal_direction.magnitude() > 0.001
+            && predicted_direction.magnitude() > 0.001
         {
-            shot.shot_direction.flatten().normalize()
+            (goal_direction * 0.65 + predicted_direction * 0.35).normalize()
+        } else if goal_direction.magnitude() > 0.001 {
+            goal_direction
         } else {
             predicted_direction
         };
 
-        let target = hitbox_contact_target(car, shot.ball, shot_direction);
-        (target, shot_direction)
+        let (shot_direction, wall_normal, _) =
+            wall_shot_adjust_jump(shot.ball, blended);
+        let hitbox_target = hitbox_contact_target(*car, shot.ball, shot_direction);
+        let mut approach = hitbox_target;
+
+        if let Some(normal) = wall_normal {
+            let tangent = shot_direction - normal * shot_direction.dot(normal);
+            if tangent.magnitude() > 0.001 {
+                approach = approach - tangent.normalize() * 25.0;
+            }
+            if normal.z.abs() < 0.95 {
+                let jump_time = get_jump_time(
+                    shot.ball.z - car.location.z,
+                    car.velocity.z,
+                    gravity.z,
+                ).time as f32;
+                approach.z = shot.ball.z
+                    + (approach.z - shot.ball.z).clamp(-120.0, 120.0);
+                approach = approach - gravity * (0.5 * jump_time * jump_time);
+            }
+        }
+
+        (approach, shot_direction, wall_normal)
     }
 
-    /// Update the active shot with the newest selected candidate and emit
-    /// a fresh, fully initialized controller every tick.
-    pub fn tick(
+    fn tick_ground_or_jump_approach(
         &mut self,
         car: CarState,
-        ball: BallState,
-        candidate: Option<ShotCandidate>,
+        live_ball: BallState,
+        shot: ShotCandidate,
         targets: ShotTargets,
         gravity: Vector,
         boost_accel: f32,
         now: f32,
     ) -> ControllerState {
-        let elapsed_since_tick = self.last_tick
-            .map(|last| (now - last).max(0.0))
-            .unwrap_or(0.0);
-        self.last_tick = Some(now);
+        if shot.shot_type == ShotType::Ground {
+            let shot_direction = shot.shot_direction.flatten().normalize();
+            let refreshed_contact = hitbox_contact_target(car, shot.ball, shot_direction);
+            let mut target = refreshed_contact;
+            let mut preserve_momentum = false;
+            if car.location.flat_distance(target) < 520.0 {
+                // Do not brake at the parser's stale stand-off point. Keep a
+                // direct forward run through the current predicted ball lane.
+                target = shot.ball + shot_direction * 720.0;
+                preserve_momentum = true;
+            }
+            return drive_to(
+                &car,
+                DriveRequest {
+                    target,
+                    target_speed: MAX_SPEED,
+                    boost_accel,
+                    allow_handbrake: false,
+                    preserve_momentum,
+                },
+            );
+        }
 
-        if candidate.is_none() {
-            if let Some(mut current) = self.candidate {
-                current.time -= elapsed_since_tick;
-                current.ball = current.ball
-                    + current.ball_velocity * elapsed_since_tick
-                    + gravity * (0.5 * elapsed_since_tick * elapsed_since_tick);
-                current.ball_velocity = current.ball_velocity + gravity * elapsed_since_tick;
-                self.candidate = Some(current);
+        let time_remaining = shot.time.clamp(0.000001, 6.0);
+        let (approach, shot_direction, _) =
+            Self::refreshed_jump_geometry(&car, shot, targets, gravity, time_remaining);
+
+        let mut final_target = cap_in_field(&car, approach.flatten());
+        let mut distance_remaining = car.location.flat_distance(final_target);
+        if car.airborne {
+            distance_remaining = car.local_location(approach.flatten()).x;
+        }
+        distance_remaining -= car.hitbox.length / 3.0;
+
+        let needed_jump_time = get_jump_time(
+            shot.ball.z - car.location.z,
+            car.velocity.z,
+            gravity.z,
+        ).time as f32;
+        let time_to_jump = time_remaining - needed_jump_time * 1.15;
+        let local_final_target = car.local_location(final_target);
+        let mut speed_required = distance_remaining / time_remaining;
+        let ball_speed_toward_shot = live_ball.velocity.dot(shot_direction);
+        if speed_required < 1900.0
+            && car.boost > 50.0
+            && time_remaining > 2.0
+            && distance_remaining > 2560.0
+            && ball_speed_toward_shot > 1000.0
+        {
+            speed_required *= 0.75;
+        }
+
+        let current_forward_speed = car.local_velocity().x;
+        let power_dodge_window = time_remaining < 0.35
+            && time_remaining > 0.10
+            && car.local_location(live_ball.location).x > 0.0
+            && current_forward_speed > 700.0;
+        let mut drive_speed = speed_required;
+        if power_dodge_window {
+            drive_speed = drive_speed.max(current_forward_speed.min(1200.0));
+        }
+        // Close-in overshoot is not permission to reverse. If the target has
+        // fallen behind because of a stale slice, keep useful forward speed
+        // long enough to complete the contact instead of brake-flipping away.
+        if distance_remaining <= 0.0 && local_final_target.x > 0.0 {
+            drive_speed = drive_speed.max(current_forward_speed.max(850.0));
+        }
+        drive_speed = cap(drive_speed, -MAX_SPEED, MAX_SPEED);
+
+        let drive = default_drive(
+            &car,
+            DriveInput {
+                target_speed: drive_speed,
+                local_target: local_final_target,
+                upside_down: false,
+                up: None,
+                handbrake: false,
+                boost_accel,
+            },
+        );
+        let velocity = if drive.car_speed.abs() < 0.001 { 1.0 } else { drive.car_speed };
+        let local_offset_target = car.local_location(approach.flatten());
+        let predicted_velocity = car.velocity + gravity * time_remaining;
+        let local_predicted_velocity = car.local(predicted_velocity.flatten());
+        let time_to_contact = distance_remaining
+            / (velocity + dodge_impulse(car.velocity, MAX_SPEED)).max(1.0);
+
+        let close_enough = velocity.abs() < 100.0
+            && distance_remaining < car.hitbox.length * 0.5;
+        let aligned = local_offset_target.y.abs() < 92.0
+            && local_predicted_velocity.x >= local_offset_target.x - car.hitbox.length / 3.0
+            && local_offset_target.x > 0.0;
+        let launch_ready = (close_enough || aligned)
+            && time_remaining <= needed_jump_time * 1.08;
+
+        if launch_ready {
+            self.quick_shot = time_remaining <= 0.45;
+            self.jump_counter = 0;
+            self.jump_started_at = None;
+            self.dodge_started_at = None;
+            if shot.shot_type == ShotType::Jump {
+                self.set_phase(StrikePhase::JumpFlight, now);
+            } else {
+                    self.jump_hold_duration = get_jump_time(
+                    shot.ball.z - car.location.z,
+                    car.velocity.z,
+                    gravity.z,
+                ).press as f32;
+                self.set_phase(StrikePhase::JumpHold, now);
+            }
+            return controller_from_drive_output(drive, &car);
+        }
+
+        // Keep the actual CLib runtime check, but don't let a marginal
+        // under-estimate suppress a close, high-speed contact in the final
+        // 0.35 seconds. The original parser already validated this candidate;
+        // this is a last-resort abort, not a second independent shot finder.
+        let runtime_reachable = runtime_ground_reachability(
+            time_remaining,
+            boost_accel,
+            &car,
+            (final_target - car.location).normalize(),
+            distance_remaining.max(0.0),
+        ).is_some_and(|remaining| {
+            jump_shot_is_viable(
+                remaining,
+                gravity.z,
+                car.velocity.z,
+                car.hitbox.height,
+                car.airborne,
+                approach.z,
+                true,
+            )
+        });
+        let close_late_contact = time_remaining <= 0.35
+            && local_offset_target.x > 0.0
+            && current_forward_speed > 650.0
+            && distance_remaining <= car.hitbox.length * 1.6;
+
+        if time_remaining <= needed_jump_time
+            || (time_to_jump > 0.0
+                && distance_remaining > 50.0
+                && !runtime_reachable
+                && !close_late_contact)
+        {
+            if now - self.last_debug_at >= 0.25 {
+                println!(
+                    "[VOLT JUMP ABORT] T={:.3} Tjump={:.3} dist={:.1} speed={:.1} reachable={} close_late={}",
+                    time_remaining, needed_jump_time, distance_remaining,
+                    current_forward_speed, runtime_reachable, close_late_contact
+                );
+                self.last_debug_at = now;
+            }
+            self.reset();
+            return if car.airborne {
+                crate::drive::recover_in_air(&car, boost_accel, Some(live_ball.location))
+            } else {
+                ControllerState::default()
+            };
+        }
+
+        if now - self.last_debug_at >= 0.25 {
+            println!(
+                "[VOLT JUMP APPROACH] T={:.3} Tjump={:.3} dist={:.1} speed_req={:.1} forward={:.1} lateral={:.1} t_contact={:.3} ready={} boost={:.0}",
+                time_remaining, needed_jump_time, distance_remaining,
+                speed_required, current_forward_speed, local_offset_target.y,
+                time_to_contact, launch_ready, car.boost
+            );
+            self.last_debug_at = now;
+        }
+
+        controller_from_drive_output(drive, &car)
+    }
+
+    fn tick_single_jump(
+        &mut self,
+        car: CarState,
+        shot: ShotCandidate,
+        live_ball: BallState,
+        gravity: Vector,
+        boost_accel: f32,
+        now: f32,
+    ) -> ControllerState {
+        let jump_started_at = *self.jump_started_at.get_or_insert(now);
+        let jump_elapsed = (now - jump_started_at).max(0.0);
+        let time_remaining = shot.time.clamp(-1.0, 6.0);
+        let approach = self.current_jump_target;
+        let shot_direction = self.current_shot_direction;
+        let local_ball = car.local_location(shot.ball).flatten();
+        let local_target = car.local_location(approach).flatten();
+        let contact_distance = car.location.distance(approach);
+        let contact_limit = (BALL_RADIUS + car.hitbox.length) * 1.02;
+
+        if time_remaining <= -MAX_JUMP_SHOT_AGE
+            || (!car.airborne && self.jump_counter >= 3)
+        {
+            if now - self.last_debug_at >= 0.25 {
+                println!(
+                    "[VOLT JUMP ABORT] phase=flight T={:.3} airborne={} counter={} elapsed={:.3}",
+                    time_remaining, car.airborne, self.jump_counter, jump_elapsed
+                );
+                self.last_debug_at = now;
+            }
+            self.reset();
+            return crate::drive::recover_in_air(&car, boost_accel, Some(live_ball.location));
+        }
+
+        let mut predicted_velocity = car.velocity + gravity * time_remaining;
+        let mut predicted_position = car.location
+            + car.velocity * time_remaining
+            + gravity * (0.5 * time_remaining * time_remaining);
+        if jump_elapsed <= 1.0e-6 {
+            predicted_velocity = predicted_velocity + car.up() * JUMP_SPEED;
+            predicted_position = predicted_position + car.up() * (JUMP_SPEED * time_remaining);
+        }
+        let hf = predicted_velocity.z;
+        let tau = (JUMP_MAX_DURATION - jump_elapsed).max(0.0);
+        predicted_velocity = predicted_velocity + car.up() * (JUMP_ACCEL * tau);
+        predicted_position = predicted_position
+            + car.up() * (JUMP_ACCEL * tau * (time_remaining - 0.5 * tau));
+
+        let mut controller = ControllerState::default();
+        if self.jump_counter < 3 && self.dodge_started_at.is_none() {
+            let local_shot = car.local(shot_direction.flatten()).flatten().normalize();
+            let (_, pd) = default_pd(&car, local_shot, false, None);
+            controller.pitch = pd.pitch;
+            controller.yaw = pd.yaw;
+            controller.roll = pd.roll;
+
+            let hold_s = shot.ball.z > 130.0
+                && shot.ball.z > car.location.z + 65.0
+                && !self.quick_shot;
+            if hold_s {
+                controller.pitch = 1.0;
+                controller.roll = if pd.yaw.abs() > 0.08 {
+                    -0.20 * pd.yaw.signum()
+                } else {
+                    0.0
+                };
+            }
+
+            let delta_position = approach - predicted_position;
+            let direction = delta_position.normalize();
+            if car.forward().dot(direction).abs() > 0.5 && time_remaining > 1.0e-6 {
+                let mut delta_velocity = delta_position.dot(car.forward()) / time_remaining;
+                if car.boost > 0.0
+                    && delta_velocity >= boost_accel * MIN_AIR_BOOST_TIME
+                {
+                    controller.boost = true;
+                    delta_velocity -= boost_accel * MIN_AIR_BOOST_TIME;
+                }
+                if delta_velocity.abs() > AIR_THROTTLE_ACCEL * MIN_AIR_BOOST_TIME {
+                    controller.throttle =
+                        (delta_velocity / (AIR_THROTTLE_ACCEL * MIN_AIR_BOOST_TIME))
+                            .clamp(-1.0, 1.0);
+                }
             }
         }
 
-        if let Some(next) = candidate {
-            if self.phase == StrikePhase::Approach
-                || self.candidate.is_none_or(|current| current.shot_type == next.shot_type)
+        if self.jump_counter == 3 {
+            let close_enough = contact_distance < contact_limit;
+            let target_in_front = local_target.x > 0.0;
+            if close_enough && target_in_front {
+                let dodge = if local_ball.magnitude() > 1.0 {
+                    local_ball.normalize()
+                } else {
+                    Vector::new(1.0, 0.0, 0.0)
+                };
+                self.dodge_started_at = Some(now);
+                self.jump_counter = 4;
+                controller.jump = true;
+                controller.pitch = -dodge.x;
+                controller.yaw = dodge.y;
+                controller.roll = 0.0;
+                controller.boost = car.boost > 0.0;
+                println!(
+                    "[VOLT JUMP FLIP] T={:.3} distance={:.1} local_ball=({:.2},{:.2}) pitch={:.2} yaw={:.2}",
+                    time_remaining, contact_distance, dodge.x, dodge.y,
+                    controller.pitch, controller.yaw
+                );
+            } else if time_remaining < 0.12
+                && contact_distance > contact_limit + 150.0
             {
-                self.candidate = Some(next);
+                self.jump_counter = 5;
+            } else {
+                let local_shot = car.local(shot_direction.flatten()).flatten().normalize();
+                let (_, pd) = default_pd(&car, local_shot, false, None);
+                controller.pitch = pd.pitch;
+                controller.yaw = pd.yaw;
+                controller.roll = pd.roll;
             }
+        } else if self.jump_counter == 4 {
+            // The flip was already triggered. Never issue pitch/yaw cancel
+            // inputs here; allow the dodge impulse to finish naturally.
         }
 
+        if self.jump_counter == 5 {
+            self.reset();
+            return crate::drive::recover_in_air(&car, boost_accel, Some(live_ball.location));
+        }
+
+        if jump_elapsed <= JUMP_MAX_DURATION
+            && (jump_elapsed <= 0.06 || hf <= approach.z)
+        {
+            controller.jump = true;
+        } else if self.jump_counter < 3 {
+            self.jump_counter += 1;
+        }
+
+        controller
+    }
+
+    /// Update the active shot with the newest candidate/prediction and emit
+    /// a clean controller state every tick.
+    pub fn tick(
+        &mut self,
+        car: CarState,
+        ball: BallState,
+        candidate: Option<ShotCandidate>,
+        prediction: &BallTrajectory,
+        targets: ShotTargets,
+        gravity: Vector,
+        boost_accel: f32,
+        now: f32,
+    ) -> ControllerState {
+        self.refresh_committed_candidate(candidate, prediction, now, gravity);
         let Some(shot) = self.candidate else {
-            if self.phase == StrikePhase::Approach {
-                return ControllerState::default();
-            }
-            // Once airborne, keep the last reachable contact rather than
-            // abandoning the maneuver because a fresh ground-only scan
-            // correctly returned no candidate.
-            if !car.airborne {
-                self.reset();
-                return ControllerState::default();
-            }
-            return crate::drive::recover_in_air(&car, boost_accel, Some(ball.location));
+            return ControllerState::default();
         };
 
-        let time_remaining = shot.time.max(0.0);
-        let (contact_target, shot_direction) = self.current_target(
-            car, targets, gravity, time_remaining,
-        );
-        let distance_to_contact = car.location.distance(contact_target);
-
-        if self.phase == StrikePhase::Approach {
-            if shot.shot_type == ShotType::Ground {
-                let mut target = shot.approach;
-                let mut preserve = false;
-                if car.location.flat_distance(target) < 380.0 {
-                    // Follow through beyond the ball rather than treating
-                    // the parser's approach point as a place to stop.
-                    target = ball.location + shot_direction * 720.0;
-                    preserve = true;
-                }
-                return drive_to(
-                    &car,
-                    DriveRequest {
-                        target,
-                        target_speed: MAX_SPEED,
-                        boost_accel,
-                        allow_handbrake: true,
-                        preserve_momentum: preserve,
-                    },
-                );
-            }
-
-            let vertical_gap = (shot.ball.z - BALL_RADIUS - car.location.z).max(0.0);
-            let jump_prediction = get_jump_time(vertical_gap, car.velocity.z, gravity.z);
-            let jump_time = jump_prediction.time as f32;
-            let approach_distance = car.location.flat_distance(shot.approach);
-            let launch_due = time_remaining <= jump_time.max(0.06) + 0.10
-                || approach_distance < 230.0
-                || time_remaining < 0.18;
-
-            if launch_due && !car.airborne {
-                self.jump_started = true;
-                self.jump_hold_duration = (jump_prediction.press as f32).clamp(0.06, 0.20);
-                self.set_phase(StrikePhase::JumpHold, now);
+        if shot.time < -MAX_JUMP_SHOT_AGE {
+            self.reset();
+            return if car.airborne {
+                crate::drive::recover_in_air(&car, boost_accel, Some(ball.location))
             } else {
-                return drive_to(
-                    &car,
-                    DriveRequest {
-                        target: shot.approach,
-                        target_speed: MAX_SPEED,
-                        boost_accel,
-                        allow_handbrake: true,
-                        preserve_momentum: false,
-                    },
-                );
-            }
+                ControllerState::default()
+            };
         }
 
         match self.phase {
-            StrikePhase::Approach => ControllerState::default(),
-
+            StrikePhase::Approach => {
+                if shot.shot_type != ShotType::Ground {
+                    let time = shot.time.clamp(0.000001, 6.0);
+                    let (approach, direction, _) =
+                        Self::refreshed_jump_geometry(&car, shot, targets, gravity, time);
+                    self.current_jump_target = approach;
+                    self.current_shot_direction = direction;
+                }
+                self.tick_ground_or_jump_approach(
+                    car, ball, shot, targets, gravity, boost_accel, now,
+                )
+            }
+            StrikePhase::JumpFlight => {
+                self.tick_single_jump(car, shot, ball, gravity, boost_accel, now)
+            }
             StrikePhase::JumpHold => {
-                let mut controller = align_to_direction(&car, shot_direction);
+                let direction = self.current_shot_direction;
+                let mut controller = align_to_direction(&car, direction);
                 controller.jump = true;
                 controller.throttle = 1.0;
-                controller.boost = car.boost > 0.0
-                    && shot.shot_type == ShotType::Aerial
-                    && car.local(shot_direction).x > 0.6;
                 if now - self.phase_started >= self.jump_hold_duration {
                     self.set_phase(StrikePhase::JumpRelease, now);
                     controller.jump = false;
                 }
                 controller
             }
-
             StrikePhase::JumpRelease => {
-                let mut controller = align_to_direction(&car, shot_direction);
+                let mut controller = align_to_direction(&car, self.current_shot_direction);
                 controller.jump = false;
-                controller.boost = car.boost > 0.0
-                    && shot.shot_type == ShotType::Aerial
-                    && car.local(shot_direction).x > 0.6;
                 if now - self.phase_started >= 0.05 {
-                    if matches!(shot.shot_type, ShotType::DoubleJump | ShotType::Aerial) {
-                        self.set_phase(StrikePhase::SecondJump, now);
-                    } else {
-                        self.set_phase(StrikePhase::Flight, now);
-                    }
+                    self.set_phase(StrikePhase::SecondJump, now);
                 }
                 controller
             }
-
             StrikePhase::SecondJump => {
-                let mut controller = align_to_direction(&car, shot_direction);
+                let mut controller = align_to_direction(&car, self.current_shot_direction);
                 controller.jump = now - self.phase_started < 0.06;
-                controller.boost = car.boost > 0.0 && car.local(shot_direction).x > 0.65;
+                controller.boost = car.boost > 0.0
+                    && car.local(self.current_shot_direction).x > 0.65;
                 controller.throttle = 1.0;
                 if now - self.phase_started >= 0.06 {
                     self.set_phase(StrikePhase::Flight, now);
@@ -361,85 +786,26 @@ impl StrikeExecutor {
                 }
                 controller
             }
-
             StrikePhase::Flight => {
-                if !car.airborne && self.jump_started {
+                if !car.airborne {
                     self.reset();
                     return ControllerState::default();
                 }
-                if shot.time < -0.15 && distance_to_contact > 180.0 {
-                    self.reset();
-                    return crate::drive::recover_in_air(&car, boost_accel, Some(ball.location));
-                }
-
-                let target_delta = contact_target - car.location;
+                let target_delta = self.current_jump_target - car.location;
                 let local_target = car.local(target_delta);
-                let local_shot = car.local(shot_direction);
-                let aim_vector = if target_delta.magnitude() > 65.0 {
+                let local_shot = car.local(self.current_shot_direction);
+                let aim = if target_delta.magnitude() > 65.0 {
                     target_delta
                 } else {
-                    shot_direction
+                    self.current_shot_direction
                 };
-                let mut controller = align_to_direction(&car, aim_vector);
-                controller.throttle = 1.0;
-
-                // Python Volt's characteristic S-tilt on a non-quick
-                // single jump: nose up while the ball is elevated, preserve
-                // goal-directed yaw, and counter-roll slightly against yaw.
-                if shot.shot_type == ShotType::Jump
-                    && ball.location.z > 130.0
-                    && ball.location.z > car.location.z + 65.0
-                    && shot.time > 0.45
-                {
-                    controller.pitch = 1.0;
-                    if controller.yaw.abs() > 0.08 {
-                        controller.roll = -0.20 * sign(controller.yaw);
-                    }
-                }
-
-                let angle = local_shot.angle(Vector::new(1.0, 0.0, 0.0));
-                let projected_forward = car.velocity.dot(shot_direction);
-                let need_acceleration = projected_forward < 2180.0
-                    || local_target.x > 150.0 && shot.time > 0.08;
+                let mut controller = align_to_direction(&car, aim);
                 controller.boost = car.boost > 0.0
-                    && boost_accel > 0.0
                     && local_shot.x > 0.0
-                    && angle < 0.48
-                    && need_acceleration
-                    && distance_to_contact > 70.0;
-
-                let can_directional_dodge = shot.shot_type == ShotType::Jump
-                    && !car.has_dodged
-                    && now - self.last_dodge_at > 0.45
-                    && distance_to_contact < (BALL_RADIUS + car.hitbox.length) * 1.02
-                    && local_target.x > 0.0
-                    && shot.time < 0.30;
-                if can_directional_dodge {
-                    self.last_dodge_at = now;
-                    self.set_phase(StrikePhase::Dodge, now);
-                    let local_ball = car.local(ball.location - car.location).flatten().normalize();
-                    controller.pitch = -local_ball.x;
-                    controller.yaw = local_ball.y;
-                    controller.roll = 0.0;
-                    controller.jump = true;
-                    controller.boost = car.boost > 0.0;
-                }
-                controller
-            }
-
-            StrikePhase::Dodge => {
-                let local_ball = car.local(ball.location - car.location).flatten().normalize();
-                let mut controller = ControllerState::default();
+                    && local_shot.angle(Vector::new(1.0, 0.0, 0.0)) < 0.48
+                    && car.velocity.dot(self.current_shot_direction) < 2180.0;
                 controller.throttle = 1.0;
-                controller.pitch = -local_ball.x;
-                controller.yaw = local_ball.y;
-                controller.jump = now - self.phase_started < 0.10;
-                controller.boost = car.boost > 0.0;
-                if now - self.phase_started >= 0.10 {
-                    self.reset();
-                    controller.jump = false;
-                    controller.boost = false;
-                }
+                let _ = local_target;
                 controller
             }
         }
@@ -608,6 +974,151 @@ mod tests {
                 offset: Vector::ZERO,
             },
         }
+    }
+
+    fn jump_candidate(time: f32, ball: Vector) -> ShotCandidate {
+        let targets = ShotTargets {
+            left: Vector::new(-820.0, 5120.0, 350.0),
+            right: Vector::new(820.0, 5120.0, 350.0),
+        };
+        let parser = crate::shot_parser::ParsedShot {
+            found: true,
+            fast: false,
+            shot_type: Some(ShotType::Jump),
+            targets,
+            ball_offset: ball,
+            shot_vector: Vector::new(1.0, 0.0, 0.0),
+            approach_target: ball - Vector::new(150.0, 0.0, 0.0),
+            time,
+        };
+        ShotCandidate {
+            time,
+            ball,
+            ball_velocity: Vector::ZERO,
+            approach: parser.approach_target,
+            shot_direction: parser.shot_vector,
+            shot_type: ShotType::Jump,
+            targeted: true,
+            can_jump: true,
+            fast: false,
+            score: time,
+            parser,
+        }
+    }
+
+    #[test]
+    fn approach_candidate_survives_a_transient_empty_finder_result() {
+        let me = car(Vector::ZERO, Vector::ZERO);
+        let candidate = jump_candidate(4.5, Vector::new(1200.0, 0.0, 180.0));
+        let prediction = crate::prediction::BallTrajectory {
+            slices: vec![
+                crate::prediction::BallSlice {
+                    time: 4.48,
+                    location: Vector::new(1200.0, 0.0, 180.0),
+                    velocity: Vector::ZERO,
+                },
+                crate::prediction::BallSlice {
+                    time: 4.50,
+                    location: Vector::new(1201.0, 0.0, 180.0),
+                    velocity: Vector::ZERO,
+                },
+            ],
+        };
+        let targets = candidate.parser.targets;
+        let mut executor = StrikeExecutor::new();
+
+        let _ = executor.tick(
+            me, BallState::default(), Some(candidate), &prediction,
+            targets, Vector::new(0.0, 0.0, -650.0), 991.6667, 1.0,
+        );
+        assert!(executor.active());
+        assert!(executor.is_approaching());
+
+        let _ = executor.tick(
+            me, BallState::default(), None, &prediction,
+            targets, Vector::new(0.0, 0.0, -650.0), 991.6667, 1.016,
+        );
+        assert!(executor.active());
+        assert!(executor.active_candidate().is_some());
+        assert!(executor.is_approaching());
+    }
+
+    #[test]
+    fn jump_dodge_is_not_blocked_by_stale_has_dodged_flag_or_cancelled() {
+        let mut me = car(Vector::ZERO, Vector::ZERO);
+        me.airborne = true;
+        me.has_dodged = true;
+        let candidate = jump_candidate(0.21, Vector::new(180.0, 0.0, 110.0));
+        let targets = candidate.parser.targets;
+        let mut executor = StrikeExecutor::new();
+        executor.candidate = Some(candidate);
+        executor.phase = StrikePhase::JumpFlight;
+        executor.jump_started_at = Some(0.0);
+        executor.jump_counter = 3;
+        executor.current_jump_target = Vector::new(150.0, 0.0, 0.0);
+        executor.current_shot_direction = Vector::new(1.0, 0.0, 0.0);
+        executor.last_tick = Some(0.19);
+
+        let controller = executor.tick(
+            me,
+            BallState { location: candidate.ball, velocity: Vector::ZERO },
+            None,
+            &crate::prediction::BallTrajectory { slices: vec![] },
+            targets,
+            Vector::new(0.0, 0.0, -650.0),
+            991.6667,
+            0.20,
+        );
+
+        assert!(controller.jump, "jump/dodge press must be sent");
+        assert!(controller.pitch < -0.9, "front dodge must use a forward nose input");
+        assert!(controller.roll.abs() < 0.01, "no flip-cancel roll may be injected");
+        assert_eq!(executor.jump_counter, 4);
+        assert!(executor.dodge_started_at.is_some());
+    }
+
+    #[test]
+    fn teammate_role_yield_cannot_cancel_a_launched_jump() {
+        let mut executor = StrikeExecutor::new();
+        executor.candidate = Some(jump_candidate(
+            0.35,
+            Vector::new(180.0, 0.0, 110.0),
+        ));
+        executor.phase = StrikePhase::JumpFlight;
+        executor.jump_started_at = Some(0.0);
+
+        executor.cancel_approach();
+
+        assert!(executor.active());
+        assert!(!executor.is_approaching());
+        assert_eq!(executor.phase, StrikePhase::JumpFlight);
+    }
+
+    #[test]
+    fn first_jump_frame_emits_jump_instead_of_a_blank_controller() {
+        let mut me = car(Vector::ZERO, Vector::ZERO);
+        me.airborne = true;
+        let candidate = jump_candidate(0.45, Vector::new(260.0, 0.0, 140.0));
+        let targets = candidate.parser.targets;
+        let mut executor = StrikeExecutor::new();
+        executor.candidate = Some(candidate);
+        executor.phase = StrikePhase::JumpFlight;
+        executor.current_jump_target = Vector::new(200.0, 0.0, 0.0);
+        executor.current_shot_direction = Vector::new(1.0, 0.0, 0.0);
+        executor.last_tick = Some(0.0);
+
+        let controller = executor.tick(
+            me,
+            BallState { location: candidate.ball, velocity: Vector::ZERO },
+            None,
+            &crate::prediction::BallTrajectory { slices: vec![] },
+            targets,
+            Vector::new(0.0, 0.0, -650.0),
+            991.6667,
+            0.008333,
+        );
+
+        assert!(controller.jump, "first jump impulse must be emitted on the first flight tick");
     }
 
     #[test]
