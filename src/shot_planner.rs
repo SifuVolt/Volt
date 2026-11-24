@@ -448,6 +448,74 @@ fn parse_any_budget(
     ParsedShot::default()
 }
 
+/// Untargeted aerial parser plus the same post-launch boost reserve used by
+/// Python tools._parse_shot_with_boost_budget. This is intentionally separate
+/// from target-directed parsing: Python runs this when a goal-lane aerial is
+/// unavailable on the current prediction slice.
+pub fn parse_untargeted_aerial_budget(
+    car: CarState,
+    slice: BallSlice,
+    time_remaining: f32,
+    gravity: Vector,
+    boost_accel: f32,
+    unlimited_boost: bool,
+) -> ParsedShot {
+    let parsed = parse_slice_for_shot(
+        &car,
+        slice.location,
+        time_remaining,
+        R,
+        boost_accel,
+        gravity,
+        false,
+        false,
+        false,
+        true,
+        true,
+    );
+    if !parsed.found || parsed.shot_type != Some(ShotType::Aerial) || unlimited_boost {
+        return parsed;
+    }
+
+    let required = reserve(
+        car,
+        slice.location,
+        time_remaining,
+        ShotType::Aerial,
+        gravity.z,
+        false,
+    );
+    if required <= 0.25 {
+        return parsed;
+    }
+
+    let approach_budget = car.boost - required;
+    if approach_budget < -0.01 {
+        return ParsedShot::default();
+    }
+
+    let mut budgeted_car = car;
+    budgeted_car.boost = approach_budget.max(0.0).trunc();
+    let next = parse_slice_for_shot(
+        &budgeted_car,
+        slice.location,
+        time_remaining,
+        R,
+        boost_accel,
+        gravity,
+        false,
+        false,
+        false,
+        true,
+        true,
+    );
+    if next.found && next.shot_type == Some(ShotType::Aerial) {
+        next
+    } else {
+        ParsedShot::default()
+    }
+}
+
 fn score_any(
     me: CarState,
     friends: &[CarState],
@@ -517,6 +585,39 @@ fn score_any(
             ShotType::DoubleJump => -0.12,
             _ => 0.0,
         };
+    }
+    value
+}
+
+/// Python shot_candidate_score(..., target=None) for an untargeted
+/// aerial, including the kickoff preference and fast-aerial score reduction.
+pub fn score_untargeted_aerial_candidate(
+    me: CarState,
+    cars: &[CarState],
+    ball: Vector,
+    velocity: Vector,
+    time_remaining: f32,
+    kickoff_contest: bool,
+    fast: bool,
+) -> f32 {
+    let friends: Vec<CarState> = cars
+        .iter()
+        .copied()
+        .filter(|car| car.team == me.team && car.index != me.index && !car.demolished)
+        .collect();
+    let mut value = score_any(
+        me,
+        &friends,
+        ball,
+        velocity,
+        ShotType::Aerial,
+        time_remaining,
+    );
+    if kickoff_contest {
+        value -= 0.40;
+    }
+    if fast {
+        value -= 0.45;
     }
     value
 }
