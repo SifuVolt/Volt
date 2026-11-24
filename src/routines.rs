@@ -13,8 +13,8 @@ use crate::{
     physics::drive::dodge_impulse,
     prediction::{BallSlice, BallTrajectory},
     shot_parser::{runtime_ground_reachability, ShotTargets},
-    shot_physics::{ground_shot_is_viable, get_jump_time, jump_shot_is_viable, ShotType},
-    shot_planner::ShotCandidate,
+    shot_physics::{double_jump_shot_is_viable, ground_shot_is_viable, get_jump_time, jump_shot_is_viable, ShotType},
+    shot_planner::{grid_jump_time, ShotCandidate},
     state::{BallState, CarState},
 };
 use rlbot::flat::ControllerState;
@@ -264,6 +264,8 @@ pub struct StrikeExecutor {
     current_jump_target: Vector,
     current_shot_direction: Vector,
     ground_flip: Option<GroundFlip>,
+    double_jump_prev_jump: bool,
+    double_jump_sent: bool,
 }
 
 impl Default for StrikeExecutor {
@@ -282,6 +284,8 @@ impl Default for StrikeExecutor {
             current_jump_target: Vector::ZERO,
             current_shot_direction: Vector::new(1.0, 0.0, 0.0),
             ground_flip: None,
+            double_jump_prev_jump: false,
+            double_jump_sent: false,
         }
     }
 }
@@ -361,6 +365,8 @@ impl StrikeExecutor {
         self.current_jump_target = candidate.approach;
         self.current_shot_direction = candidate.shot_direction.flatten().normalize();
         self.ground_flip = None;
+        self.double_jump_prev_jump = false;
+        self.double_jump_sent = false;
         self.phase = if candidate.shot_type == ShotType::Jump {
             StrikePhase::JumpFlight
         } else {
@@ -382,6 +388,8 @@ impl StrikeExecutor {
         self.current_jump_target = Vector::ZERO;
         self.current_shot_direction = Vector::new(1.0, 0.0, 0.0);
         self.ground_flip = None;
+        self.double_jump_prev_jump = false;
+        self.double_jump_sent = false;
     }
 
     fn set_phase(&mut self, phase: StrikePhase, now: f32) {
@@ -685,11 +693,18 @@ impl StrikeExecutor {
         }
         distance_remaining -= car.hitbox.length / 3.0;
 
-        let needed_jump_time = get_jump_time(
-            shot.ball.z - car.location.z,
-            car.velocity.z,
-            gravity.z,
-        ).time as f32;
+        let jump_height = if shot.shot_type == ShotType::DoubleJump {
+            (approach.z - car.location.z).max(0.0)
+        } else {
+            (shot.ball.z - car.location.z).max(0.0)
+        };
+        let needed_jump_time = if shot.shot_type == ShotType::DoubleJump {
+            grid_jump_time(jump_height, true).unwrap_or_else(|| {
+                get_jump_time(jump_height, car.velocity.z, gravity.z).time as f32
+            })
+        } else {
+            get_jump_time(jump_height, car.velocity.z, gravity.z).time as f32
+        };
         let time_to_jump = time_remaining - needed_jump_time * 1.15;
         let local_final_target = car.local_location(final_target);
         let mut speed_required = distance_remaining / time_remaining;
@@ -712,6 +727,19 @@ impl StrikeExecutor {
         if power_dodge_window {
             drive_speed = drive_speed.max(current_forward_speed.min(1200.0));
         }
+        // Grid's double_jump reverses toward a target behind the car only
+        // when it is badly misaligned and moving slowly; otherwise it never
+        // needlessly turns a reachable back-side contact into a brake stop.
+        let direction_sign = if shot.shot_type == ShotType::DoubleJump
+            && local_final_target.y.atan2(local_final_target.x).abs() >= 1.6
+            && current_forward_speed <= 1000.0
+            && car.local_location(live_ball.location).x < -250.0
+        {
+            -1.0
+        } else {
+            1.0
+        };
+        drive_speed *= direction_sign;
         // Close-in overshoot is not permission to reverse. If the target has
         // fallen behind because of a stale slice, keep useful forward speed
         // long enough to complete the contact instead of brake-flipping away.
@@ -743,22 +771,23 @@ impl StrikeExecutor {
         let aligned = local_offset_target.y.abs() < 92.0
             && local_predicted_velocity.x >= local_offset_target.x - car.hitbox.length / 3.0
             && local_offset_target.x > 0.0;
-        let launch_ready = (close_enough || aligned)
-            && time_remaining <= needed_jump_time * 1.08;
+        let launch_time_ready = if shot.shot_type == ShotType::DoubleJump {
+            time_remaining <= needed_jump_time
+        } else {
+            time_remaining <= needed_jump_time * 1.08
+        };
+        let launch_ready = (close_enough || aligned) && launch_time_ready;
 
         if launch_ready {
             self.quick_shot = time_remaining <= 0.45;
             self.jump_counter = 0;
             self.jump_started_at = None;
             self.dodge_started_at = None;
+            self.double_jump_prev_jump = false;
+            self.double_jump_sent = false;
             if shot.shot_type == ShotType::Jump {
                 self.set_phase(StrikePhase::JumpFlight, now);
             } else {
-                    self.jump_hold_duration = get_jump_time(
-                    shot.ball.z - car.location.z,
-                    car.velocity.z,
-                    gravity.z,
-                ).press as f32;
                 self.set_phase(StrikePhase::JumpHold, now);
             }
             return controller_from_drive_output(drive, &car);
@@ -775,17 +804,30 @@ impl StrikeExecutor {
             (final_target - car.location).normalize(),
             distance_remaining.max(0.0),
         ).is_some_and(|remaining| {
-            jump_shot_is_viable(
-                remaining,
-                gravity.z,
-                car.velocity.z,
-                car.hitbox.height,
-                car.airborne,
-                approach.z,
-                true,
-            )
+            if shot.shot_type == ShotType::DoubleJump {
+                double_jump_shot_is_viable(
+                    remaining,
+                    gravity.z,
+                    car.velocity.z,
+                    car.hitbox.height * 0.5,
+                    car.airborne,
+                    approach.z,
+                    true,
+                )
+            } else {
+                jump_shot_is_viable(
+                    remaining,
+                    gravity.z,
+                    car.velocity.z,
+                    car.hitbox.height,
+                    car.airborne,
+                    approach.z,
+                    true,
+                )
+            }
         });
-        let close_late_contact = time_remaining <= 0.35
+        let close_late_contact = shot.shot_type == ShotType::Jump
+            && time_remaining <= 0.35
             && local_offset_target.x > 0.0
             && current_forward_speed > 650.0
             && distance_remaining <= car.hitbox.length * 1.6;
@@ -1024,15 +1066,74 @@ impl StrikeExecutor {
                 }
             }
             StrikePhase::JumpHold => {
-                let direction = self.current_shot_direction;
-                let mut controller = align_to_direction(&car, direction);
-                controller.jump = true;
-                controller.throttle = 1.0;
-                if now - self.phase_started >= self.jump_hold_duration {
-                    self.set_phase(StrikePhase::JumpRelease, now);
+                // Grid's double_jump holds the first press for 24 120-Hz
+                // frames, releases at least one frame, then sends one
+                // distinct second press. The previous Rust implementation
+                // shortened this to a few 60-ms phases, which often failed
+                // to register as a true double jump.
+                let elapsed = (now - self.phase_started).max(0.0);
+                let jump_frames = (elapsed * 120.0).round().max(0.0) as u32;
+                let mut controller = ControllerState::default();
+
+                if jump_frames < 24 {
+                    controller.jump = true;
+                    self.double_jump_prev_jump = true;
+                } else if !self.double_jump_sent && !car.doublejumped {
+                    if self.double_jump_prev_jump {
+                        controller.jump = false;
+                        self.double_jump_prev_jump = false;
+                    } else {
+                        controller.jump = true;
+                        self.double_jump_sent = true;
+                        self.double_jump_prev_jump = true;
+                    }
+                } else {
                     controller.jump = false;
+                    self.double_jump_prev_jump = false;
                 }
-                controller
+
+                // Python defaultPD aims at the contact target itself, not
+                // merely the goal vector. This keeps the nose on the chosen
+                // lower/front hitbox contact throughout the two-jump launch.
+                let local_contact = car.local_location(self.current_jump_target);
+                let (_, orientation) = default_pd(&car, local_contact, false, None);
+                controller.steer = orientation.steer;
+                controller.pitch = orientation.pitch;
+                controller.yaw = orientation.yaw;
+                controller.roll = orientation.roll;
+
+                if time_remaining > 0.0 {
+                    let future_position = car.location
+                        + car.velocity * time_remaining
+                        + gravity * (0.5 * time_remaining * time_remaining);
+                    let delta = self.current_jump_target - future_position;
+                    let forward_need = delta.dot(car.forward()) / time_remaining;
+                    if forward_need > boost_accel * MIN_AIR_BOOST_TIME
+                        && car.boost > 0.0
+                    {
+                        controller.boost = true;
+                    } else if forward_need.abs() > 1.0 {
+                        controller.throttle = cap(
+                            forward_need
+                                / (AIR_THROTTLE_ACCEL * MIN_AIR_BOOST_TIME),
+                            -1.0,
+                            1.0,
+                        );
+                    }
+                }
+
+                if time_remaining <= -0.4 || (!car.airborne && jump_frames >= 30) {
+                    self.reset();
+                    if car.airborne {
+                        crate::drive::recover_in_air(
+                            &car, boost_accel, Some(ball.location),
+                        )
+                    } else {
+                        ControllerState::default()
+                    }
+                } else {
+                    controller
+                }
             }
             StrikePhase::JumpRelease => {
                 let mut controller = align_to_direction(&car, self.current_shot_direction);
@@ -1302,6 +1403,53 @@ mod tests {
             score: time,
             parser,
         }
+    }
+
+    #[test]
+    fn double_jump_holds_24_frames_releases_then_sends_one_second_press() {
+        let mut me = car(Vector::new(0.0, 0.0, 100.0), Vector::new(0.0, 800.0, 120.0));
+        me.airborne = true;
+        me.orientation = Matrix3::new(0.0, 1.5707963, 0.0);
+        let ball = Vector::new(0.0, 700.0, 250.0);
+        let mut candidate = jump_candidate(1.2, ball);
+        candidate.shot_type = ShotType::DoubleJump;
+        candidate.parser.shot_type = Some(ShotType::DoubleJump);
+
+        let targets = candidate.parser.targets;
+        let prediction = BallTrajectory { slices: Vec::new() };
+        let mut executor = StrikeExecutor::new();
+        executor.candidate = Some(candidate);
+        executor.phase = StrikePhase::JumpHold;
+        executor.phase_started = 1.0;
+        executor.last_tick = Some(1.0);
+        executor.current_jump_target = Vector::new(0.0, 850.0, 250.0);
+        executor.current_shot_direction = Vector::new(0.0, 1.0, 0.0);
+
+        let first_jump = executor.tick(
+            me, BallState::default(), None, &prediction, targets,
+            Vector::new(0.0, 0.0, -650.0), 991.6667, 1.0083333,
+        );
+        assert!(first_jump.jump);
+
+        let release = executor.tick(
+            me, BallState::default(), None, &prediction, targets,
+            Vector::new(0.0, 0.0, -650.0), 991.6667, 1.2,
+        );
+        assert!(!release.jump);
+        assert!(!executor.double_jump_sent);
+
+        let second_jump = executor.tick(
+            me, BallState::default(), None, &prediction, targets,
+            Vector::new(0.0, 0.0, -650.0), 991.6667, 1.2083333,
+        );
+        assert!(second_jump.jump);
+        assert!(executor.double_jump_sent);
+
+        let release_after_second = executor.tick(
+            me, BallState::default(), None, &prediction, targets,
+            Vector::new(0.0, 0.0, -650.0), 991.6667, 1.2166667,
+        );
+        assert!(!release_after_second.jump);
     }
 
     #[test]
