@@ -1064,6 +1064,7 @@ mod tests {
             f32::INFINITY,
             6.0,
             false,
+            false,
         );
         assert!(result.is_some());
         assert!(result.unwrap().estimated_boost >= 0.0);
