@@ -14,5 +14,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - name: Run Rust tests
         run: cargo test --locked
+      - name: Validate telemetry visualizer syntax
+        run: python3 -m py_compile training/visualizer/plot_volt_trace.py
       - name: Build RLBot release binary
         run: cargo build --release --locked
