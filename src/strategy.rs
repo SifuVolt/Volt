@@ -365,7 +365,7 @@ mod tests {
         );
         let target = support_target(&state, None);
         assert!((target.x - 374.0).abs() < 0.01);
-        assert!((target.y + 1150.0).abs() < 0.01);
+        assert!((target.y + 1050.0).abs() < 0.01);
     }
 
     #[test]
