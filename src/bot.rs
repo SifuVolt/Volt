@@ -959,9 +959,19 @@ impl BotBrain {
                 }
                 let aim = self.ground_shot_goal_aim_point.unwrap();
                 shot.shot_direction = (aim - shot.ball).flatten().normalize();
-                shot.approach = contact_approach_from_label(
-                    shot.ball, shot.shot_direction, shot.contact_face, 92.75,
-                ).unwrap_or(shot.ball - shot.shot_direction * 92.75);
+                let (approach, _normal, quality, contact_point, face) =
+                    select_ground_contact_with_face(
+                        me,
+                        shot.ball,
+                        shot.ball_velocity,
+                        aim,
+                        shot.time,
+                        Some(shot.contact_face),
+                    );
+                shot.approach = approach;
+                shot.contact_quality = quality;
+                shot.contact_point = contact_point;
+                shot.contact_face = face;
                 state.intercept = shot;
                 self.ground_shot = Some(state);
                 plan.target = shot.approach;
@@ -5131,14 +5141,6 @@ fn party_cannon_jump_front_contact(
     Some((contact.approach, contact.face))
 }
 
-fn contact_approach_from_label(
-    ball: Vector,
-    shot: Vector,
-    label: &str,
-    distance: f32,
-) -> Option<Vector> {
-    crate::contact::approach_from_face(ball, shot, label, distance)
-}
 
 fn shot_aim_point(ball: Vector, side: f32, airborne: bool) -> Vector {
     let goal = foe_goal(side);
@@ -5398,6 +5400,17 @@ fn select_ground_contact(
     aim: Vector,
     time: f32,
 ) -> (Vector, Vector, f32, Vector, &'static str) {
+    select_ground_contact_with_face(car, ball, ball_velocity, aim, time, None)
+}
+
+fn select_ground_contact_with_face(
+    car: CarState,
+    ball: Vector,
+    ball_velocity: Vector,
+    aim: Vector,
+    time: f32,
+    previous_face: Option<&'static str>,
+) -> (Vector, Vector, f32, Vector, &'static str) {
     let shot_direction = (aim - ball).flatten().normalize();
     if shot_direction.magnitude() < 0.001 {
         return (cap_in_field(&car, ball.flatten()), Vector::ZERO, 0.0, ball, "centre");
@@ -5414,7 +5427,7 @@ fn select_ground_contact(
         horizon,
         0.08,
         true,
-        None,
+        previous_face,
     ) else {
         return (
             cap_in_field(&car, ball - shot_direction * 300.0),
