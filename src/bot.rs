@@ -1201,7 +1201,11 @@ impl BotBrain {
             .collect();
         let own_goal = Vector::new(0.0, side * 5120.0, 350.0);
         let opponent_goal = Vector::new(0.0, -side * 5120.0, 300.0);
-        let roles = if living_teammates.len() >= 2 {
+        // Python's Noob Black dependency-based attacker/goalie/transition
+        // election is the 3v3 path only. In 1v1 and 2v2, Volt uses its
+        // should_prioritize_ball() rules instead; applying a fixed goalie
+        // role in 2v2 can leave one bot permanently sitting in net.
+        let roles = if living_teammates.len() >= 3 {
             assign_roles_volt(
                 &living_teammates,
                 ball,
@@ -1228,15 +1232,22 @@ impl BotBrain {
             && ball.velocity.y * side > 250.0;
         let urgent_save = extreme_danger || low_ball_threat;
 
-        // The Python bot elects the challenger and deepest defender from
-        // the same ball-dependency scores in every team size. Do not use a
-        // separate 2v2 distance heuristic.
+        // This is the actual Python challenge gate for every team size:
+        // 1v1/2v2 use their distance, facing, teammate and opponent rules;
+        // 3v3 additionally requires the Noob Black elected challenger.
+        let prioritize_ball = should_prioritize_ball(
+            me,
+            cars,
+            ball,
+            side,
+            game_time,
+            self.kickoff_contest_until,
+            urgent_save,
+            false,
+            roles,
+        );
         let transition_followup_active = self.transition_followup_until > game_time;
-        let is_challenger = transition_followup_active || if living_teammates.len() <= 1 {
-            true
-        } else {
-            roles.map(|role| role.challenger == me.index).unwrap_or(false)
-        };
+        let is_challenger = transition_followup_active || prioritize_ball;
         let is_goalie = roles.map(|r| r.goalie == me.index).unwrap_or(false);
         self.teamplay_cover_owner = roles.and_then(|r| {
             if r.goalie != r.challenger { Some(r.goalie) } else { None }
@@ -1283,18 +1294,6 @@ impl BotBrain {
         let defensive_boost_lock = goalie_holding_net
             || cover_player_deep_defending
             || recently_released_goalie_under_threat;
-        let prioritize_ball = should_prioritize_ball(
-            me,
-            cars,
-            ball,
-            side,
-            game_time,
-            self.kickoff_contest_until,
-            urgent_save,
-            false,
-            roles,
-        );
-
         if routine_stack_clear
             && me.boost < 70.0
             && !defensive_boost_lock
