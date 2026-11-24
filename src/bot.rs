@@ -3486,8 +3486,8 @@ impl BotBrain {
             t,
             goal_aim,
             self.match_state.gravity,
-        ).flatten().normalize();
-        shot_direction = wall_shot_adjust_jump(state.ball, shot_direction).0.flatten().normalize();
+        ).normalize();
+        shot_direction = wall_shot_adjust_jump(state.ball, shot_direction).0.normalize();
         state.shot_direction = shot_direction;
 
         // Exact Python _party_cannon_hitbox_target geometry: ball radius plus
