@@ -3891,7 +3891,7 @@ impl BotBrain {
                 )
             });
 
-            let launch_window = t <= state.needed_jump_time * 1.18;
+            let launch_window = t <= state.needed_jump_time * 1.08;
             let side_ready = state.side_mode
                 && distance_remaining < 180.0
                 && launch_window;
