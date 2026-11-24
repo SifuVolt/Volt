@@ -5394,16 +5394,6 @@ fn shot_lane_pressure(ball: Vector, aim: Vector, opponents: &[CarState]) -> f32 
 /// Select a ground contact using the predicted arrival position of the car,
 /// not just its current location. Side contacts are considered when they give
 /// a materially better approach while retaining a useful outgoing angle.
-fn rotate_axis(vector: Vector, axis: Vector, angle: f32) -> Vector {
-    let axis = axis.normalize();
-    if axis.magnitude() < 0.001 || angle.abs() < 0.001 {
-        return vector;
-    }
-    let (sine, cosine) = angle.sin_cos();
-    vector * cosine
-        + axis.cross(vector) * sine
-        + axis * (axis.dot(vector) * (1.0 - cosine))
-}
 
 /// Select a ground contact on the actual front face of the car's hitbox.
 /// This ports Volt's seven-point Party Cannon contact search, including
@@ -6925,7 +6915,6 @@ mod party_cannon_jump_tests {
 
     #[test]
     fn party_cannon_jump_direction_respects_surface_rotation_limit() {
-        let me = car(Vector::new(1.0, 0.0, 0.0), Vector::ZERO);
         let (shot, dodge) = party_cannon_jump_directions(
             Vector::new(0.0, 0.0, 180.0),
             Vector::new(1.0, 0.0, 0.8).normalize(),
