@@ -795,13 +795,24 @@ impl StrikeExecutor {
         let predicted_velocity = car.velocity + gravity * time_remaining;
         let local_predicted_velocity = car.local(predicted_velocity.flatten());
         let time_to_contact = distance_remaining
-            / (velocity + dodge_impulse(car.velocity, MAX_SPEED)).max(1.0);
+            / (velocity.abs() + dodge_impulse(car.velocity, MAX_SPEED)).max(1.0);
 
         let close_enough = velocity.abs() < 100.0
             && distance_remaining < car.hitbox.length * 0.5;
+        let alignment_speed = if shot.shot_type == ShotType::DoubleJump {
+            car.local_velocity().x
+        } else {
+            local_predicted_velocity.x
+        };
+        let alignment_sign = if shot.shot_type == ShotType::DoubleJump {
+            direction_sign
+        } else {
+            1.0
+        };
         let aligned = local_offset_target.y.abs() < 92.0
-            && local_predicted_velocity.x >= local_offset_target.x - car.hitbox.length / 3.0
-            && local_offset_target.x > 0.0;
+            && alignment_sign * alignment_speed
+                >= alignment_sign * (local_offset_target.x - car.hitbox.length / 3.0)
+            && alignment_sign * local_offset_target.x > 0.0;
         let launch_time_ready = if shot.shot_type == ShotType::DoubleJump {
             time_remaining <= needed_jump_time
         } else {
