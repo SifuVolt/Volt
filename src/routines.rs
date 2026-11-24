@@ -465,10 +465,25 @@ impl StrikeExecutor {
     fn refreshed_jump_geometry(
         car: &CarState,
         shot: ShotCandidate,
+        live_ball: BallState,
         targets: ShotTargets,
         gravity: Vector,
         time_remaining: f32,
     ) -> (Vector, Vector, Option<Vector>) {
+        if shot.shot_type == ShotType::DoubleJump {
+            // Python double_jump uses relative goal-centre aim, not the
+            // Party Cannon predicted outgoing vector used by single jumps.
+            let direction = ground_shot_direction(
+                car,
+                shot.ball,
+                live_ball.location,
+                targets,
+                shot.shot_direction,
+            );
+            let target = hitbox_contact_target(*car, shot.ball, direction);
+            return (target, direction, None);
+        }
+
         let goal = target_center(targets);
         let predicted_direction = party_cannon_shot_direction(
             *car,
@@ -680,19 +695,12 @@ impl StrikeExecutor {
 
         let time_remaining = shot.time.clamp(0.000001, 6.0);
         let (approach, shot_direction, _) =
-            Self::refreshed_jump_geometry(&car, shot, targets, gravity, time_remaining);
-
-        let final_target = cap_in_field(&car, approach.flatten());
-        let mut distance_remaining = car.location.flat_distance(final_target);
-        if car.airborne {
-            distance_remaining = car.local_location(approach.flatten()).x;
-        }
-        distance_remaining -= car.hitbox.length / 3.0;
+            Self::refreshed_jump_geometry(&car, shot, live_ball, targets, gravity, time_remaining);
 
         let jump_height = if shot.shot_type == ShotType::DoubleJump {
             (approach.z - car.location.z).max(0.0)
         } else {
-            (shot.ball.z - car.location.z).max(0.0)
+            shot.ball.z - car.location.z
         };
         let needed_jump_time = if shot.shot_type == ShotType::DoubleJump {
             let Some(grid_time) = grid_jump_time(jump_height, true) else {
@@ -711,6 +719,22 @@ impl StrikeExecutor {
             get_jump_time(jump_height, car.velocity.z, gravity.z).time as f32
         };
         let time_to_jump = time_remaining - needed_jump_time * 1.15;
+        let mut final_target = approach.flatten();
+        if shot.shot_type == ShotType::DoubleJump && time_to_jump > 0.0 {
+            final_target = ground_flank_target(
+                &car,
+                shot.ball,
+                final_target,
+                shot_direction,
+                time_to_jump,
+            );
+        }
+        let final_target = cap_in_field(&car, final_target);
+        let mut distance_remaining = car.location.flat_distance(final_target);
+        if car.airborne {
+            distance_remaining = car.local_location(approach.flatten()).x;
+        }
+        distance_remaining -= car.hitbox.length / 3.0;
         let local_final_target = car.local_location(final_target);
         let mut speed_required = distance_remaining / time_remaining;
         let ball_speed_toward_shot = live_ball.velocity.dot(shot_direction);
@@ -1043,7 +1067,7 @@ impl StrikeExecutor {
                 if shot.shot_type != ShotType::Ground {
                     let time = shot.time.clamp(0.000001, 6.0);
                     let (approach, direction, _) =
-                        Self::refreshed_jump_geometry(&car, shot, targets, gravity, time);
+                        Self::refreshed_jump_geometry(&car, shot, ball, targets, gravity, time);
                     self.current_jump_target = approach;
                     self.current_shot_direction = direction;
                 }
