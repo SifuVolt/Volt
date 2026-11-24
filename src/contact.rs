@@ -147,6 +147,31 @@ pub fn select_front_contact(
 /// Convert a ball contact into a car-centre target using actual hitbox length
 /// and local hitbox offset. contact_drop is zero for front-centre hits and
 /// half the ball radius for Party Cannon aerial nose contact.
+/// Build the approach point for the five legacy ball-side labels used by
+/// the Python ground/jump routines. Seven-point hitbox contacts use
+/// select_front_contact directly; this helper remains for older side labels.
+pub fn approach_from_face(
+    ball: Vector,
+    shot_direction: Vector,
+    face: &str,
+    standoff: f32,
+) -> Option<Vector> {
+    let shot = shot_direction.flatten().normalize();
+    if shot.magnitude() < 0.001 {
+        return None;
+    }
+    let lateral = Vector::new(-shot.y, shot.x, 0.0).normalize();
+    let normal = match face {
+        "centre" => -shot,
+        "left" => (-shot + lateral * 0.55).normalize(),
+        "right" => (-shot - lateral * 0.55).normalize(),
+        "high" => (-shot + Vector::new(0.0, 0.0, 0.30)).normalize(),
+        "low" => (-shot - Vector::new(0.0, 0.0, 0.30)).normalize(),
+        _ => return None,
+    };
+    Some(ball + normal * standoff.max(120.0))
+}
+
 /// Temporary flank route shared by ground and jump approaches. It fades out
 /// before contact so the final hit still follows the chosen contact normal.
 pub fn route_around_ball(
