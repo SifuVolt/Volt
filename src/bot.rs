@@ -3912,10 +3912,10 @@ impl BotBrain {
                 // the nose-up posture when there is still time to perform it.
                 state.quick = t <= 0.45;
                 println!(
-                    "[JUMP SHOT TYPE] player={} quick={} T={:.3} needed_jump={:.3} distance={:.1} speed={:.1} target_speed={:.1} aligned={} side_ready={} quick_ready={} reachable={}",
+                    "[JUMP SHOT TYPE] player={} quick={} T={:.3} needed_jump={:.3} distance={:.1} speed={:.1} target_speed={:.1} aligned={} side_ready={} reachable={}",
                     car.index, state.quick, t, state.needed_jump_time,
                     distance_remaining, velocity, drive.target_speed,
-                    aligned, side_ready, quick_ready, runtime_reachable,
+                    aligned, side_ready, runtime_reachable,
                 );
                 // Python sets jumping in the approach branch, but its
                 // flight controller is the matching else branch. Preserve
