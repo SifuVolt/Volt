@@ -15,7 +15,7 @@ use crate::{
     planning::{find_wall_drive, wall_approach_geometry, WallDriveMode, WallDrivePlan},
     shot_physics::{double_jump_shot_is_viable, get_jump_time, ground_shot_is_viable, jump_shot_is_viable, ShotType},
     shot_parser::{runtime_ground_reachability, ShotTargets},
-    shot_planner::{find_best_any_shot, find_best_pass_shot, find_best_shot, find_fast_intercept, find_fast_intercept_candidate, grid_jump_time, opponent_reaches_before, pass_shot_targets, ShotCandidate},
+    shot_planner::{find_best_any_shot, find_best_pass_shot, find_best_shot, find_fast_intercept, find_fast_intercept_candidate, goal_lane_is_clear, grid_jump_time, opponent_reaches_before, pass_shot_targets, ShotCandidate},
     state::{BallState, BoostPadState, CarState, MatchState},
 };
 use std::collections::HashMap;
@@ -1815,13 +1815,33 @@ impl BotBrain {
                 );
             }
 
+            // A jump contact with a blocked/off-mouth goal lane should be
+            // redirected into a clear pass when a boost-ready teammate exists.
+            // Keep the decision pre-launch; run_jump_shot then executes the
+            // same proven mechanics toward the pass target window.
+            let mut pass_candidate_selected = false;
+            if !urgent_save
+                && !living_teammates.is_empty()
+                && candidate.is_some_and(|shot| shot.shot_type == ShotType::Jump)
+                && !goal_lane_is_clear(me, cars, candidate.unwrap(), shot_targets)
+            {
+                if let Some(pass) = find_best_pass_shot(
+                    me, cars, ball.location, prediction, match_state.gravity,
+                    self.boost_accel, game_time, self.kickoff_contest_until,
+                    urgent_save, is_challenger, self.unlimited_boost, self.shot_search_horizon(game_time),
+                ) {
+                    candidate = Some(pass);
+                    teamplay_opportunity = false;
+                    pass_candidate_selected = true;
+                }
+            }
+
             let pass_search_attempted = candidate.is_none() && !living_teammates.is_empty();
             let pass_target_window = if pass_search_attempted {
                 pass_shot_targets(me, cars)
             } else {
                 None
             };
-            let mut pass_candidate_selected = false;
             if pass_search_attempted {
                 candidate = find_best_pass_shot(
                     me, cars, ball.location, prediction, match_state.gravity,
