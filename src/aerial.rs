@@ -11,8 +11,8 @@ use crate::{
     math::Vector,
     prediction::{BallSlice, BallTrajectory},
     shot_physics::{aerial_shot_is_viable, ShotType},
-    shot_parser::{parse_slice_for_shot_with_target, ShotTargets},
-    shot_planner::score_aerial_candidate,
+    shot_parser::{parse_slice_for_shot, parse_slice_for_shot_with_target, ShotTargets},
+    shot_planner::{reserve, score_any, score_aerial_candidate},
     state::CarState,
 };
 use rlbot::flat::ControllerState;
@@ -568,6 +568,46 @@ impl AerialShot {
 
 }
 
+/// Exact port of Python Aerial._party_cannon_shot_direction.
+///
+/// This deliberately returns the raw Party Cannon prediction. Wall correction
+/// belongs to jump_shot.run after it blends this prediction with the goal
+/// direction; applying wall correction here would correct the jump shot twice.
+pub fn party_cannon_shot_direction(
+    car: CarState,
+    ball: Vector,
+    ball_velocity: Vector,
+    time_remaining: f32,
+    goal: Vector,
+    gravity: Vector,
+) -> Vector {
+    let safe_time = time_remaining.max(1.0 / 120.0);
+    // VirxERLU Vector.cap is component-wise, not a magnitude clamp.
+    // Preserve the source's cap(0, max_speed), including its zero floor.
+    let car_final_velocity = ((ball - car.location) / safe_time).cap(0.0, MAX_SPEED);
+
+    let velocity_for_power = (car_final_velocity * 6.0 + ball_velocity) / 7.0;
+    let direction_to_score = (goal - ball).flatten().normalize();
+    let velocity_difference = (car_final_velocity - ball_velocity).magnitude();
+    let score_speed = (
+        velocity_difference * shot_power_modifier(velocity_difference)
+            + velocity_for_power.dot(direction_to_score)
+    ).clamp(500.0, 6000.0);
+    let time_to_score = ball.flat_distance(goal) / score_speed;
+
+    let predicted_after_hit_velocity = (car_final_velocity + ball_velocity * 2.0) / 3.0;
+    let predicted_ball = ball
+        + predicted_after_hit_velocity * time_to_score
+        + gravity * (0.5 * time_to_score * time_to_score);
+    let shot_direction = (goal - predicted_ball).normalize();
+
+    if shot_direction.magnitude() < 0.001 {
+        direction_to_score
+    } else {
+        shot_direction
+    }
+}
+
 fn shot_power_modifier(value: f32) -> f32 {
     let value = value.clamp(0.0, 4600.0);
     if value <= 500.0 {
@@ -588,13 +628,8 @@ fn contact_geometry(
     gravity: Vector,
 ) -> (Vector, Vector) {
     let time = slice.time.max(0.001);
-    let raw_car_velocity = (slice.location - car.location) / time;
-    let raw_speed = raw_car_velocity.magnitude();
-    let car_final_velocity = if raw_speed > MAX_SPEED {
-        raw_car_velocity * (MAX_SPEED / raw_speed)
-    } else {
-        raw_car_velocity
-    };
+    // Match Python Vector.cap(0, max_speed): component-wise clamping.
+    let car_final_velocity = ((slice.location - car.location) / time).cap(0.0, MAX_SPEED);
     let ball_after_velocity = (car_final_velocity * 6.0 + slice.velocity) / 7.0;
     let direction_to_goal = (goal - slice.location).flatten().normalize();
     let velocity_difference = (car_final_velocity - slice.velocity).magnitude();
@@ -682,6 +717,150 @@ fn opponent_eta(opponent: CarState, target: Vector) -> f32 {
 /// Fast-zone aerial scan from routines.fast_intercept_finder. It keeps the
 /// first normal aerial if one exists; otherwise it falls back to the first
 /// fast aerial whose live and predicted ball heights both clear 350 units.
+/// Untargeted aerial search used by Python find_any_shot(). Unlike the
+/// goal-targeted teamplay aerial finder, this calls CLib's untargeted slice
+/// parser and scores the result with shot_candidate_score(target=None).
+pub fn find_any_aerial_candidate(
+    car: CarState,
+    prediction: &BallTrajectory,
+    goal: Vector,
+    cars: &[CarState],
+    gravity: Vector,
+    boost_accel: f32,
+    game_time: f32,
+    kickoff_contest_until: f32,
+    live_ball_height: f32,
+    min_height: f32,
+    max_height: f32,
+    horizon: f32,
+    unlimited_boost: bool,
+) -> Option<AerialCandidate> {
+    if prediction.slices.is_empty() || (!unlimited_boost && car.boost <= 0.0) {
+        return None;
+    }
+
+    let friends: Vec<CarState> = cars.iter().copied()
+        .filter(|friend| friend.team == car.team && friend.index != car.index && !friend.demolished)
+        .collect();
+
+    let mut best: Option<AerialCandidate> = None;
+    let mut last_sample = -999.0_f32;
+    for slice in prediction.slices.iter().copied() {
+        let time = slice.time;
+        if time < 0.10 {
+            continue;
+        }
+        if time > horizon.min(6.0) {
+            break;
+        }
+        let sample_interval = if time < 1.5 { 0.05 } else { 0.10 };
+        if time - last_sample + 1.0e-5 < sample_interval {
+            continue;
+        }
+        last_sample = time;
+
+        if slice.location.y.abs() > 5212.75 {
+            break;
+        }
+        if !(min_height < slice.location.z && slice.location.z < max_height) {
+            continue;
+        }
+
+        let time_remaining = time - 1.0 / 120.0;
+        if time_remaining <= 0.0 {
+            continue;
+        }
+
+        // Python find_any_shot parses aerials without a goal target. A fast
+        // aerial is only retained when both live and predicted ball heights
+        // are above 350 uu.
+        let mut parsed = parse_slice_for_shot(
+            &car,
+            slice.location,
+            time_remaining,
+            92.75,
+            boost_accel,
+            gravity,
+            false,
+            false,
+            false,
+            true,
+            true,
+        );
+        if !parsed.found || parsed.shot_type != Some(ShotType::Aerial) {
+            continue;
+        }
+        if parsed.fast && (slice.location.z <= 350.0 || live_ball_height <= 350.0) {
+            continue;
+        }
+
+        // Match _shot_post_launch_boost_reserve(): rerun the same parser
+        // after reserving the boost the aerial routine needs after launch.
+        if !unlimited_boost {
+            let post_launch_reserve = reserve(
+                car, slice.location, time_remaining, ShotType::Aerial,
+                gravity.z, unlimited_boost,
+            );
+            if post_launch_reserve > 0.25 {
+                let approach_budget = car.boost - post_launch_reserve;
+                if approach_budget < -0.01 {
+                    continue;
+                }
+                let mut budgeted_car = car;
+                budgeted_car.boost = approach_budget.max(0.0).trunc();
+                let next = parse_slice_for_shot(
+                    &budgeted_car,
+                    slice.location,
+                    time_remaining,
+                    92.75,
+                    boost_accel,
+                    gravity,
+                    false,
+                    false,
+                    false,
+                    true,
+                    true,
+                );
+                if !next.found || next.shot_type != Some(ShotType::Aerial) {
+                    continue;
+                }
+                if next.fast && (slice.location.z <= 350.0 || live_ball_height <= 350.0) {
+                    continue;
+                }
+                parsed = next;
+            }
+        }
+
+        let (target_location, shot_direction) = contact_geometry(car, slice, goal, gravity);
+        let estimate = aerial_shot_is_viable(
+            &car, target_location, time_remaining, gravity, boost_accel, true,
+        );
+        let mut score = score_any(
+            car, &friends, slice.location, slice.velocity,
+            ShotType::Aerial, time_remaining,
+        );
+        if game_time < kickoff_contest_until {
+            score -= 0.40;
+        }
+
+        let candidate = AerialCandidate {
+            slice,
+            shot_target: goal,
+            target_location,
+            shot_direction,
+            double_jump: parsed.fast,
+            fast: parsed.fast,
+            estimated_boost: estimate.validation.boost_estimate as f32,
+            score,
+        };
+        if best.is_none_or(|current| candidate.score < current.score) {
+            best = Some(candidate);
+        }
+    }
+
+    best
+}
+
 pub fn find_fast_aerial_candidate(
     car: CarState,
     prediction: &BallTrajectory,
@@ -970,6 +1149,28 @@ mod tests {
         );
         assert!((target.distance(slice.location) - (92.75 + car.hitbox.length * 0.5)).abs() < 0.01);
         assert!(direction.magnitude() > 0.99);
+    }
+
+    #[test]
+    fn jump_shot_party_cannon_direction_is_raw_before_jump_wall_correction() {
+        let mut me = car(Vector::new(3500.0, -1000.0, 17.0), 50.0);
+        me.velocity = Vector::new(0.0, 1500.0, 0.0);
+        let ball = Vector::new(4000.0, 0.0, 700.0);
+        let goal = Vector::new(0.0, 5120.0, 300.0);
+        let gravity = Vector::new(0.0, 0.0, -650.0);
+
+        let raw = party_cannon_shot_direction(
+            me, ball, Vector::ZERO, 1.0, goal, gravity,
+        );
+        let slice = BallSlice { time: 1.0, location: ball, velocity: Vector::ZERO };
+        let (_, aerial_corrected) = party_cannon_contact_geometry(me, slice, goal, gravity);
+
+        assert!(raw.magnitude() > 0.99);
+        assert!(aerial_corrected.magnitude() > 0.99);
+        assert!(
+            raw.distance(aerial_corrected) > 0.001,
+            "jump-shot direction must not inherit the aerial wall correction"
+        );
     }
 
     #[test]

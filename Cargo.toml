@@ -6,3 +6,4 @@ edition = "2024"
 [dependencies]
 glam = "0.34.3"
 rlbot = "0.7.1"
+dubins_paths = { version = "3.3.0", default-features = false, features = ["libm"] }
