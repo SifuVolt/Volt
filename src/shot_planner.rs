@@ -813,7 +813,7 @@ fn lane_is_clear(start: Vector, end: Vector, foes: &[CarState], clearance: f32) 
             return true;
         }
         let closest = start + segment * along;
-        foe.location.flatten().distance(closest.flatten()) >= clearance
+        (foe.location.flatten() - closest.flatten()).magnitude() >= clearance
     })
 }
 
