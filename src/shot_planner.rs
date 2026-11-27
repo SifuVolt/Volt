@@ -167,7 +167,7 @@ pub fn score_aerial_candidate(
     value
 }
 
-fn reserve(me:CarState,ball:Vector,t:f32,kind:ShotType,g:f32,unlimited:bool)->f32 {
+pub(crate) fn reserve(me:CarState,ball:Vector,t:f32,kind:ShotType,g:f32,unlimited:bool)->f32 {
     if unlimited || kind==ShotType::Ground {return 0.0;}
     let height=(ball.z-R-me.location.z).max(0.0);
     let flat=me.location.flat_distance(ball);
@@ -482,7 +482,7 @@ fn parse_any_budget(
     ParsedShot::default()
 }
 
-fn score_any(
+pub(crate) fn score_any(
     me: CarState,
     friends: &[CarState],
     ball: Vector,
@@ -567,6 +567,7 @@ pub fn find_best_any_shot(
     boost_accel: f32,
     game_time: f32,
     kickoff_contest_until: f32,
+    elected_challenger: bool,
     unlimited_boost: bool,
     horizon: f32,
 ) -> Option<ShotCandidate> {
@@ -618,7 +619,7 @@ pub fn find_best_any_shot(
         if kind == ShotType::Aerial { continue; }
         if !useful(
             me, &foes, &friends, slice.location, remaining, kind,
-            game_time < kickoff_contest_until, !friends.is_empty(),
+            game_time < kickoff_contest_until, elected_challenger,
         ) { continue; }
 
         let mut value = score_any(me, &friends, slice.location, slice.velocity, kind, remaining);
@@ -661,7 +662,7 @@ pub fn find_best_any_shot(
                     && !( !unlimited_boost && me.boost <= 0.0 && grid.ball.z <= 105.0 )
                     && useful(
                         me, &foes, &friends, grid.ball, remaining, ShotType::DoubleJump,
-                        game_time < kickoff_contest_until, !friends.is_empty(),
+                        game_time < kickoff_contest_until, elected_challenger,
                     )
                 {
                     let mut value = score_any(
@@ -768,17 +769,8 @@ pub fn find_fast_intercept(
 }
 
 
-fn pass_targets(me: CarState, cars: &[CarState]) -> Option<ShotTargets> {
+fn pass_targets_for_friend(me: CarState, friend: CarState) -> ShotTargets {
     let side = team_side(me.team);
-    let friend = cars.iter().copied()
-        .filter(|car| car.team == me.team && car.index != me.index && !car.demolished)
-        .max_by(|a, b| {
-            let value = |friend: &CarState| {
-                -friend.location.y * side
-                    + me.location.flat_distance(friend.location).min(1800.0) * 0.25
-            };
-            value(a).total_cmp(&value(b))
-        })?;
     let friend_velocity = friend.velocity.flatten();
     let mut lead_x = friend.location.x;
     let mut lead_y = friend.location.y - side * 650.0;
@@ -788,10 +780,73 @@ fn pass_targets(me: CarState, cars: &[CarState]) -> Option<ShotTargets> {
     }
     lead_x = lead_x.clamp(-3500.0, 3500.0);
     lead_y = lead_y.clamp(-4600.0, 4600.0);
-    Some(ShotTargets {
+    ShotTargets {
         left: Vector::new(lead_x - 350.0, lead_y, 120.0),
         right: Vector::new(lead_x + 350.0, lead_y, 120.0),
+    }
+}
+
+fn pass_targets(me: CarState, cars: &[CarState]) -> Option<ShotTargets> {
+    let side = team_side(me.team);
+    let friend = cars.iter().copied()
+        .filter(|car| car.team == me.team && car.index != me.index
+            && !car.demolished && car.boost > 10.0)
+        .max_by(|a, b| {
+            let value = |friend: &CarState| {
+                -friend.location.y * side
+                    + me.location.flat_distance(friend.location).min(1800.0) * 0.25
+            };
+            value(a).total_cmp(&value(b))
+        })?;
+    Some(pass_targets_for_friend(me, friend))
+}
+fn lane_is_clear(start: Vector, end: Vector, foes: &[CarState], clearance: f32) -> bool {
+    let segment = (end - start).flatten();
+    let length_sq = segment.dot(segment);
+    if length_sq <= 1.0 {
+        return false;
+    }
+    foes.iter().all(|foe| {
+        let relative = (foe.location - start).flatten();
+        let along = relative.dot(segment) / length_sq;
+        if !(0.04..=1.0).contains(&along) {
+            return true;
+        }
+        let closest = start + segment * along;
+        (foe.location.flatten() - closest.flatten()).magnitude() >= clearance
     })
+}
+
+/// True when the predicted jump-shot ray reaches the opponent goal mouth
+/// without being screened by an opponent. A blocked goal lane is what allows
+/// the caller to consider a teammate pass instead.
+pub fn goal_lane_is_clear(
+    me: CarState,
+    cars: &[CarState],
+    candidate: ShotCandidate,
+    goal_targets: ShotTargets,
+) -> bool {
+    let side = team_side(me.team);
+    let goal_y = -side * 5120.0;
+    let direction = candidate.shot_direction.flatten().normalize();
+    if direction.magnitude() <= 0.001 || direction.y * -side <= 0.001 {
+        return false;
+    }
+    let distance_to_goal = (goal_y - candidate.ball.y) / direction.y;
+    if !distance_to_goal.is_finite() || distance_to_goal <= 0.0 {
+        return false;
+    }
+    let crossing_x = candidate.ball.x + direction.x * distance_to_goal;
+    let goal_left = goal_targets.left.x.min(goal_targets.right.x);
+    let goal_right = goal_targets.left.x.max(goal_targets.right.x);
+    if crossing_x < goal_left + 80.0 || crossing_x > goal_right - 80.0 {
+        return false;
+    }
+    let foes: Vec<CarState> = cars.iter().copied()
+        .filter(|car| car.team != me.team && !car.demolished)
+        .collect();
+    let endpoint = Vector::new(crossing_x, goal_y, candidate.ball.z);
+    lane_is_clear(candidate.ball, endpoint, &foes, 260.0)
 }
 
 /// Expose Volt's teammate lead window so the separate aerial parser can
@@ -815,14 +870,33 @@ pub fn find_best_pass_shot(
     unlimited_boost: bool,
     horizon: f32,
 ) -> Option<ShotCandidate> {
-    let targets = pass_targets(me, cars)?;
-    let mut candidate = find_best_shot_with_double_jump(
-        me, cars, ball_now, prediction, targets, gravity, boost_accel,
-        game_time, kickoff_contest_until, urgent_save, elected_challenger,
-        unlimited_boost, horizon.min(4.0), false,
-    )?;
-    candidate.targeted = false;
-    Some(candidate)
+    // Evaluate every living teammate with more than 10 boost. A pass is
+    // eligible only when the receiving lane is not screened by an opponent.
+    let foes: Vec<CarState> = cars.iter().copied()
+        .filter(|car| car.team != me.team && !car.demolished)
+        .collect();
+    let mut best: Option<ShotCandidate> = None;
+    for friend in cars.iter().copied().filter(|car| {
+        car.team == me.team && car.index != me.index && !car.demolished && car.boost > 10.0
+    }) {
+        let targets = pass_targets_for_friend(me, friend);
+        let mut candidate = match find_best_shot_with_double_jump(
+            me, cars, ball_now, prediction, targets, gravity, boost_accel,
+            game_time, kickoff_contest_until, urgent_save, elected_challenger,
+            unlimited_boost, horizon.min(4.0), false,
+        ) {
+            Some(candidate) if candidate.shot_type == ShotType::Jump => candidate,
+            _ => continue,
+        };
+        if !lane_is_clear(candidate.ball, (targets.left + targets.right) * 0.5, &foes, 240.0) {
+            continue;
+        }
+        candidate.targeted = false;
+        if candidate.score < best.map_or(f32::INFINITY, |current| current.score) {
+            best = Some(candidate);
+        }
+    }
+    best
 }
 
 fn solve_quad(a:f64,b:f64,c:f64,y:f64,branch:i32)->Option<f32> {
@@ -890,6 +964,29 @@ mod tests {
     #[test]fn grid_jump_time_matches_source_polynomial(){assert!(grid_jump_time(200.0,false).is_some());assert!(grid_jump_time(350.0,true).is_some());assert!(grid_jump_time(5.0,true).is_some());}
     #[test]fn grid_profile_has_601_120hz_samples(){let(d,v)=grid_profile(test_car());assert_eq!(d.len(),601);assert_eq!(v.len(),601);assert!(d[600]>d[0]);}
     #[test]
+    fn untargeted_fallback_applies_opponent_eta_only_to_non_challenger() {
+        let me = test_car();
+        let mut friend = test_car();
+        friend.index = 1;
+        friend.location = Vector::new(0.0, -1800.0, 17.0);
+
+        let mut foe = test_car();
+        foe.index = 2;
+        foe.team = 1;
+        foe.location = Vector::new(0.0, -100.0, 17.0);
+        foe.orientation = Matrix3::new(0.0, 0.0, 0.0);
+        foe.boost = 0.0;
+        let ball = Vector::new(0.0, 0.0, 100.0);
+
+        assert!(!useful(
+            me, &[foe], &[friend], ball, 1.0, ShotType::Jump, false, false,
+        ));
+        assert!(useful(
+            me, &[foe], &[friend], ball, 1.0, ShotType::Jump, false, true,
+        ));
+    }
+
+    #[test]
     fn untargeted_score_prefers_approach_from_behind_ball() {
         let behind = test_car();
         let ball = Vector::new(0.0, 0.0, 180.0);
@@ -916,7 +1013,7 @@ mod tests {
         };
         let candidate = find_best_any_shot(
             car, &[], &prediction, targets, Vector::new(0.0, 0.0, -650.0),
-            991.6667, 0.0, -999.0, false, 3.0,
+            991.6667, 0.0, -999.0, false, false, 3.0,
         );
         assert!(candidate.is_some());
         assert!(candidate.unwrap().score.is_finite());
@@ -953,11 +1050,43 @@ mod tests {
         friend.index = 1;
         friend.location = Vector::new(100.0, 1000.0, 17.0);
         friend.velocity = Vector::new(300.0, 400.0, 0.0);
+        friend.boost = 10.0;
+        assert!(pass_targets(me, &[me, friend]).is_none(),
+            "a teammate at exactly 10 boost is not an eligible receiver");
+        friend.boost = 10.01;
         let targets = pass_targets(me, &[me, friend]).unwrap();
         let center = (targets.left + targets.right) * 0.5;
         assert!((center.x - 310.0).abs() < 0.1);
         assert!((center.y - 1850.0).abs() < 0.1);
         assert_eq!(center.z, 120.0);
+    }
+
+    #[test]
+    fn goal_lane_detects_a_screening_opponent() {
+        let me = test_car();
+        let candidate = ShotCandidate {
+            time: 1.0,
+            ball: Vector::new(0.0, 0.0, 150.0),
+            ball_velocity: Vector::ZERO,
+            approach: Vector::ZERO,
+            shot_direction: Vector::new(0.0, 1.0, 0.0),
+            shot_type: ShotType::Jump,
+            targeted: true,
+            can_jump: true,
+            fast: false,
+            score: 1.0,
+            parser: ParsedShot::default(),
+        };
+        let goal = ShotTargets {
+            left: Vector::new(-850.0, 5120.0, 300.0),
+            right: Vector::new(850.0, 5120.0, 300.0),
+        };
+        assert!(goal_lane_is_clear(me, &[me], candidate, goal));
+        let mut foe = test_car();
+        foe.index = 2;
+        foe.team = 1;
+        foe.location = Vector::new(0.0, 2500.0, 17.0);
+        assert!(!goal_lane_is_clear(me, &[me, foe], candidate, goal));
     }
 
     #[test]fn candidate_scan_only_returns_finite_source_scored_candidates(){

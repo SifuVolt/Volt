@@ -1,4 +1,5 @@
 pub mod aerial;
+pub mod approach;
 pub mod physics;
 pub mod prediction;
 pub mod planning;
@@ -17,7 +18,12 @@ use crate::bot::BotBrain;
 use crate::prediction::{AbsoluteBallSlice, BallTrajectory};
 use crate::state::{AgentFrame, AgentSettings, BoostAmountMode, BotPersistentState, BoostPadState, GoalState, MatchState};
 
-use std::sync::Arc;
+use std::{
+    fs::OpenOptions,
+    io::{BufWriter, Write},
+    path::PathBuf,
+    sync::Arc,
+};
 
 use rlbot::{
     RLBotConnection,
@@ -35,6 +41,41 @@ use rlbot::{
     util::{AgentEnvironment, PacketQueue},
 };
 
+fn open_trace(index: u32, team: u32) -> Option<BufWriter<std::fs::File>> {
+    let directory = std::env::var_os("VOLT_TRACE_DIR")?;
+    let directory = PathBuf::from(directory);
+    if let Err(error) = std::fs::create_dir_all(&directory) {
+        eprintln!("[VOLT TRACE] cannot create {}: {error}", directory.display());
+        return None;
+    }
+
+    let path = directory.join(format!("volt_player_{index}_team_{team}.csv"));
+    let file = match OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .open(&path)
+    {
+        Ok(file) => file,
+        Err(error) => {
+            eprintln!("[VOLT TRACE] cannot open {}: {error}", path.display());
+            return None;
+        }
+    };
+
+    let mut writer = BufWriter::new(file);
+    if writeln!(
+        writer,
+        "time,player,team,status,shot_type,shot_score,contact_time,cover_owner,cover_released,car_x,car_y,car_z,car_vx,car_vy,car_vz,boost,ball_x,ball_y,ball_z,ball_vx,ball_vy,ball_vz,car_ball_distance,nearest_teammate_ball_distance,nearest_opponent_ball_distance,throttle,steer,pitch,yaw,roll,jump,boost_button,handbrake"
+    )
+    .is_err()
+    {
+        eprintln!("[VOLT TRACE] cannot write CSV header to {}", path.display());
+        return None;
+    }
+    Some(writer)
+}
+
 struct VoltRustAgent {
     index: u32,
     team: u32,
@@ -50,6 +91,8 @@ struct VoltRustAgent {
     brain: BotBrain,
     last_comms_signature: Vec<u8>,
     last_comms_send_time: f32,
+    trace: Option<BufWriter<std::fs::File>>,
+    trace_rows: u32,
 }
 
 impl BotAgent for VoltRustAgent {
@@ -103,6 +146,8 @@ impl BotAgent for VoltRustAgent {
             brain,
             last_comms_signature: Vec::new(),
             last_comms_send_time: -999.0,
+            trace: open_trace(controllable_info.index, team),
+            trace_rows: 0,
         }
     }
 
@@ -227,6 +272,66 @@ impl BotAgent for VoltRustAgent {
         );
 
         let teamplay_message = self.brain.teamplay_message(game_time);
+
+        // Optional live-match telemetry. It is disabled unless VOLT_TRACE_DIR
+        // is set, so normal RLBot runs do not perform file I/O.
+        if let Some(trace) = self.trace.as_mut() {
+            let nearest_teammate = frame.cars.iter()
+                .filter(|car| car.team == self.team && car.index != self.index as usize && !car.demolished)
+                .map(|car| car.location.distance(frame.ball.location))
+                .reduce(f32::min)
+                .unwrap_or(-1.0);
+            let nearest_opponent = frame.cars.iter()
+                .filter(|car| car.team != self.team && !car.demolished)
+                .map(|car| car.location.distance(frame.ball.location))
+                .reduce(f32::min)
+                .unwrap_or(-1.0);
+            let cover_owner = teamplay_message.cover_owner
+                .map(|owner| owner.to_string())
+                .unwrap_or_default();
+
+            let _ = writeln!(
+                trace,
+                "{:.3},{},{},{},{},{:.1},{:.3},{},{},{:.1},{:.1},{:.1},{:.1},{:.1},{:.1},{:.1},{:.1},{:.1},{:.1},{:.1},{:.1},{:.1},{:.1},{:.1},{:.1},{:.3},{:.3},{:.3},{:.3},{:.3},{},{},{}",
+                game_time,
+                self.index,
+                self.team,
+                teamplay_message.status,
+                teamplay_message.shot_type,
+                teamplay_message.score,
+                teamplay_message.contact_time,
+                cover_owner,
+                teamplay_message.cover_released,
+                frame.me.location.x,
+                frame.me.location.y,
+                frame.me.location.z,
+                frame.me.velocity.x,
+                frame.me.velocity.y,
+                frame.me.velocity.z,
+                frame.me.boost,
+                frame.ball.location.x,
+                frame.ball.location.y,
+                frame.ball.location.z,
+                frame.ball.velocity.x,
+                frame.ball.velocity.y,
+                frame.ball.velocity.z,
+                frame.me.location.distance(frame.ball.location),
+                nearest_teammate,
+                nearest_opponent,
+                controller.throttle,
+                controller.steer,
+                controller.pitch,
+                controller.yaw,
+                controller.roll,
+                controller.jump,
+                controller.boost,
+                controller.handbrake,
+            );
+            self.trace_rows += 1;
+            if self.trace_rows % 120 == 0 {
+                let _ = trace.flush();
+            }
+        }
         if let Some(content) = crate::teamplay::encode(
             self.index as usize,
             self.team,
